@@ -281,7 +281,8 @@ PLAN.md:
 - **Ids** are the first 12 hex digits of a v4 UUID: short enough for agents to quote back. Content
   is hashed as a git blob (gix), so no hashing crate is needed.
 - **`glos mcp` serves the review of its starting folder:** the open review whose folder holds it,
-  the deepest one. In a git repo with no review yet, `request_review` makes one.
+  the deepest one. In a git repo with no review yet, `request_review` makes one. *Replaced
+  2026-11-04: glos never infers what to review; see "Reviews are named, never guessed".*
 
 ## M3 (2026-11-04)
 
@@ -393,6 +394,26 @@ PLAN.md:
 - **Checked against the scripts they replace:** `fetch-helix` rewrote `crates/glos-helix/` with
   no difference, and `keymap` produced the same checklist. The checklist lost its "Planned" table:
   every key in it is built.
+
+## Reviews are named, never guessed (2026-11-04)
+
+The folder rule above picked the wrong review in practice: in this repo, a request for the
+`folding` branch went to an old, empty review of `main` vs `main`, and the next one would have
+gone to an unrelated `glos diff` of two files started in the same folder.
+
+- **`open_review(target)` names what to review, exactly:** `{"git": {folder, branch, base}}` or
+  `{"diff": {old, new}}`, absolute paths. It answers with the review id, making the review if
+  there's none yet; it doesn't tell the user (`request_review` does).
+- **Every other tool takes `review_id`,** required. The server keeps no "current review", and
+  where it was started is recorded only for the dashboard.
+- **Checked, not assumed:** a git target's folder must have that branch checked out (glos reads
+  its uncommitted files), and its base must exist; otherwise the agent is told what's wrong.
+  An empty id names nothing, even when there's one review.
+- **The CLI's agent commands too:** `show`, `reply`, `resolve`, `reopen`, `annotate`, `submit`,
+  `close` and `open` require `--review <id>`; `glos open-review` makes one and prints its id.
+  Paths on the command line are relative to the shell, as usual. Plain `glos` and `glos diff`
+  are unchanged: you name what you open by where and how you run them.
+- **`Review::for_folder` is gone.**
 
 ## The plan folder
 

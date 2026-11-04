@@ -97,8 +97,27 @@ fn a_review_from_open_to_close_to_gc() {
     git(&r, &["checkout", "-qb", "topic"]);
     std::fs::write(r.join("a.txt"), "2\n").unwrap();
 
+    // Every command names its review: none is found from the folder.
+    let out = glos(d.path(), &["show"]);
+    assert_eq!(out.status.code(), Some(2), "--review is required: {out:?}");
+    // The review is made from exactly what's named, and its id printed.
+    let out = glos(d.path(), &["open-review", "git", ".", "main", "main"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("has topic checked out, not main"),
+        "{out:?}"
+    );
+    let out = glos(
+        d.path(),
+        &["--json", "open-review", "git", ".", "topic", "main"],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = doc["review"]["id"].as_str().unwrap().to_string();
+    assert_eq!(doc["review"]["branch"], "topic");
+
     // No open-command: glos says how to open it by hand, and fails so scripts can tell.
-    let out = glos(d.path(), &["open"]);
+    let out = glos(d.path(), &["open", "--review", &id]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(text(&out.stderr).contains("No open-command"), "{out:?}");
     // With one, glos runs it with its own command line.
@@ -109,7 +128,7 @@ fn a_review_from_open_to_close_to_gc() {
         format!("open-command = \"echo >> '{}'\"\n", log.display()),
     )
     .unwrap();
-    let out = glos(d.path(), &["open"]);
+    let out = glos(d.path(), &["open", "--review", &id]);
     assert!(out.status.success(), "{out:?}");
     assert!(
         text(&out.stdout).starts_with("Opened glos on branch topic"),
@@ -123,19 +142,19 @@ fn a_review_from_open_to_close_to_gc() {
 
     let out = glos(d.path(), &["--json", "list"]);
     let list: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let id = list["reviews"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(list["reviews"][0]["id"], id.as_str());
 
     let out = glos(d.path(), &["--review", "nope"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("no review nope"), "{out:?}");
 
-    let out = glos(d.path(), &["close"]);
+    let out = glos(d.path(), &["close", "--review", &id]);
     assert!(out.status.success(), "{out:?}");
     assert!(text(&out.stdout).starts_with(&format!("Closed review {id}")));
     assert_eq!(text(&glos(d.path(), &["list"]).stdout), "");
     assert!(text(&glos(d.path(), &["list", "--all"]).stdout).contains("closed"));
-    let out = glos(d.path(), &["close"]);
-    assert_eq!(out.status.code(), Some(1), "nothing open to close");
+    let out = glos(d.path(), &["close", "--review", &id]);
+    assert_eq!(out.status.code(), Some(1), "already closed: {out:?}");
     let out = glos(d.path(), &["dashboard"]);
     assert!(out.status.success());
     assert!(text(&out.stdout).starts_with("No open reviews"), "{out:?}");

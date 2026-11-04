@@ -58,13 +58,9 @@ pub fn launch(
     Ok(Launch::Ran(cmd))
 }
 
-/// The way to open the review by hand.
+/// The way to open the review by hand: by its id, so it's this review whatever is checked out.
 pub fn by_hand(r: &Review) -> String {
-    if r.kind == "git" {
-        format!("`glos` in {}", r.folder)
-    } else {
-        format!("`glos --review {}`", r.id)
-    }
+    format!("`glos --review {}`", r.id)
 }
 
 /// Single-quoted for `sh`.

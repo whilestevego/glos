@@ -12,12 +12,9 @@ use crate::review::{self, Review, Verdict};
 
 const VERSION: u32 = 1;
 
-/// The review named by (the start of) its id, or the one for this folder.
-fn find(conn: &Connection, id: Option<&str>, cwd: &Path) -> Result<Option<Review>> {
-    match id {
-        Some(id) => Review::get(conn, id),
-        None => Review::for_folder(conn, cwd),
-    }
+/// The review named by (the start of) its id. glos never picks one for you.
+fn find(conn: &Connection, id: &str) -> Result<Review> {
+    Review::get(conn, id)?.with_context(|| format!("no review {id} (glos list shows them)"))
 }
 
 pub fn list(conn: &Connection, all: bool, json: bool, out: &mut impl Write) -> Result<()> {
@@ -58,21 +55,8 @@ pub fn list(conn: &Connection, all: bool, json: bool, out: &mut impl Write) -> R
     Ok(())
 }
 
-pub fn show(
-    conn: &Connection,
-    id: Option<&str>,
-    cwd: &Path,
-    json: bool,
-    out: &mut impl Write,
-) -> Result<()> {
-    let Some(r) = find(conn, id, cwd)? else {
-        if json {
-            writeln!(out, "{}", json!({ "version": VERSION, "review": null }))?;
-        } else {
-            writeln!(out, "No review here.")?;
-        }
-        return Ok(());
-    };
+pub fn show(conn: &Connection, id: &str, json: bool, out: &mut impl Write) -> Result<()> {
+    let r = find(conn, id)?;
     let rounds = review::rounds(conn, &r.id)?;
     let threads = review::threads(conn, &r.id)?;
     if json {
@@ -128,14 +112,11 @@ pub fn show(
 }
 
 /// `glos close`: you're done with the review.
-pub fn close(
-    conn: &Connection,
-    id: Option<&str>,
-    cwd: &Path,
-    json: bool,
-    out: &mut impl Write,
-) -> Result<()> {
-    let r = find(conn, id, cwd)?.context("no open review here; give its id (see glos list)")?;
+pub fn close(conn: &Connection, id: &str, json: bool, out: &mut impl Write) -> Result<()> {
+    let r = find(conn, id)?;
+    if r.status != "open" {
+        anyhow::bail!("review {} is already {}", r.id, r.status);
+    }
     review::close(conn, &r.id)?;
     if json {
         writeln!(out, "{}", json!({ "version": VERSION, "closed": r.id }))?;
@@ -164,20 +145,37 @@ pub fn gc(conn: &Connection, days: u32, json: bool, out: &mut impl Write) -> Res
     Ok(())
 }
 
-/// `glos open`: opens glos on this folder's review the way `request_review` does. `false` when
-/// it couldn't (no `open-command`), after saying how to open it by hand.
+/// `glos open-review`: the review of exactly what's named, made if there's none yet, as the
+/// MCP tool does. Prints its id.
+pub fn open_review(
+    conn: Connection,
+    cwd: &Path,
+    target: crate::mcp::Target,
+    json: bool,
+    out: &mut impl Write,
+) -> Result<()> {
+    let mut a = crate::mcp::Agent::new(conn, cwd.to_path_buf());
+    let (r, files) = a.open_target(&target)?.map_err(anyhow::Error::msg)?;
+    if json {
+        let doc = json!({ "version": VERSION, "review": r, "changed_files": files });
+        writeln!(out, "{doc}")?;
+    } else {
+        writeln!(out, "{}  {}", r.id, r.describe())?;
+    }
+    Ok(())
+}
+
+/// `glos open`: opens glos on a review the way `request_review` does. `false` when it couldn't
+/// (no `open-command`), after saying how to open it by hand.
 pub fn open(
     conn: &Connection,
-    cwd: &Path,
+    id: &str,
     open_command: Option<&str>,
     db: &Path,
     out: &mut impl Write,
 ) -> Result<bool> {
     use crate::launch::{self, Launch};
-    let r = match Review::for_folder(conn, cwd)? {
-        Some(r) => r,
-        None => Review::open(conn, &crate::source::Source::git(cwd, None)?)?,
-    };
+    let r = find(conn, id)?;
     match launch::launch(conn, &r, open_command, db)? {
         Launch::AlreadyOpen => writeln!(out, "glos is already open on {}.", r.describe())?,
         Launch::Ran(cmd) => writeln!(out, "Opened glos on {}: {cmd}", r.describe())?,
@@ -194,13 +192,12 @@ pub fn open(
 
 pub fn submit(
     conn: &Connection,
-    id: Option<&str>,
-    cwd: &Path,
+    id: &str,
     verdict: Verdict,
     json: bool,
     out: &mut impl Write,
 ) -> Result<()> {
-    let r = find(conn, id, cwd)?.context("no review here; give its id (see glos list)")?;
+    let r = find(conn, id)?;
     // What was reviewed: every file's new side as it is now.
     let source = r.source()?;
     let files: Vec<(String, Vec<u8>)> = source
@@ -247,10 +244,11 @@ pub enum AgentAction {
     },
 }
 
-/// Runs an agent action for the review of `cwd`. A refusal is an error, so the exit code is 1.
+/// Runs an agent action on review `id`. A refusal is an error, so the exit code is 1.
 pub fn agent(
     conn: Connection,
     cwd: &Path,
+    id: &str,
     author: &str,
     action: AgentAction,
     json: bool,
@@ -258,9 +256,9 @@ pub fn agent(
 ) -> Result<()> {
     let mut a = crate::mcp::Agent::new(conn, cwd.to_path_buf());
     let outcome = match action {
-        AgentAction::Reply { thread, body } => a.reply(author, &thread, &body)?,
-        AgentAction::Resolve { thread, note } => a.set_status(author, &thread, false, &note)?,
-        AgentAction::Reopen { thread, note } => a.set_status(author, &thread, true, &note)?,
+        AgentAction::Reply { thread, body } => a.reply(author, id, &thread, &body)?,
+        AgentAction::Resolve { thread, note } => a.set_status(author, id, &thread, false, &note)?,
+        AgentAction::Reopen { thread, note } => a.set_status(author, id, &thread, true, &note)?,
         AgentAction::Annotate { path, lines, body } => {
             let (start, end) = match lines.split_once('-') {
                 Some((s, e)) => (s.parse(), e.parse().map(Some)),
@@ -269,7 +267,7 @@ pub fn agent(
             let (Ok(start), Ok(end)) = (start, end) else {
                 anyhow::bail!("lines are `12` or `12-14`, not `{lines}`");
             };
-            a.annotate(author, &path, start, end, &body)?
+            a.annotate(author, id, &path, start, end, &body)?
         }
     };
     let message = outcome.map_err(anyhow::Error::msg)?;
@@ -306,7 +304,7 @@ mod tests {
 
     #[test]
     fn list_and_show_as_text_and_json() {
-        let (_d, conn, r, cwd) = setup();
+        let (_d, conn, r, _cwd) = setup();
         review::comment(&conn, &r.id, None, YOU, "looks\ngood").unwrap();
         let text = run(|o| list(&conn, false, false, o));
         assert!(text.starts_with(&r.id), "{text}");
@@ -317,18 +315,55 @@ mod tests {
         assert_eq!(doc["reviews"][0]["id"], r.id.as_str());
         assert_eq!(doc["reviews"][0]["unsent"], 1);
 
-        // `show` finds the review from the folder it runs in, or by a short id.
-        let text = run(|o| show(&conn, None, &cwd, false, o));
+        // `show` takes the review's id, or the start of it.
+        let text = run(|o| show(&conn, &r.id, false, o));
         assert!(
             text.contains("  you, unsent:\n    looks\n    good"),
             "{text}"
         );
-        let again = run(|o| show(&conn, Some(&r.id[..5]), Path::new("/"), false, o));
+        let again = run(|o| show(&conn, &r.id[..5], false, o));
         assert_eq!(text, again);
         let doc: serde_json::Value =
-            serde_json::from_str(&run(|o| show(&conn, None, &cwd, true, o))).unwrap();
+            serde_json::from_str(&run(|o| show(&conn, &r.id, true, o))).unwrap();
         assert_eq!(doc["threads"][0]["comments"][0]["body"], "looks\ngood");
         assert_eq!(doc["rounds"], json!([]));
+    }
+
+    #[test]
+    fn a_review_is_always_named() {
+        let (_d, conn, _r, _cwd) = setup();
+        let mut out = vec![];
+        for id in ["nope", ""] {
+            assert!(show(&conn, id, false, &mut out).is_err(), "{id:?}");
+            assert!(close(&conn, id, false, &mut out).is_err(), "{id:?}");
+            assert!(submit(&conn, id, Verdict::Approved, false, &mut out).is_err());
+        }
+        let err = show(&conn, "nope", false, &mut out)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("glos list"), "{err}");
+    }
+
+    #[test]
+    fn open_review_prints_the_id() {
+        let (d, conn, r, cwd) = setup();
+        let target = crate::mcp::Target::Diff {
+            old: d.path().join("o").to_string_lossy().into(),
+            new: d.path().join("n").to_string_lossy().into(),
+        };
+        let db = conn.path().unwrap().to_string();
+        let c = || crate::store::open(Path::new(&db)).unwrap();
+        let text = run(|o| open_review(c(), &cwd, target.clone(), false, o));
+        assert!(text.starts_with(&format!("{}  ", r.id)), "{text}");
+        let doc: serde_json::Value =
+            serde_json::from_str(&run(|o| open_review(c(), &cwd, target, true, o))).unwrap();
+        assert_eq!(doc["review"]["id"], r.id.as_str());
+        assert_eq!(doc["changed_files"], 1);
+        let bad = crate::mcp::Target::Diff {
+            old: "/no/such".into(),
+            new: "/no/such/either".into(),
+        };
+        assert!(open_review(c(), &cwd, bad, false, &mut vec![]).is_err());
     }
 
     #[test]
@@ -340,13 +375,6 @@ mod tests {
             run(|o| list(&conn, false, true, o)),
             "{\"reviews\":[],\"version\":1}\n"
         );
-        assert_eq!(
-            run(|o| show(&conn, None, dir.path(), false, o)),
-            "No review here.\n"
-        );
-        let doc: serde_json::Value =
-            serde_json::from_str(&run(|o| show(&conn, None, dir.path(), true, o))).unwrap();
-        assert!(doc["review"].is_null());
     }
 
     #[test]
@@ -356,7 +384,7 @@ mod tests {
         let c = || crate::store::open(Path::new(&db)).unwrap();
         let run_agent = |action| {
             let mut out = vec![];
-            agent(c(), &cwd, "script", action, false, &mut out)
+            agent(c(), &cwd, &r.id, "script", action, false, &mut out)
                 .map(|_| String::from_utf8(out).unwrap())
         };
         let note = run_agent(AgentAction::Annotate {
@@ -411,19 +439,18 @@ mod tests {
 
     #[test]
     fn submit_from_the_cli() {
-        let (_d, conn, r, cwd) = setup();
-        let err = submit(&conn, None, &cwd, Verdict::Changes, false, &mut vec![]).unwrap_err();
+        let (_d, conn, r, _cwd) = setup();
+        let err = submit(&conn, &r.id, Verdict::Changes, false, &mut vec![]).unwrap_err();
         assert!(err.to_string().contains("nothing to submit"));
         review::comment(&conn, &r.id, None, YOU, "x").unwrap();
-        let text = run(|o| submit(&conn, None, &cwd, Verdict::Changes, false, o));
+        let text = run(|o| submit(&conn, &r.id, Verdict::Changes, false, o));
         assert_eq!(text, "Round 1 submitted: changes requested, 1 comment.\n");
-        let doc: serde_json::Value = serde_json::from_str(&run(|o| {
-            submit(&conn, Some(&r.id), &cwd, Verdict::Approved, true, o)
-        }))
-        .unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&run(|o| submit(&conn, &r.id, Verdict::Approved, true, o)))
+                .unwrap();
         assert_eq!(doc["round"]["n"], 2);
         assert_eq!(doc["round"]["verdict"], "approved");
-        let text = run(|o| show(&conn, None, &cwd, false, o));
+        let text = run(|o| show(&conn, &r.id, false, o));
         assert!(text.contains("Round 1: changes requested, 1 comment (not delivered yet)"));
         // The snapshot holds the reviewed file.
         let n: i64 = conn
@@ -434,16 +461,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
-        assert!(
-            submit(
-                &conn,
-                None,
-                Path::new("/"),
-                Verdict::Approved,
-                false,
-                &mut vec![]
-            )
-            .is_err()
-        );
+        assert!(submit(&conn, "nope", Verdict::Approved, false, &mut vec![]).is_err());
     }
 }

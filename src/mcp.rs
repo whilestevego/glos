@@ -24,12 +24,15 @@ use serde::Deserialize;
 use crate::review::DiffContext;
 use crate::review::{self, Anchor, Review, Round, Thread, Verdict, YOU};
 
-const INSTRUCTIONS: &str = "glos is the user's code reviewer. When your work is ready, call \
-request_review (annotate lines first if a note would help the reviewer), then wait_for_review: \
-it answers with the user's review when they submit it (call it again while it says it's still \
-waiting). Answer every comment with reply, and resolve the threads you've addressed with a note \
-of what you did; then request review again. get_review shows the review's state and threads at \
-any time; suggest points the user at a line.";
+const INSTRUCTIONS: &str = "glos is the user's code reviewer. glos never guesses what to \
+review: first call open_review with exactly what it is (a git branch: the worktree folder, the \
+branch and its base; or two files or two folders) and keep the review id it gives. Pass that id \
+to every other tool. When your work is ready, call request_review (annotate lines first if a \
+note would help the reviewer), then wait_for_review: it answers with the user's review when \
+they submit it (call it again while it says it's still waiting). Answer every comment with \
+reply, and resolve the threads you've addressed with a note of what you did; then request \
+review again. get_review shows the review's state and threads at any time; suggest points the \
+user at a line.";
 
 /// What an agent's action came to: done (and what to tell it), or refused (and why). Over MCP
 /// both are the tool's answer; the CLI exits 1 on a refusal.
@@ -38,10 +41,34 @@ pub type Outcome = std::result::Result<String, String>;
 /// How long one `wait_for_review` waits by default, staying under hosts' tool timeouts.
 const WAIT: Duration = Duration::from_secs(240);
 
-/// The review side of the server, without the protocol: what each tool does, given the store,
-/// the folder served and the agent's name.
+/// What to review, as the agent names it: nothing about it is guessed.
+#[derive(Deserialize, schemars::JsonSchema, Debug, Clone)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Target {
+    /// A git branch against its base, as it is in a worktree (uncommitted work included).
+    Git {
+        /// The worktree's folder, absolute. It must have `branch` checked out.
+        folder: String,
+        /// The branch under review.
+        branch: String,
+        /// What it's compared with: a branch or revision, e.g. `main`.
+        base: String,
+    },
+    /// Two files, or two folders matched by relative path.
+    Diff {
+        /// The old file or folder, absolute.
+        old: String,
+        /// The new file or folder, absolute.
+        new: String,
+    },
+}
+
+/// The review side of the server, without the protocol: what each tool does, given the store
+/// and the agent's name. Every action names its review by id.
 pub struct Agent {
     conn: Connection,
+    /// Where the server runs, recorded with its session for the dashboard; never used to pick
+    /// a review.
     folder: PathBuf,
     /// When this agent last looked, for "new" markers.
     seen: Option<String>,
@@ -61,8 +88,83 @@ impl Agent {
         }
     }
 
-    fn review(&self) -> Result<Option<Review>> {
-        Review::for_folder(&self.conn, &self.folder)
+    /// The review with this id (or the start of it), or what to tell the agent.
+    fn named(&self, id: &str) -> Result<std::result::Result<Review, String>> {
+        let found = match Review::get(&self.conn, id.trim()) {
+            Ok(r) => r,
+            Err(e) => return Ok(Err(format!("{e:#}"))),
+        };
+        Ok(found.ok_or_else(|| {
+            format!("No review {id}. open_review names what to review and gives its id.")
+        }))
+    }
+
+    /// `open_review`: the review of exactly `target`, made if there's none yet. It doesn't
+    /// tell the user anything: request_review does.
+    pub fn open_review(&mut self, target: &Target) -> Result<Outcome> {
+        Ok(self.open_target(target)?.map(|(r, files)| {
+            format!(
+                "Review {} of {} ({files} changed file{}). Pass review_id \"{}\" to \
+                 request_review, annotate and the other tools.",
+                r.id,
+                r.describe(),
+                plural(files),
+                r.id
+            )
+        }))
+    }
+
+    /// The review of `target` and how many files it changes, or why there's none.
+    pub fn open_target(
+        &mut self,
+        target: &Target,
+    ) -> Result<std::result::Result<(Review, usize), String>> {
+        let absolute = |p: &str, what: &str| -> std::result::Result<PathBuf, String> {
+            let path = PathBuf::from(p);
+            if !path.is_absolute() {
+                return Err(format!("{what} must be an absolute path, not {p:?}."));
+            }
+            path.canonicalize().map_err(|e| format!("{p}: {e}"))
+        };
+        let source = match target {
+            Target::Git {
+                folder,
+                branch,
+                base,
+            } => {
+                let folder = match absolute(folder, "folder") {
+                    Ok(f) => f,
+                    Err(msg) => return Ok(Err(msg)),
+                };
+                let source = match crate::source::Source::git(&folder, Some(base)) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(Err(format!("{}: {e:#}", folder.display()))),
+                };
+                let g = source.git.as_ref().expect("a git source");
+                let on = g.branch.as_deref().unwrap_or("a detached HEAD");
+                if on != branch {
+                    return Ok(Err(format!(
+                        "{} has {on} checked out, not {branch}. Give the folder of a worktree \
+                         that has {branch} checked out.",
+                        g.worktree.display()
+                    )));
+                }
+                source
+            }
+            Target::Diff { old, new } => {
+                let (old, new) = match (absolute(old, "old"), absolute(new, "new")) {
+                    (Ok(o), Ok(n)) => (o, n),
+                    (Err(msg), _) | (_, Err(msg)) => return Ok(Err(msg)),
+                };
+                match crate::source::Source::diff(&old, &new) {
+                    Ok(s) => s,
+                    Err(e) => return Ok(Err(format!("{e:#}"))),
+                }
+            }
+        };
+        let r = Review::open(&self.conn, &source)?;
+        self.touch();
+        Ok(Ok((r, source.changes.len())))
     }
 
     /// Records this server in the store, and forgets servers whose process is gone.
@@ -105,12 +207,10 @@ impl Agent {
 
     /// `get_review`: a summary, or one thread in full. Only what the agent may see: comments
     /// you've submitted, and the agents' own.
-    pub fn get_review(&mut self, thread: Option<&str>) -> Result<String> {
-        let Some(r) = self.review()? else {
-            return Ok(format!(
-                "There's no review for {} yet. Call request_review when your work is ready.",
-                self.folder.display()
-            ));
+    pub fn get_review(&mut self, id: &str, thread: Option<&str>) -> Result<String> {
+        let r = match self.named(id)? {
+            Ok(r) => r,
+            Err(msg) => return Ok(msg),
         };
         let threads = visible(review::threads(&self.conn, &r.id)?);
         let seen = self.seen.clone();
@@ -180,22 +280,24 @@ impl Agent {
         Ok(out)
     }
 
-    /// `request_review`: marks the work ready. In a git repo with no review yet, the review is
-    /// made here, so `glos` opens on it.
-    pub fn request_review(&mut self, name: &str, note: &str, files: &[String]) -> Result<String> {
-        let r = match self.review()? {
-            Some(r) => r,
-            None => match crate::source::Source::git(&self.folder, None) {
-                Ok(s) => Review::open(&self.conn, &s)?,
-                Err(_) => {
-                    return Ok(format!(
-                        "{} isn't a git repository and has no review. Ask the user to run \
-                         `glos diff <old> <new>` on what to review, then call request_review again.",
-                        self.folder.display()
-                    ));
-                }
-            },
+    /// `request_review`: marks the work of review `id` ready, and opens glos on it if it can.
+    pub fn request_review(
+        &mut self,
+        name: &str,
+        id: &str,
+        note: &str,
+        files: &[String],
+    ) -> Result<String> {
+        let r = match self.named(id)? {
+            Ok(r) => r,
+            Err(msg) => return Ok(msg),
         };
+        if r.status != "open" {
+            return Ok(format!(
+                "Review {} is {}. Call open_review with what to review to open it again.",
+                r.id, r.status
+            ));
+        }
         r.request(&self.conn, name, note, files)?;
         self.touch();
         use crate::launch::{self, Launch};
@@ -213,16 +315,6 @@ impl Agent {
         ))
     }
 
-    /// The review, or the answer to give when there is none.
-    fn need_review(&self) -> Result<std::result::Result<Review, String>> {
-        Ok(self.review()?.ok_or_else(|| {
-            format!(
-                "There's no review for {} yet. Call request_review first.",
-                self.folder.display()
-            )
-        }))
-    }
-
     /// A thread of this review the agent can see, or why not.
     fn thread(&self, r: &Review, id: &str) -> Result<std::result::Result<Thread, String>> {
         Ok(visible(review::threads(&self.conn, &r.id)?)
@@ -232,8 +324,8 @@ impl Agent {
     }
 
     /// `reply`: an answer on a thread, shown to the user at once, marked unread.
-    pub fn reply(&mut self, name: &str, thread: &str, body: &str) -> Result<Outcome> {
-        let r = match self.need_review()? {
+    pub fn reply(&mut self, name: &str, id: &str, thread: &str, body: &str) -> Result<Outcome> {
+        let r = match self.named(id)? {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -252,11 +344,12 @@ impl Agent {
     pub fn set_status(
         &mut self,
         name: &str,
+        id: &str,
         thread: &str,
         open: bool,
         note: &str,
     ) -> Result<Outcome> {
-        let r = match self.need_review()? {
+        let r = match self.named(id)? {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -292,12 +385,13 @@ impl Agent {
     pub fn annotate(
         &mut self,
         name: &str,
+        id: &str,
         path: &str,
         start: u32,
         end: Option<u32>,
         body: &str,
     ) -> Result<Outcome> {
-        let r = match self.need_review()? {
+        let r = match self.named(id)? {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -322,8 +416,15 @@ impl Agent {
     }
 
     /// `suggest`: points the user at a line, without moving their view.
-    pub fn suggest(&mut self, name: &str, path: &str, line: u32, note: &str) -> Result<Outcome> {
-        let r = match self.need_review()? {
+    pub fn suggest(
+        &mut self,
+        name: &str,
+        id: &str,
+        path: &str,
+        line: u32,
+        note: &str,
+    ) -> Result<Outcome> {
+        let r = match self.named(id)? {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -343,10 +444,12 @@ impl Agent {
         )))
     }
 
-    /// One look for a submitted round nobody has received yet: the review as the answer.
-    pub fn try_take(&mut self, name: &str) -> Result<Option<String>> {
-        let Some(r) = self.review()? else {
-            return Ok(None);
+    /// One look for a submitted round of review `id` nobody has received yet: the review as
+    /// the answer. A review that isn't there is the answer too.
+    pub fn try_take(&mut self, id: &str, name: &str) -> Result<Option<String>> {
+        let r = match self.named(id)? {
+            Ok(r) => r,
+            Err(msg) => return Ok(Some(msg)),
         };
         let taken = review::take_delivery(&self.conn, &r.id, name)?;
         self.touch();
@@ -526,14 +629,27 @@ fn delivery(
     out
 }
 
+/// Every tool but open_review names its review.
+const REVIEW_ID: &str = "The review's id, from open_review.";
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct OpenReview {
+    /// What to review: `{"git": {"folder", "branch", "base"}}` or `{"diff": {"old", "new"}}`.
+    target: Target,
+}
+
 #[derive(Deserialize, schemars::JsonSchema)]
 struct GetReview {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     /// A thread's id, for the whole thread instead of the summary.
     thread_id: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct RequestReview {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     /// What's ready and anything the reviewer should know, in a sentence or two.
     note: Option<String>,
     /// The files this work touched, if the review should focus on them.
@@ -542,12 +658,16 @@ struct RequestReview {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct Reply {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     thread_id: String,
     body: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct Resolve {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     thread_id: String,
     /// What you did about it.
     note: String,
@@ -555,6 +675,8 @@ struct Resolve {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct Reopen {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     thread_id: String,
     /// Why, if there's something to say.
     note: Option<String>,
@@ -562,6 +684,8 @@ struct Reopen {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct Annotate {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     /// The file, relative to the review's folder (the repo root in git).
     path: String,
     /// The first line (1-based) of the lines the note is about.
@@ -573,6 +697,8 @@ struct Annotate {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct Suggest {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     /// The file, relative to the review's folder (the repo root in git).
     path: String,
     /// The line (1-based).
@@ -583,6 +709,8 @@ struct Suggest {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct WaitForReview {
+    #[schemars(description = REVIEW_ID)]
+    review_id: String,
     /// How long to wait before answering "still waiting", in seconds (default 240, at most 600).
     timeout_secs: Option<u64>,
 }
@@ -613,11 +741,23 @@ fn internal(e: anyhow::Error) -> ErrorData {
 #[tool_router]
 impl Server {
     #[tool(
-        description = "The user's review of your work in this folder: the last verdict, the files, and the open threads (comments the user has submitted, with what's new since your last call). Pass thread_id for one whole thread."
+        description = "Name what to review, exactly: a git branch (the worktree folder that has it checked out, the branch, and the base it's compared with) or two files or folders, by absolute paths. Answers with the review's id, made if there's none yet; every other tool takes that id. The user isn't told: call request_review when your work is ready."
+    )]
+    async fn open_review(
+        &self,
+        Parameters(p): Parameters<OpenReview>,
+    ) -> Result<String, ErrorData> {
+        let mut a = self.agent.lock().unwrap();
+        a.open_review(&p.target).map(said).map_err(internal)
+    }
+
+    #[tool(
+        description = "The user's review: the last verdict, the files, and the open threads (comments the user has submitted, with what's new since your last call). Pass thread_id for one whole thread."
     )]
     async fn get_review(&self, Parameters(p): Parameters<GetReview>) -> Result<String, ErrorData> {
         let mut a = self.agent.lock().unwrap();
-        a.get_review(p.thread_id.as_deref()).map_err(internal)
+        a.get_review(&p.review_id, p.thread_id.as_deref())
+            .map_err(internal)
     }
 
     #[tool(
@@ -631,6 +771,7 @@ impl Server {
         let mut a = self.agent.lock().unwrap();
         a.request_review(
             &client_name(&ctx),
+            &p.review_id,
             p.note.as_deref().unwrap_or(""),
             &p.files.unwrap_or_default(),
         )
@@ -646,7 +787,7 @@ impl Server {
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
         let mut a = self.agent.lock().unwrap();
-        a.reply(&client_name(&ctx), &p.thread_id, &p.body)
+        a.reply(&client_name(&ctx), &p.review_id, &p.thread_id, &p.body)
             .map(said)
             .map_err(internal)
     }
@@ -658,9 +799,15 @@ impl Server {
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
         let mut a = self.agent.lock().unwrap();
-        a.set_status(&client_name(&ctx), &p.thread_id, false, &p.note)
-            .map(said)
-            .map_err(internal)
+        a.set_status(
+            &client_name(&ctx),
+            &p.review_id,
+            &p.thread_id,
+            false,
+            &p.note,
+        )
+        .map(said)
+        .map_err(internal)
     }
 
     #[tool(description = "Reopen a resolved or outdated thread.")]
@@ -672,6 +819,7 @@ impl Server {
         let mut a = self.agent.lock().unwrap();
         a.set_status(
             &client_name(&ctx),
+            &p.review_id,
             &p.thread_id,
             true,
             p.note.as_deref().unwrap_or(""),
@@ -689,9 +837,16 @@ impl Server {
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
         let mut a = self.agent.lock().unwrap();
-        a.annotate(&client_name(&ctx), &p.path, p.line, p.end_line, &p.body)
-            .map(said)
-            .map_err(internal)
+        a.annotate(
+            &client_name(&ctx),
+            &p.review_id,
+            &p.path,
+            p.line,
+            p.end_line,
+            &p.body,
+        )
+        .map(said)
+        .map_err(internal)
     }
 
     #[tool(
@@ -705,6 +860,7 @@ impl Server {
         let mut a = self.agent.lock().unwrap();
         a.suggest(
             &client_name(&ctx),
+            &p.review_id,
             &p.path,
             p.line,
             p.note.as_deref().unwrap_or(""),
@@ -732,7 +888,7 @@ impl Server {
                 .agent
                 .lock()
                 .unwrap()
-                .try_take(&name)
+                .try_take(&p.review_id, &name)
                 .map_err(internal)?
             {
                 return Ok(answer);
@@ -823,13 +979,13 @@ mod tests {
     fn unsent_comments_stay_private() {
         let (_d, mut a, r) = setup();
         review::comment(&a.conn, &r.id, Some((&at(2, 2), FILE)), YOU, "draft-ish").unwrap();
-        let out = a.get_review(None).unwrap();
+        let out = a.get_review(&r.id, None).unwrap();
         assert!(out.contains("Open threads (0)"), "{out}");
         assert!(!out.contains("draft-ish"));
         assert!(out.contains("Nothing submitted yet"));
         assert!(out.contains("- a.rs (Modified)"), "{out}");
         review::submit(&a.conn, &r.id, Verdict::Changes, &[], None).unwrap();
-        let out = a.get_review(None).unwrap();
+        let out = a.get_review(&r.id, None).unwrap();
         assert!(out.contains("Open threads (1)"), "{out}");
         assert!(
             out.contains("on a.rs:2 you: draft-ish (1 comment)"),
@@ -838,10 +994,10 @@ mod tests {
         assert!(out.contains("Last submitted round: 1, changes requested, with 1 comment"));
         // Not new any more once seen.
         let t = &review::threads(&a.conn, &r.id).unwrap()[0];
-        let full = a.get_review(Some(&t.id)).unwrap();
+        let full = a.get_review(&r.id, Some(&t.id)).unwrap();
         assert!(full.contains("  > two\nyou:\n  draft-ish"), "{full}");
         assert!(
-            a.get_review(Some("nope"))
+            a.get_review(&r.id, Some("nope"))
                 .unwrap()
                 .contains("No thread nope")
         );
@@ -850,17 +1006,17 @@ mod tests {
     #[test]
     fn new_threads_are_marked_until_seen() {
         let (_d, mut a, r) = setup();
-        a.get_review(None).unwrap();
+        a.get_review(&r.id, None).unwrap();
         // Timestamps must move on past the agent's look.
         std::thread::sleep(Duration::from_millis(5));
         review::comment(&a.conn, &r.id, None, YOU, "overall").unwrap();
         review::submit(&a.conn, &r.id, Verdict::Comment, &[], None).unwrap();
-        let out = a.get_review(None).unwrap();
+        let out = a.get_review(&r.id, None).unwrap();
         assert!(
             out.contains("(on the whole review) you: overall (1 comment, new)"),
             "{out}"
         );
-        let out = a.get_review(None).unwrap();
+        let out = a.get_review(&r.id, None).unwrap();
         assert!(!out.contains(", new"), "{out}");
     }
 
@@ -868,7 +1024,7 @@ mod tests {
     fn a_request_then_a_submit_reaches_the_waiting_agent_once() {
         let (_d, mut a, r) = setup();
         let out = a
-            .request_review("claude", "parser done", &["a.rs".into()])
+            .request_review("claude", &r.id, "parser done", &["a.rs".into()])
             .unwrap();
         assert!(out.contains("Then call wait_for_review"), "{out}");
         assert!(
@@ -881,7 +1037,7 @@ mod tests {
         let rr = r.reload(&a.conn).unwrap();
         assert_eq!(rr.request_note.as_deref(), Some("parser done"));
         assert!(
-            a.try_take("claude").unwrap().is_none(),
+            a.try_take(&r.id, "claude").unwrap().is_none(),
             "nothing submitted yet"
         );
 
@@ -895,7 +1051,7 @@ mod tests {
         .unwrap();
         review::comment(&a.conn, &r.id, None, YOU, "nice overall").unwrap();
         review::submit(&a.conn, &r.id, Verdict::Changes, &[], None).unwrap();
-        let answer = a.try_take("claude").unwrap().unwrap();
+        let answer = a.try_take(&r.id, "claude").unwrap().unwrap();
         assert!(answer.contains("(round 1): changes requested"), "{answer}");
         assert!(answer.contains("2 comments"), "{answer}");
         assert!(
@@ -908,7 +1064,10 @@ mod tests {
             "{answer}"
         );
         assert!(answer.contains("address every comment"));
-        assert!(a.try_take("claude").unwrap().is_none(), "delivered once");
+        assert!(
+            a.try_take(&r.id, "claude").unwrap().is_none(),
+            "delivered once"
+        );
     }
 
     #[test]
@@ -916,13 +1075,13 @@ mod tests {
         let (_d, mut a, r) = setup();
         review::comment(&a.conn, &r.id, None, YOU, "v1").unwrap();
         review::submit(&a.conn, &r.id, Verdict::Comment, &[], None).unwrap();
-        a.try_take("claude").unwrap().unwrap();
+        a.try_take(&r.id, "claude").unwrap().unwrap();
         let c = review::threads(&a.conn, &r.id).unwrap()[0].comments[0]
             .id
             .clone();
         review::edit(&a.conn, &c, "v2").unwrap();
         review::submit(&a.conn, &r.id, Verdict::Approved, &[], None).unwrap();
-        let answer = a.try_take("claude").unwrap().unwrap();
+        let answer = a.try_take(&r.id, "claude").unwrap().unwrap();
         assert!(
             answer.contains("you (edited since you last saw it):\n  v2"),
             "{answer}"
@@ -936,13 +1095,13 @@ mod tests {
         let log = d.path().join("opened");
         a.open_command = Some(format!("echo >> '{}'", log.display()));
         a.db = Some(d.path().join("glos.db"));
-        let out = a.request_review("claude", "", &[]).unwrap();
+        let out = a.request_review("claude", &r.id, "", &[]).unwrap();
         assert!(out.contains("glos opened for the user"), "{out}");
         let opened = std::fs::read_to_string(&log).unwrap();
         assert!(opened.contains(&format!("--review {}", r.id)), "{opened}");
 
         review::set_viewer(&a.conn, Some(&r.id)).unwrap();
-        let out = a.request_review("claude", "", &[]).unwrap();
+        let out = a.request_review("claude", &r.id, "", &[]).unwrap();
         assert!(
             out.contains("glos is open on it and shows the request now"),
             "{out}"
@@ -955,21 +1114,115 @@ mod tests {
         review::set_viewer(&a.conn, None).unwrap();
 
         a.open_command = Some("exit 3".into());
-        let out = a.request_review("claude", "", &[]).unwrap();
+        let out = a.request_review("claude", &r.id, "", &[]).unwrap();
         assert!(out.contains("glos couldn't open itself"), "{out}");
         assert!(out.contains("ask the user to run"), "{out}");
     }
 
     #[test]
-    fn no_review_yet() {
+    fn an_unknown_or_empty_review_id_is_refused() {
+        let (_d, mut a, _r) = setup();
+        for id in ["nope", ""] {
+            let out = a.get_review(id, None).unwrap();
+            assert!(
+                out.contains("open_review") || out.contains("no review id"),
+                "{out}"
+            );
+            assert!(
+                a.try_take(id, "claude").unwrap().is_some(),
+                "answers at once"
+            );
+            let out = a.request_review("claude", id, "", &[]).unwrap();
+            assert!(
+                out.starts_with("No review") || out.contains("no review id"),
+                "{out}"
+            );
+            assert!(said(a.reply("claude", id, "t", "x").unwrap()).contains("review"));
+        }
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    #[test]
+    fn open_review_takes_exactly_what_to_review() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("repo")).unwrap();
+        let repo = dir.path().join("repo").canonicalize().unwrap();
+        git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a.rs"), "one\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "one"]);
+        git(&repo, &["checkout", "-qb", "topic"]);
+        std::fs::write(repo.join("a.rs"), "one\ntwo\n").unwrap();
         let conn = crate::store::open(&dir.path().join("glos.db")).unwrap();
-        let mut a = Agent::new(conn, dir.path().canonicalize().unwrap());
-        assert!(a.get_review(None).unwrap().contains("no review for"));
-        assert!(a.try_take("claude").unwrap().is_none());
-        // Not git: the agent is told how the user starts a review.
-        let out = a.request_review("claude", "", &[]).unwrap();
-        assert!(out.contains("glos diff"), "{out}");
+        // The server runs somewhere unrelated: where it is never decides anything.
+        let mut a = Agent::new(conn, std::path::PathBuf::from("/"));
+        let folder = repo.to_string_lossy().into_owned();
+        let git_target = |branch: &str, base: &str| Target::Git {
+            folder: folder.clone(),
+            branch: branch.into(),
+            base: base.into(),
+        };
+        let out = said(a.open_review(&git_target("topic", "main")).unwrap());
+        assert!(out.contains("of branch topic (vs main) in"), "{out}");
+        assert!(out.contains("(1 changed file)"), "{out}");
+        let id = out.split_whitespace().nth(1).unwrap().to_string();
+        // The same target is the same review.
+        let again = said(a.open_review(&git_target("topic", "main")).unwrap());
+        assert!(again.starts_with(&format!("Review {id} ")), "{again}");
+        // It must be what's checked out there; the base must exist; paths must be absolute.
+        let out = said(a.open_review(&git_target("main", "main")).unwrap());
+        assert!(out.contains("has topic checked out, not main"), "{out}");
+        let out = said(a.open_review(&git_target("topic", "nope")).unwrap());
+        assert!(out.contains("nope"), "{out}");
+        let out = said(
+            a.open_review(&Target::Git {
+                folder: "repo".into(),
+                branch: "topic".into(),
+                base: "main".into(),
+            })
+            .unwrap(),
+        );
+        assert!(out.contains("must be an absolute path"), "{out}");
+        // Two files.
+        let (o, n) = (dir.path().join("o.txt"), dir.path().join("n.txt"));
+        std::fs::write(&o, "a\n").unwrap();
+        std::fs::write(&n, "b\n").unwrap();
+        let diff = Target::Diff {
+            old: o.to_string_lossy().into(),
+            new: n.to_string_lossy().into(),
+        };
+        let out = said(a.open_review(&diff).unwrap());
+        assert!(out.contains("o.txt → n.txt"), "{out}");
+        let missing = Target::Diff {
+            old: o.to_string_lossy().into(),
+            new: "/no/such/file".into(),
+        };
+        assert!(said(a.open_review(&missing).unwrap()).contains("/no/such/file"));
+        // The id is what every other tool acts on.
+        let out = a.request_review("claude", &id, "ready", &[]).unwrap();
+        assert!(
+            out.contains("Review requested for branch topic (vs main)"),
+            "{out}"
+        );
+        // Opening it by hand names it too, not the folder, whose branch could change.
+        assert!(out.contains(&format!("`glos --review {id}`")), "{out}");
+        // A closed review is refused until it's opened again.
+        review::close(&a.conn, &id).unwrap();
+        let out = a.request_review("claude", &id, "", &[]).unwrap();
+        assert!(out.contains("is closed"), "{out}");
+        said(a.open_review(&git_target("topic", "main")).unwrap());
+        let out = a.request_review("claude", &id, "", &[]).unwrap();
+        assert!(out.contains("Review requested"), "{out}");
     }
 
     #[test]
@@ -977,19 +1230,24 @@ mod tests {
         let (_d, mut a, r) = setup();
         let t = review::comment(&a.conn, &r.id, Some((&at(2, 2), FILE)), YOU, "why?").unwrap();
         // Unsent: the agent can't see the thread, so can't touch it.
-        assert!(said(a.reply("claude", &t, "because").unwrap()).starts_with("No thread"));
+        assert!(said(a.reply("claude", &r.id, &t, "because").unwrap()).starts_with("No thread"));
         review::submit(&a.conn, &r.id, Verdict::Changes, &[], None).unwrap();
         assert_eq!(
-            said(a.reply("claude", &t, "because").unwrap()),
+            said(a.reply("claude", &r.id, &t, "because").unwrap()),
             format!("Replied on thread {t}.")
         );
         assert_eq!(
-            said(a.reply("claude", &t, "  ").unwrap()),
+            said(a.reply("claude", &r.id, &t, "  ").unwrap()),
             "A reply needs a body."
         );
-        assert!(said(a.set_status("claude", &t, false, "").unwrap()).contains("needs a note"));
+        assert!(
+            said(a.set_status("claude", &r.id, &t, false, "").unwrap()).contains("needs a note")
+        );
         assert_eq!(
-            said(a.set_status("claude", &t, false, "renamed it").unwrap()),
+            said(
+                a.set_status("claude", &r.id, &t, false, "renamed it")
+                    .unwrap()
+            ),
             format!("Thread {t} is resolved.")
         );
         let th = &review::threads(&a.conn, &r.id).unwrap()[0];
@@ -998,15 +1256,15 @@ mod tests {
         assert_eq!(bodies, ["why?", "because", "renamed it"]);
         assert_eq!(th.comments[1].author, "claude");
         assert!(th.unread());
-        assert!(said(a.set_status("claude", &t, true, "").unwrap()).ends_with("is open."));
-        assert!(said(a.reply("claude", "nope", "x").unwrap()).starts_with("No thread nope"));
+        assert!(said(a.set_status("claude", &r.id, &t, true, "").unwrap()).ends_with("is open."));
+        assert!(said(a.reply("claude", &r.id, "nope", "x").unwrap()).starts_with("No thread nope"));
     }
 
     #[test]
     fn agents_annotate_and_suggest_within_the_review() {
         let (d, mut a, r) = setup();
         let out = said(
-            a.annotate("claude", "a.rs", 2, Some(3), "unsure here")
+            a.annotate("claude", &r.id, "a.rs", 2, Some(3), "unsure here")
                 .unwrap(),
         );
         assert!(out.starts_with("Note left on a.rs:2-3 as thread"), "{out}");
@@ -1014,19 +1272,34 @@ mod tests {
         assert_eq!(th.comments[0].kind, "annotation");
         assert_eq!(th.anchor_text.as_deref(), Some("two\nthree\n"));
         // An agent's own note is visible to it straight away.
-        assert!(a.get_review(None).unwrap().contains("claude: unsure here"));
-        assert!(said(a.annotate("claude", "a.rs", 9, None, "x").unwrap()).contains("4 lines"));
         assert!(
-            said(a.annotate("claude", "nope.rs", 1, None, "x").unwrap()).starts_with("nope.rs:")
+            a.get_review(&r.id, None)
+                .unwrap()
+                .contains("claude: unsure here")
+        );
+        assert!(
+            said(a.annotate("claude", &r.id, "a.rs", 9, None, "x").unwrap()).contains("4 lines")
+        );
+        assert!(
+            said(
+                a.annotate("claude", &r.id, "nope.rs", 1, None, "x")
+                    .unwrap()
+            )
+            .starts_with("nope.rs:")
         );
         // Paths can't lead out of the review's folder.
         std::fs::write(d.path().join("secret"), "s\n").unwrap();
         assert!(
-            said(a.annotate("claude", "../secret", 1, None, "x").unwrap()).contains("isn't inside")
+            said(
+                a.annotate("claude", &r.id, "../secret", 1, None, "x")
+                    .unwrap()
+            )
+            .contains("isn't inside")
         );
 
         assert!(
-            said(a.suggest("claude", "a.rs", 3, "look").unwrap()).starts_with("Suggested a.rs:3")
+            said(a.suggest("claude", &r.id, "a.rs", 3, "look").unwrap())
+                .starts_with("Suggested a.rs:3")
         );
         let s = r.reload(&a.conn).unwrap().suggestion.unwrap();
         assert_eq!(
@@ -1034,7 +1307,7 @@ mod tests {
             ("a.rs", 3, "claude")
         );
         assert_eq!(
-            said(a.suggest("claude", "a.rs", 5, "").unwrap()),
+            said(a.suggest("claude", &r.id, "a.rs", 5, "").unwrap()),
             "a.rs has 4 lines."
         );
     }
@@ -1064,7 +1337,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let answer = a.try_take("claude").unwrap().unwrap();
+        let answer = a.try_take(&r.id, "claude").unwrap().unwrap();
         assert!(
             answer.contains("Files in the review (1): a.rs."),
             "{answer}"
@@ -1093,12 +1366,12 @@ mod tests {
             "{so}"
         );
         // The summary marks threads made on a commit.
-        let summary = a.get_review(None).unwrap();
+        let summary = a.get_review(&r.id, None).unwrap();
         assert!(
             summary.contains(&format!("{c} on a.rs:2 [on commit 2222222]")),
             "{summary}"
         );
-        let full = a.get_review(Some(&c)).unwrap();
+        let full = a.get_review(&r.id, Some(&c)).unwrap();
         assert!(
             full.contains("On: commit 1/2") && full.contains("Now: the same code"),
             "{full}"
