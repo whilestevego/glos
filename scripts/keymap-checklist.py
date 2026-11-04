@@ -37,19 +37,30 @@ def parse_helix(src):
 
 
 def parse_glos(src):
-    """(key path, command) pairs from normal_defs() in src/ui/keymap.rs."""
-    body = src[src.index("fn normal_defs()"):src.index("pub struct Keymaps")]
-    out, stack = [], []
-    for line in body.splitlines():
-        line = line.strip()
-        if m := re.match(r'menu\("([^"]+)",\s*"[^"]+",\s*vec!\[', line):
-            stack.append(m.group(1))
-        elif m := re.match(r'cmd\("([^"]+)",\s*"([a-z_]+)"\)', line):
-            for key in m.group(1).split("|"):
-                out.append((" ".join(stack + [key]), m.group(2)))
-        elif line.startswith("]") and stack:
-            stack.pop()
-    return out
+    """(key path, command) pairs from normal_defs() in src/ui/keymap.rs, with helper menus like
+    view_defs() expanded."""
+    def defs_of(fn):
+        start = src.index(f"fn {fn}()")
+        return src[start:src.index("\n}\n", start)]
+
+    def keys(spec):
+        return ["|"] if spec == "|" else spec.split("|")
+
+    def walk(body, stack, out):
+        for line in body.splitlines():
+            line = line.strip()
+            if m := re.match(r'(?:sticky_)?menu\("([^"]+)",\s*"[^"]+",\s*([a-z_]+)\(\)\)', line):
+                walk(defs_of(m.group(2)), stack + [m.group(1)], out)
+            elif m := re.match(r'(?:sticky_)?menu\("([^"]+)",\s*"[^"]+",\s*vec!\[', line):
+                stack = stack + [m.group(1)]
+            elif m := re.match(r'cmd\("([^"]+)",\s*"([a-z_]+)"\)', line):
+                for key in keys(m.group(1)):
+                    out.append((" ".join(stack + [key]), m.group(2)))
+            elif line.startswith("]") and stack:
+                stack = stack[:-1]
+        return out
+
+    return walk(defs_of("normal_defs"), [], [])
 
 
 # Keys PLAN.md gives to review actions, and when they arrive.
@@ -90,7 +101,7 @@ for key, cmd in helix:
     else:
         status = "to do"
     counts[status.split(":")[0]] = counts.get(status.split(":")[0], 0) + 1
-    rows.append(f"| `{key}` | `{cmd}` | {status} |")
+    rows.append(f"| `{key.replace("|", "\\|")}` | `{cmd}` | {status} |")
 
 helix_keys = {k for k, _ in helix}
 extra = [f"| `{k}` | `{c}` |" for k, c in glos.items() if k not in helix_keys]

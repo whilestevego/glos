@@ -56,6 +56,8 @@ enum PromptKind {
     Command,
     /// A search, forward or back; it previews as you type and `esc` puts the selection back.
     Search { forward: bool, origin: Selection, top: usize },
+    /// `s`, `S`, `K`, `A-K`: previews as you type, as Helix's regex prompts do.
+    Regex { action: commands::RegexAction, origin: Selection },
 }
 
 struct Prompt {
@@ -84,6 +86,15 @@ pub struct App {
     yanked: Vec<String>,
     /// Soft wrap: `[editor.soft-wrap] enable`, or `:toggle soft-wrap`.
     wrap: bool,
+    /// Helix's jumplist: where `gg`, `G`, opening a file… came from. `jump` is the position in it.
+    jumps: Vec<(Cur, Selection)>,
+    jump: usize,
+    /// The last `f`/`t`, text object or `]g`-style motion, for `A-.`.
+    last_motion: Option<std::rc::Rc<dyn Fn(&mut Ctx)>>,
+    /// Keys being recorded into the `@` register (`Q`), and the last recording.
+    recording: Option<Vec<Key>>,
+    macro_keys: Vec<Key>,
+    replaying: bool,
     status: Option<(String, bool)>,
     /// The screen and text area from the last draw, for commands that page or align the view.
     screen: Rect,
@@ -117,6 +128,12 @@ pub fn run(source: Source, config: &Config) -> Result<()> {
         last_search: None,
         yanked: vec![],
         wrap: config.editor.soft_wrap.enable,
+        jumps: vec![],
+        jump: 0,
+        last_motion: None,
+        recording: None,
+        macro_keys: vec![],
+        replaying: false,
         status: None,
         screen: Rect::default(),
         view: Rect::default(),
@@ -198,6 +215,7 @@ impl App {
     }
 
     fn open(&mut self, target: Target) {
+        let _ = self.push_jump();
         match target {
             Target::Change(i) => {
                 self.load(i);
@@ -221,7 +239,12 @@ impl App {
 
     /// Handles one key. Returns the app action that needs the terminal (suspend), if any.
     fn key(&mut self, key: Key) -> Option<AppAction> {
-        self.status = None;
+        if let Some(rec) = &mut self.recording {
+            rec.push(key);
+        }
+        if !self.replaying {
+            self.status = None;
+        }
         if let Some(picker) = &mut self.picker {
             let page = picker.page(Picker::areas(self.screen).0);
             match picker.key(key, page) {
@@ -246,10 +269,12 @@ impl App {
                 _ => None,
             });
             if let Some(ch) = ch {
-                match next {
-                    NextKey::Char(f, _) => self.doc_command(|cx| f(cx, ch)),
-                    NextKey::Textobject(around) => self.doc_command(|cx| commands::select_textobject(cx, around, ch)),
-                }
+                let motion: std::rc::Rc<dyn Fn(&mut Ctx)> = match next {
+                    NextKey::Char(f, _) => std::rc::Rc::new(move |cx| f(cx, ch)),
+                    NextKey::Textobject(around) => std::rc::Rc::new(move |cx| commands::select_textobject(cx, around, ch)),
+                };
+                self.doc_command(|cx| motion(cx));
+                self.last_motion = Some(motion);
             }
             self.count = None;
             return None;
@@ -267,15 +292,19 @@ impl App {
         let keymap = if self.mode == Mode::Select { &self.keymaps.select } else { &self.keymaps.normal };
         let mut node = None;
         let mut menu = keymap;
-        for k in self.pending.iter().chain(std::iter::once(&key)) {
+        let mut sticky: Option<usize> = None;
+        for (depth, k) in self.pending.iter().chain(std::iter::once(&key)).enumerate() {
             match menu.get(*k) {
                 Some(Node::Menu(m)) => {
                     menu = m;
                     node = None;
+                    if m.sticky {
+                        sticky = Some(depth + 1);
+                    }
                 }
                 Some(Node::Cmd(c)) => node = Some(*c),
                 None => {
-                    // Unbound: drop the sequence, as Helix does.
+                    // Unbound: drop the sequence (and leave a sticky menu), as Helix does.
                     self.pending.clear();
                     self.count = None;
                     return None;
@@ -286,9 +315,21 @@ impl App {
             self.pending.push(key); // into a menu; the help panel opens
             return None;
         };
-        self.pending.clear();
+        // In a sticky menu the keys up to it stay typed, so the next key is in it again.
+        let keep: Vec<Key> = sticky.map(|n| self.pending[..n.min(self.pending.len())].to_vec()).unwrap_or_default();
+        self.pending = keep;
         let result = match command.action {
             Action::Doc(f) => {
+                // As Helix: these jumps go on the jumplist, and these motions repeat with A-.
+                if matches!(command.name, "goto_file_start" | "goto_last_line" | "goto_line") {
+                    let _ = self.push_jump();
+                }
+                if matches!(
+                    command.name,
+                    "goto_next_change" | "goto_prev_change" | "goto_next_paragraph" | "goto_prev_paragraph"
+                ) {
+                    self.last_motion = Some(std::rc::Rc::new(f));
+                }
                 self.doc_command(f);
                 None
             }
@@ -309,13 +350,15 @@ impl App {
     fn prompt_key(&mut self, key: Key) {
         let Some(prompt) = &mut self.prompt else { return };
         match key.code {
-            KeyCode::Esc => {
-                if let Some(Prompt { kind: PromptKind::Search { origin, top, .. }, .. }) = self.prompt.take() {
+            KeyCode::Esc => match self.prompt.take() {
+                Some(Prompt { kind: PromptKind::Search { origin, top, .. }, .. }) => {
                     let file = self.file_mut();
                     file.sel = origin;
                     file.top = top;
                 }
-            }
+                Some(Prompt { kind: PromptKind::Regex { origin, .. }, .. }) => self.file_mut().sel = origin,
+                _ => {}
+            },
             KeyCode::Char('c') if key.mods.contains(KeyModifiers::CONTROL) => {
                 self.prompt_key(Key { code: KeyCode::Esc, mods: KeyModifiers::NONE });
             }
@@ -323,6 +366,13 @@ impl App {
                 let Some(Prompt { kind, line }) = self.prompt.take() else { return };
                 match kind {
                     PromptKind::Command => self.typed_command(line.trim()),
+                    PromptKind::Regex { action, origin } => {
+                        // Applied once more from where it started, so errors show.
+                        if let Some(regex) = commands::search_regex(&line) {
+                            self.file_mut().sel = origin;
+                            self.doc_command(|cx| commands::regex_selections(cx, action, &regex));
+                        }
+                    }
                     PromptKind::Search { .. } => {
                         // An empty search repeats the last one, as in Helix.
                         if !line.is_empty() {
@@ -348,8 +398,17 @@ impl App {
         }
     }
 
-    /// As you type a search, the selection jumps to the first match from where you started.
+    /// As you type a search, the selection jumps to the first match from where you started; a
+    /// regex prompt applies to the selections it started from.
     fn search_preview(&mut self) {
+        if let Some(Prompt { kind: PromptKind::Regex { action, origin }, line }) = &self.prompt {
+            let (action, origin) = (*action, origin.clone());
+            let Some(regex) = commands::search_regex(line) else { return };
+            self.file_mut().sel = origin;
+            self.doc_command(|cx| commands::regex_selections(cx, action, &regex));
+            self.status = None;
+            return;
+        }
         let Some(Prompt { kind: PromptKind::Search { forward, origin, top }, line }) = &self.prompt else { return };
         let (forward, origin, top) = (*forward, origin.clone(), *top);
         let Some(regex) = commands::search_regex(line) else { return };
@@ -423,9 +482,107 @@ impl App {
                 });
                 self.mode = Mode::Normal; // as Helix, yanking leaves select mode
             }
+            AppAction::RegexPrompt(action) => {
+                let kind = PromptKind::Regex { action, origin: self.file().sel.clone() };
+                self.prompt = Some(Prompt { kind, line: String::new() });
+            }
+            AppAction::SaveSelection => {
+                let _ = self.push_jump();
+                self.status = Some(("Selection saved to jumplist".into(), false));
+            }
+            AppAction::JumpBackward | AppAction::JumpForward => {
+                let count = self.count.map_or(1, NonZeroUsize::get);
+                let target = if action == AppAction::JumpForward {
+                    self.jump_forward(count)
+                } else {
+                    self.jump_backward(count)
+                };
+                let Some((cur, sel)) = target else { return None };
+                self.cur = cur;
+                if let Cur::Change(i) = self.cur {
+                    self.load(i);
+                }
+                let file = self.file_mut();
+                file.sel = sel.ensure_invariants(file.text.slice(..));
+                self.scroll_to_cursor(true);
+            }
+            AppAction::RepeatLastMotion => {
+                if let Some(m) = self.last_motion.clone() {
+                    for _ in 0..self.count.map_or(1, NonZeroUsize::get) {
+                        self.doc_command(|cx| m(cx));
+                    }
+                }
+            }
+            AppAction::RecordMacro => match self.recording.take() {
+                Some(mut keys) => {
+                    keys.pop(); // the Q that stopped it
+                    self.macro_keys = keys;
+                    self.status = Some(("Recorded to register [@]".into(), false));
+                }
+                None => {
+                    self.recording = Some(vec![]);
+                    self.status = Some(("Recording to register [@]".into(), false));
+                }
+            },
+            AppAction::ReplayMacro => {
+                if self.replaying {
+                    self.status = Some(("Cannot replay from register [@] because already replaying".into(), true));
+                    return None;
+                }
+                let keys = self.macro_keys.clone();
+                self.replaying = true;
+                for _ in 0..self.count.map_or(1, NonZeroUsize::get) {
+                    self.count = None;
+                    for k in &keys {
+                        self.key(*k);
+                    }
+                }
+                self.replaying = false;
+            }
             AppAction::Suspend => return Some(AppAction::Suspend),
         }
         None
+    }
+
+    /// Helix's `push_jump`: the current place goes on the jumplist, dropping anything ahead
+    /// (helix-view `JumpList::push_impl`, capacity 30). Returns how many fell off the front.
+    fn push_jump(&mut self) -> usize {
+        let entry = (self.cur.clone(), self.file().sel.clone());
+        self.jumps.truncate(self.jump);
+        let mut removed = 0;
+        if self.jumps.last() != Some(&entry) {
+            while self.jumps.len() >= 30 {
+                self.jumps.remove(0);
+                removed += 1;
+            }
+            self.jumps.push(entry);
+            self.jump = self.jumps.len();
+        }
+        removed
+    }
+
+    fn jump_forward(&mut self, count: usize) -> Option<(Cur, Selection)> {
+        if self.jump + count < self.jumps.len() {
+            self.jump += count;
+            self.jumps.get(self.jump).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// helix-view `JumpList::backward`: from the newest jump, where you are is saved first, so
+    /// `C-i` comes back; a jump to where you already are is skipped.
+    fn jump_backward(&mut self, count: usize) -> Option<(Cur, Selection)> {
+        let mut current = self.jump.checked_sub(count)?;
+        if self.jump == self.jumps.len() {
+            current = current.saturating_sub(self.push_jump());
+        }
+        self.jump = current;
+        let here = (self.cur.clone(), self.file().sel.clone());
+        if self.jumps.get(self.jump)? == &here {
+            self.jump = self.jump.checked_sub(1)?;
+        }
+        self.jumps.get(self.jump).cloned()
     }
 
     /// Click to move the cursor, drag to select, wheel to scroll; in the picker, the wheel moves
@@ -581,19 +738,25 @@ impl App {
             extend,
             hunks: &file.hunks,
             top: file.top,
+            left: file.left,
             height,
             fmt: view::text_format(file, width, wrap),
             status: None,
             center: false,
+            keep_top: false,
         };
         f(&mut cx);
-        let (sel, top, status, center) = (cx.sel.ensure_invariants(file.text.slice(..)), cx.top, cx.status, cx.center);
+        let (sel, top, left, status, center, keep_top) =
+            (cx.sel.ensure_invariants(file.text.slice(..)), cx.top, cx.left, cx.status, cx.center, cx.keep_top);
         file.sel = sel;
         file.top = top;
+        file.left = left;
         if status.is_some() {
             self.status = status;
         }
-        self.scroll_to_cursor(center);
+        if !keep_top {
+            self.scroll_to_cursor(center);
+        }
     }
 
     /// Keeps the primary cursor `scrolloff` rows and columns inside the view; with `center`,
@@ -727,6 +890,7 @@ impl App {
             let prefix = match p.kind {
                 PromptKind::Command => ":",
                 PromptKind::Search { .. } => "search:",
+                PromptKind::Regex { action, .. } => action.prompt(),
             };
             let shown = format!("{prefix}{}", clean(&p.line));
             buf.set_stringn(area.x, area.y, &shown, area.width as usize, t.get("ui.text"));

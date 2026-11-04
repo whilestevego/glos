@@ -40,6 +40,14 @@ pub enum AppAction {
     Yank,
     /// `space y` / `space Y`: all selections, or only the primary, to the system clipboard.
     YankToClipboard { main_only: bool },
+    /// `s`, `S`, `K`, `A-K`: a regex prompt that acts on the selections.
+    RegexPrompt(super::commands::RegexAction),
+    JumpForward,
+    JumpBackward,
+    SaveSelection,
+    RepeatLastMotion,
+    RecordMacro,
+    ReplayMacro,
 }
 
 pub struct Command {
@@ -116,6 +124,38 @@ commands! {
     changed_file_picker, "Open changed file picker", App(AppAction::ChangedFilePicker);
     toggle_collapse, "Expand or collapse the file", App(AppAction::ToggleCollapse);
     yank, "Yank selection", App(AppAction::Yank);
+    move_line_up, "Move up", Doc(c::move_line_up);
+    move_line_down, "Move down", Doc(c::move_line_down);
+    goto_column, "Goto column", Doc(c::goto_column);
+    goto_next_paragraph, "Goto next paragraph", Doc(c::goto_next_paragraph);
+    goto_prev_paragraph, "Goto previous paragraph", Doc(c::goto_prev_paragraph);
+    copy_selection_on_next_line, "Copy selection on next line", Doc(c::copy_selection_on_next_line);
+    copy_selection_on_prev_line, "Copy selection on previous line", Doc(c::copy_selection_on_prev_line);
+    trim_selections, "Trim whitespace from selections", Doc(c::trim_selections);
+    rotate_selections_forward, "Rotate selections forward", Doc(c::rotate_selections_forward);
+    rotate_selections_backward, "Rotate selections backward", Doc(c::rotate_selections_backward);
+    merge_selections, "Merge selections", Doc(c::merge_selections);
+    merge_consecutive_selections, "Merge consecutive selections", Doc(c::merge_consecutive_selections);
+    ensure_selections_forward, "Ensure all selections face forward", Doc(c::ensure_selections_forward);
+    shrink_to_line_bounds, "Shrink selection to line bounds", Doc(c::shrink_to_line_bounds);
+    remove_primary_selection, "Remove primary selection", Doc(c::remove_primary_selection);
+    split_selection_on_newline, "Split selection on newlines", Doc(c::split_selection_on_newline);
+    select_regex, "Select all regex matches inside selections", App(AppAction::RegexPrompt(c::RegexAction::Select));
+    split_selection, "Split selections on regex matches", App(AppAction::RegexPrompt(c::RegexAction::Split));
+    keep_selections, "Keep selections matching regex", App(AppAction::RegexPrompt(c::RegexAction::Keep));
+    remove_selections, "Remove selections matching regex", App(AppAction::RegexPrompt(c::RegexAction::Remove));
+    align_view_center, "Align view center", Doc(c::align_view_center);
+    align_view_top, "Align view top", Doc(c::align_view_top);
+    align_view_bottom, "Align view bottom", Doc(c::align_view_bottom);
+    align_view_middle, "Align view middle", Doc(c::align_view_middle);
+    scroll_up, "Scroll view up", Doc(c::scroll_up);
+    scroll_down, "Scroll view down", Doc(c::scroll_down);
+    jump_forward, "Jump forward on jumplist", App(AppAction::JumpForward);
+    jump_backward, "Jump backward on jumplist", App(AppAction::JumpBackward);
+    save_selection, "Save current selection to jumplist", App(AppAction::SaveSelection);
+    repeat_last_motion, "Repeat last motion", App(AppAction::RepeatLastMotion);
+    record_macro, "Record macro", App(AppAction::RecordMacro);
+    replay_macro, "Replay macro", App(AppAction::ReplayMacro);
     yank_to_clipboard, "Yank selections to clipboard", App(AppAction::YankToClipboard { main_only: false });
     yank_main_selection_to_clipboard, "Yank main selection to clipboard", App(AppAction::YankToClipboard { main_only: true });
     suspend, "Suspend and return to shell", App(AppAction::Suspend);
@@ -230,6 +270,8 @@ pub enum Node {
 pub struct Menu {
     pub name: &'static str,
     pub keys: Vec<(Key, Node)>,
+    /// A sticky menu stays open after a command, until `esc` (Helix's `Z`).
+    pub sticky: bool,
 }
 
 impl Menu {
@@ -256,7 +298,7 @@ impl Menu {
 
 enum Def {
     Cmd(&'static str, &'static str),
-    Menu(&'static str, &'static str, Vec<Def>),
+    Menu(&'static str, &'static str, bool, Vec<Def>),
 }
 
 fn cmd(keys: &'static str, name: &'static str) -> Def {
@@ -264,25 +306,31 @@ fn cmd(keys: &'static str, name: &'static str) -> Def {
 }
 
 fn menu(key: &'static str, name: &'static str, defs: Vec<Def>) -> Def {
-    Def::Menu(key, name, defs)
+    Def::Menu(key, name, false, defs)
 }
 
-fn build(name: &'static str, defs: Vec<Def>) -> Menu {
+fn sticky_menu(key: &'static str, name: &'static str, defs: Vec<Def>) -> Def {
+    Def::Menu(key, name, true, defs)
+}
+
+fn build(name: &'static str, sticky: bool, defs: Vec<Def>) -> Menu {
     let mut keys = vec![];
     for def in defs {
         match def {
             Def::Cmd(ks, c) => {
                 let command = command(c).unwrap_or_else(|| panic!("no command {c}"));
-                for k in ks.split('|') {
+                // `|` separates aliases, so the `|` key itself is written alone.
+                let aliases: Vec<&str> = if ks == "|" { vec!["|"] } else { ks.split('|').collect() };
+                for k in aliases {
                     keys.push((Key::parse(k).unwrap_or_else(|| panic!("bad key {k}")), Node::Cmd(command)));
                 }
             }
-            Def::Menu(k, name, defs) => {
-                keys.push((Key::parse(k).unwrap(), Node::Menu(build(name, defs))));
+            Def::Menu(k, name, sticky, defs) => {
+                keys.push((Key::parse(k).unwrap(), Node::Menu(build(name, sticky, defs))));
             }
         }
     }
-    Menu { name, keys }
+    Menu { name, keys, sticky }
 }
 
 /// Helix's default normal-mode keys that apply to a read-only review (keymap/default.rs).
@@ -317,6 +365,9 @@ fn normal_defs() -> Vec<Def> {
             cmd("b", "goto_window_bottom"),
             cmd("n", "goto_next_buffer"),
             cmd("p", "goto_previous_buffer"),
+            cmd("k", "move_line_up"),
+            cmd("j", "move_line_down"),
+            cmd("|", "goto_column"),
         ]),
         cmd(":", "command_mode"),
         cmd(";", "collapse_selection"),
@@ -332,11 +383,37 @@ fn normal_defs() -> Vec<Def> {
         menu("[", "Left bracket", vec![
             cmd("g", "goto_prev_change"),
             cmd("G", "goto_first_change"),
+            cmd("p", "goto_prev_paragraph"),
         ]),
         menu("]", "Right bracket", vec![
             cmd("g", "goto_next_change"),
             cmd("G", "goto_last_change"),
+            cmd("p", "goto_next_paragraph"),
         ]),
+        cmd("C", "copy_selection_on_next_line"),
+        cmd("A-C", "copy_selection_on_prev_line"),
+        cmd("s", "select_regex"),
+        cmd("A-s", "split_selection_on_newline"),
+        cmd("A-minus", "merge_selections"),
+        cmd("A-_", "merge_consecutive_selections"),
+        cmd("S", "split_selection"),
+        cmd("A-x", "shrink_to_line_bounds"),
+        cmd("K", "keep_selections"),
+        cmd("A-K", "remove_selections"),
+        cmd("A-,", "remove_primary_selection"),
+        cmd("_", "trim_selections"),
+        cmd("(", "rotate_selections_backward"),
+        cmd(")", "rotate_selections_forward"),
+        cmd("A-:", "ensure_selections_forward"),
+        cmd("A-.", "repeat_last_motion"),
+        cmd("Q", "record_macro"),
+        cmd("q", "replay_macro"),
+        cmd("esc", "normal_mode"),
+        cmd("C-i|tab", "jump_forward"),
+        cmd("C-o", "jump_backward"),
+        cmd("C-s", "save_selection"),
+        menu("z", "View", view_defs()),
+        sticky_menu("Z", "View", view_defs()),
         cmd(",", "keep_primary_selection"),
         cmd("/", "search"),
         cmd("?", "rsearch"),
@@ -361,6 +438,26 @@ fn normal_defs() -> Vec<Def> {
     ]
 }
 
+/// Helix's view menu, under `z` and (sticky) `Z`.
+fn view_defs() -> Vec<Def> {
+    vec![
+        cmd("z|c", "align_view_center"),
+        cmd("t", "align_view_top"),
+        cmd("b", "align_view_bottom"),
+        cmd("m", "align_view_middle"),
+        cmd("k|up", "scroll_up"),
+        cmd("j|down", "scroll_down"),
+        cmd("C-b|pageup", "page_up"),
+        cmd("C-f|pagedown", "page_down"),
+        cmd("C-u|backspace", "page_cursor_half_up"),
+        cmd("C-d|space", "page_cursor_half_down"),
+        cmd("/", "search"),
+        cmd("?", "rsearch"),
+        cmd("n", "search_next"),
+        cmd("N", "search_prev"),
+    ]
+}
+
 pub struct Keymaps {
     pub normal: Menu,
     pub select: Menu,
@@ -370,10 +467,10 @@ impl Keymaps {
     pub fn default() -> Keymaps {
         let mut select = normal_defs();
         // Select mode is normal mode with motions extending; `v` and `esc` leave it.
-        select.retain(|d| !matches!(d, Def::Cmd("v", _)));
+        select.retain(|d| !matches!(d, Def::Cmd("v" | "esc", _)));
         select.push(cmd("v", "normal_mode"));
         select.push(cmd("esc", "exit_select_mode"));
-        Keymaps { normal: build("Normal mode", normal_defs()), select: build("Select mode", select) }
+        Keymaps { normal: build("Normal mode", false, normal_defs()), select: build("Select mode", false, select) }
     }
 }
 
