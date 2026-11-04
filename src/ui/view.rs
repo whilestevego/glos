@@ -342,9 +342,7 @@ pub fn draw(
         };
         gutter_row(buf, 0, y);
         let mut rows = 1;
-        let mut end_col = 0;
-        let mut end_char = text.line_to_char(line);
-        let start = end_char;
+        let start = text.line_to_char(line);
         for g in DocumentFormatter::new_at_prev_checkpoint(text, &fmt, &annotations, start) {
             if g.line_idx != line {
                 break;
@@ -406,19 +404,8 @@ pub fn draw(
                     }
                 }
             }
-            end_col = col + w;
-            end_char = ch + g.doc_chars();
             if matches!(g.raw, Grapheme::Newline) {
                 break;
-            }
-        }
-        // The cursor can sit at the very end of a file with no trailing newline.
-        if end_char == text.len_chars() && ranges.iter().any(|r| r.2 == end_char) {
-            let row_y = y + rows as u16 - 1;
-            if end_col >= left && end_col < left + width as usize && row_y < bottom {
-                buf[(x0 + (end_col - left) as u16, row_y)]
-                    .set_symbol(" ")
-                    .set_style(cursor_primary);
             }
         }
         y += rows as u16;
@@ -609,5 +596,54 @@ mod tests {
                 .to_string()
         };
         assert_eq!([row(0), row(1)], [" collapsed".to_string(), String::new()]);
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use crate::theme::{ColorSupport, Theme};
+    use ratatui::style::Color;
+
+    /// Where the primary cursor is drawn: (column, row) of every cell with its colour.
+    fn cursor_cells(text: &str, pos: usize) -> Vec<(u16, u16)> {
+        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+        let loader = Loader::new(&theme).unwrap();
+        let mut file = File::scratch(text, &loader);
+        file.sel = Selection::point(pos);
+        let area = Rect::new(0, 0, 10, 4);
+        let mut buf = Buffer::empty(area);
+        let c = Style::default().bg(Color::Red);
+        let styles = (Style::default(), Style::default(), c, c);
+        draw(
+            &mut buf,
+            area,
+            &file,
+            0,
+            0,
+            true,
+            &loader,
+            &theme,
+            Some(styles),
+            &Threads::default(),
+        );
+        let mut cells = vec![];
+        for y in 0..4 {
+            for x in 0..10 {
+                if buf[(x, y)].bg == Color::Red {
+                    cells.push((x, y));
+                }
+            }
+        }
+        cells
+    }
+
+    #[test]
+    fn one_cursor_at_the_end_of_the_text() {
+        assert_eq!(cursor_cells("ab", 2), [(2, 0)], "no trailing newline");
+        assert_eq!(cursor_cells("ab\n", 3), [(0, 1)], "on the empty last line");
+        assert_eq!(cursor_cells("ab\n\n", 4), [(0, 2)]);
+        assert_eq!(cursor_cells("", 0), [(0, 0)]);
+        assert_eq!(cursor_cells("ab\n", 2), [(2, 0)], "on the newline");
     }
 }
