@@ -134,7 +134,7 @@ why. The design itself is in [PLAN.md](PLAN.md).
 ## Name
 
 - **First pick:** loupe (a jeweller's magnifier), dropped because it clashes with GNOME's image
-  viewer (its command is `glos` on many Linux desktops) and an existing crate.
+  viewer (its command is `loupe` on many Linux desktops) and an existing crate.
 - **Then:** about 100 names were checked against crates.io, Homebrew, Linux distro packages
   (Repology), commands on the PATH and GitHub. Long names (kibitzer, obelus, margent, scholion)
   were rejected as too long; most short words (stet, gloss, lgtm, ptal, nits, quirk) were taken.
