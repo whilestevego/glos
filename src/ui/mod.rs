@@ -3,6 +3,7 @@
 
 mod commands;
 mod comments;
+mod dashboard;
 mod diffview;
 mod keymap;
 mod picker;
@@ -193,6 +194,12 @@ const TYPABLE: &[(&str, &[&str], &str)] = &[
         "Only files matching a glob, or with open threads; empty for all",
     ),
     ("toggle-option", &["toggle"], "Toggle an option: soft-wrap"),
+    ("dashboard", &[], "Every open review on this machine"),
+    (
+        "close",
+        &[],
+        "Close the review, once everything is sent, and quit",
+    ),
 ];
 
 /// What `:` can complete `line` with: where the completed word starts, and the words with
@@ -315,6 +322,8 @@ pub struct App {
     tree_area: Rect,
     /// While the palette is open: the picker it covers, to go back to.
     palette: Option<Option<Picker>>,
+    /// A review chosen in the dashboard: glos closes this one and opens it.
+    pub switch: Option<Source>,
 }
 
 /// A palette row: the keys, what they do, and the command to run (none for a key only listed).
@@ -349,6 +358,7 @@ fn blocked_in_box(action: AppAction) -> bool {
             | A::NextCommit(_)
             | A::FilterPrompt
             | A::FileTree
+            | A::Dashboard
     )
 }
 
@@ -401,26 +411,54 @@ fn watch(root: &std::path::Path) -> Result<Watch> {
     })
 }
 
-pub fn run(source: Source, config: &Config, conn: Connection) -> Result<()> {
-    let theme = match Theme::load(&config.theme, ColorSupport::detect()) {
-        Ok(t) => t,
+/// What glos opens first.
+pub enum Start {
+    Review(Box<Source>),
+    Dashboard,
+}
+
+pub fn run(start: Start, config: &Config, conn: Connection) -> Result<()> {
+    let theme = || match Theme::load(&config.theme, ColorSupport::detect()) {
+        Ok(t) => Ok(t),
         Err(e) => {
             tracing::warn!("{e}; using the default theme");
-            Theme::load("default", ColorSupport::detect())?
+            Theme::load("default", ColorSupport::detect())
         }
     };
-    let mut app = App::new(source, config, theme, conn)?;
-    match watch(&app.source.root) {
-        Ok(w) => app.watch = Some(w),
-        Err(e) => tracing::warn!("not watching files: {e:#}"),
-    }
     // Raw mode and the alternate screen; the terminal is restored on a panic too.
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange)?;
     if config.editor.mouse {
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     }
-    let result = app.event_loop(&mut terminal, config.editor.mouse);
+    let result = (|| -> Result<()> {
+        let mut conn = conn;
+        let mut next = Some(start);
+        // One review at a time; the dashboard switches to another.
+        while let Some(start) = next.take() {
+            let source = match start {
+                Start::Review(s) => *s,
+                Start::Dashboard => match dashboard::run(&mut terminal, &conn, &theme()?)? {
+                    Some(s) => s,
+                    None => break,
+                },
+            };
+            let mut app = App::new(source, config, theme()?, conn)?;
+            match watch(&app.source.root) {
+                Ok(w) => app.watch = Some(w),
+                Err(e) => tracing::warn!("not watching files: {e:#}"),
+            }
+            if let Err(e) = review::set_viewer(&app.conn, Some(&app.review.id)) {
+                tracing::warn!("not registered as a viewer: {e:#}");
+            }
+            let result = app.event_loop(&mut terminal, config.editor.mouse);
+            let _ = review::set_viewer(&app.conn, None);
+            result?;
+            next = app.switch.take().map(|s| Start::Review(Box::new(s)));
+            conn = app.conn;
+        }
+        Ok(())
+    })();
     if config.editor.mouse {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     }
@@ -485,6 +523,7 @@ impl App {
             tree: None,
             tree_area: Rect::default(),
             palette: None,
+            switch: None,
         };
         app.load(0);
         app.reload();
@@ -557,6 +596,12 @@ impl App {
             ));
         } else if unread(self) > unread_before {
             self.status = Some(("New reply from the agent · ]u goes to it".into(), false));
+        }
+        if let Some(p) = self.picker.as_mut().filter(|p| dashboard::is_dashboard(p)) {
+            match dashboard::items(&self.conn, &self.theme) {
+                Ok(items) => p.set_items(items),
+                Err(e) => self.status = Some((format!("{e:#}"), true)),
+            }
         }
     }
 
@@ -1045,7 +1090,7 @@ impl App {
         match self.picker.as_ref().and_then(|p| p.selected().cloned()) {
             Some(Target::Change(i)) => self.load(i),
             Some(Target::Path(p)) => self.load_context(&p),
-            Some(Target::Command(_) | Target::Nothing) => {}
+            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) => {}
             Some(Target::Thread(id)) => {
                 if let Some((path, _)) = self.thread_place(&id) {
                     match self.source.changes.iter().position(|c| c.path == path) {
@@ -1383,6 +1428,18 @@ impl App {
         match target {
             // Commands run through `choose`; there's nothing to open.
             Target::Command(_) | Target::Nothing => return,
+            Target::Review(id) => {
+                if id != self.review.id {
+                    match dashboard::source_of(&self.conn, &id) {
+                        Ok(s) => {
+                            self.switch = Some(s);
+                            self.quit = true;
+                        }
+                        Err(e) => self.status = Some((format!("{e:#}"), true)),
+                    }
+                }
+                return;
+            }
             Target::Change(i) => {
                 let _ = self.push_jump();
                 self.load(i);
@@ -1937,18 +1994,7 @@ impl App {
                 .collect()
         };
         if self.picker.is_some() {
-            return (
-                "Picker",
-                fixed(&[
-                    ("type", "Filter the list"),
-                    ("up, down, C-p, C-n, S-tab, tab", "Move"),
-                    ("pageup, pagedown, C-u, C-d", "Move a page"),
-                    ("home, end", "First, last"),
-                    ("ret", "Open the selected item"),
-                    ("esc, C-c", "Close"),
-                    ("C-g", "These keys"),
-                ]),
-            );
+            return ("Picker", fixed(picker::KEYS));
         }
         if let Some(p) = &self.prompt {
             let mut rows = vec![
@@ -2258,6 +2304,10 @@ impl App {
             }
             A::Submit(v) => self.submit(v),
             A::ThreadPicker { all } => self.picker = Some(self.thread_picker(all)),
+            A::Dashboard => match dashboard::picker(&self.conn, &self.theme) {
+                Ok(p) => self.picker = Some(p),
+                Err(e) => self.status = Some((format!("{e:#}"), true)),
+            },
             A::NextThread(forward) => self.goto_thread(forward, false),
             A::EdgeThread(last) => self.goto_thread(last, true),
             A::NextUnread(forward) => self.goto_unread(forward),
@@ -2735,6 +2785,11 @@ impl App {
             }
             "q" | "quit" | "q!" | "quit!" | "qa" | "qa!" => self.quit = true,
             "comment" => _ = self.app_command(AppAction::Comment),
+            "dashboard" => _ = self.app_command(AppAction::Dashboard),
+            "close" => match review::close(&self.conn, &self.review.id) {
+                Ok(()) => self.quit = true,
+                Err(e) => self.status = Some((format!("{e:#}"), true)),
+            },
             "review-comment" => _ = self.app_command(AppAction::ReviewComment),
             "reply" => _ = self.app_command(AppAction::Reply),
             "edit-comment" => _ = self.app_command(AppAction::EditComment),
@@ -3083,7 +3138,7 @@ impl App {
                 Some((p, line)) => (at_path(&p), Some(line)),
                 None => (None, None),
             },
-            Some(Target::Command(_) | Target::Nothing) | None => (None, None),
+            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) | None => (None, None),
         };
         if let Some(file) = file {
             // Centre the thread, or the first change, as Helix centres a preview on its range.

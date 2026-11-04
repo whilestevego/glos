@@ -115,7 +115,7 @@ impl Review {
             "INSERT INTO reviews (id, source_kind, source_key, folder, old_path, new_path, git_dir,
                                   branch, base, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
-             ON CONFLICT(source_key) DO UPDATE SET base = excluded.base",
+             ON CONFLICT(source_key) DO UPDATE SET base = excluded.base, status = 'open'",
             params![
                 new_id(),
                 kind,
@@ -176,15 +176,30 @@ impl Review {
     }
 
     /// The review's changes as they are now, found the way `glos` or `glos diff` finds them.
+    /// A git review needs its worktree still on its branch.
     pub fn source(&self) -> Result<Source> {
         match (self.kind.as_str(), &self.old_path, &self.new_path) {
-            ("git", _, _) => Source::git(Path::new(&self.folder), self.base.as_deref()),
+            ("git", _, _) => {
+                let s = Source::git(Path::new(&self.folder), self.base.as_deref())?;
+                let on = s.git.as_ref().and_then(|g| g.branch.clone());
+                let on = on.unwrap_or_else(|| "(detached)".into());
+                if Some(&on) != self.branch.as_ref() {
+                    bail!(
+                        "review {} is of branch {}, but {} is on {on} now",
+                        self.id,
+                        self.branch.as_deref().unwrap_or("?"),
+                        self.folder
+                    );
+                }
+                Ok(s)
+            }
             (_, Some(old), Some(new)) => Source::diff(Path::new(old), Path::new(new)),
             _ => bail!("review {} has no paths", self.id),
         }
     }
 
-    /// One line saying what's reviewed: `branch topic (vs main) in /repo`, or `old → new`.
+    /// One line saying what's reviewed: `branch topic (vs main) in /repo`, `old → new`, or
+    /// `a.rs → b.rs in /dir` for two files side by side.
     pub fn describe(&self) -> String {
         match (&self.branch, &self.old_path, &self.new_path) {
             (Some(b), _, _) => format!(
@@ -192,7 +207,18 @@ impl Review {
                 self.base.as_deref().unwrap_or("?"),
                 self.folder
             ),
-            (_, Some(o), Some(n)) => format!("{o} → {n}"),
+            (_, Some(o), Some(n)) => {
+                let (op, np) = (Path::new(o), Path::new(n));
+                match (op.parent(), op.file_name(), np.file_name()) {
+                    (Some(dir), Some(a), Some(b)) if np.parent() == Some(dir) => format!(
+                        "{} → {} in {}",
+                        a.to_string_lossy(),
+                        b.to_string_lossy(),
+                        dir.display()
+                    ),
+                    _ => format!("{o} → {n}"),
+                }
+            }
             _ => self.folder.clone(),
         }
     }
@@ -225,6 +251,138 @@ impl Review {
         )?;
         Ok(())
     }
+}
+
+/// `:close` and `glos close`: you're done with the review. Unsent comments must go first.
+/// Running glos on its source again opens it again.
+pub fn close(conn: &Connection, review_id: &str) -> Result<()> {
+    let n = unsent(conn, review_id)?;
+    if n > 0 {
+        bail!(
+            "{n} comment{} not sent to the agent: submit or delete {} first",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "it" } else { "them" }
+        );
+    }
+    set_review_status(conn, review_id, "closed")
+}
+
+fn set_review_status(conn: &Connection, review_id: &str, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE reviews SET status = ?2, updated_at = ?3 WHERE id = ?1",
+        params![review_id, status, now()],
+    )?;
+    Ok(())
+}
+
+/// Archives the reviews that are over on their own: their folder is gone, their branch was
+/// deleted, or it was merged into its base after you reviewed it, leaving nothing to review.
+/// Returns the reviews archived.
+pub fn archive_finished(conn: &Connection) -> Result<Vec<Review>> {
+    let mut done = vec![];
+    for r in Review::list(conn, true)? {
+        if r.status == "archived" {
+            continue;
+        }
+        let over = !Path::new(&r.folder).exists()
+            || (r.kind == "git" && branch_over(conn, &r).unwrap_or(false));
+        if over {
+            set_review_status(conn, &r.id, "archived")?;
+            done.push(r);
+        }
+    }
+    Ok(done)
+}
+
+fn branch_over(conn: &Connection, r: &Review) -> Result<bool> {
+    let (Some(branch), Some(base)) = (&r.branch, &r.base) else {
+        return Ok(false);
+    };
+    if branch == "(detached)" {
+        return Ok(false);
+    }
+    let repo = gix::open(&r.folder)?;
+    let Some(mut tip) = repo.try_find_reference(&format!("refs/heads/{branch}"))? else {
+        return Ok(true); // deleted
+    };
+    let tip = tip.peel_to_id()?.detach();
+    let base_id = repo.rev_parse_single(base.as_str())?.detach();
+    // Merged: the tip is in the base. A branch with no commits of its own is too, so it also
+    // takes a round of review and nothing left to review.
+    let merged = repo
+        .merge_base(tip, base_id)
+        .ok()
+        .flatten()
+        .map(|m| m.detach())
+        == Some(tip);
+    if !merged || rounds(conn, &r.id)?.is_empty() {
+        return Ok(false);
+    }
+    let s = Source::git(Path::new(&r.folder), Some(base))?;
+    let on = s.git.as_ref().and_then(|g| g.branch.as_deref());
+    Ok(on != Some(branch.as_str()) || s.changes.is_empty())
+}
+
+/// `glos gc`: deletes archived reviews untouched for `older_than`, then file content nothing
+/// refers to any more. Returns how many reviews and contents were deleted.
+pub fn gc(conn: &Connection, older_than: jiff::SignedDuration) -> Result<(usize, usize)> {
+    let cutoff = jiff::Timestamp::now() - older_than;
+    let mut reviews = 0;
+    for r in Review::list(conn, true)? {
+        let old = r
+            .updated_at
+            .parse::<jiff::Timestamp>()
+            .is_ok_and(|t| t < cutoff);
+        if r.status == "archived" && old {
+            reviews += conn.execute("DELETE FROM reviews WHERE id = ?1", [&r.id])?;
+        }
+    }
+    let blobs = conn.execute(
+        "DELETE FROM blobs WHERE hash NOT IN (SELECT hash FROM snapshot_files)
+           AND hash NOT IN (SELECT file_hash FROM threads WHERE file_hash IS NOT NULL)",
+        [],
+    )?;
+    conn.execute_batch("VACUUM")?;
+    Ok((reviews, blobs))
+}
+
+/// Whether process `pid` is still running.
+pub fn alive(pid: i64) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Records that this process shows `review_id` (or, with `None`, shows nothing any more), so
+/// an agent's `request_review` knows glos is already open.
+pub fn set_viewer(conn: &Connection, review_id: Option<&str>) -> Result<()> {
+    let pid = std::process::id();
+    match review_id {
+        Some(id) => conn.execute(
+            "INSERT INTO viewers (pid, review_id, started_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(pid) DO UPDATE SET review_id = ?2, started_at = ?3",
+            params![pid, id, now()],
+        )?,
+        None => conn.execute("DELETE FROM viewers WHERE pid = ?1", [pid])?,
+    };
+    Ok(())
+}
+
+/// Whether a running glos shows `review_id`; forgets the ones whose process is gone.
+pub fn viewing(conn: &Connection, review_id: &str) -> Result<bool> {
+    let pids: Vec<i64> = conn
+        .prepare("SELECT pid FROM viewers WHERE review_id = ?1")?
+        .query_map([review_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut any = false;
+    for pid in pids {
+        if alive(pid) {
+            any = true;
+        } else {
+            conn.execute("DELETE FROM viewers WHERE pid = ?1", [pid])?;
+        }
+    }
+    Ok(any)
 }
 
 /// The diff a thread was made on: the commits on each side (`None` for the files on disk, or a
@@ -1023,6 +1181,205 @@ mod tests {
     }
 
     const FILE: &str = "a\nb\nc\nd\ne\nf\ng\nh\n";
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A repo on branch `topic` with one commit of its own, and its review.
+    fn topic_repo() -> (tempfile::TempDir, Connection, Review) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a.txt"), "1\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "one"]);
+        git(&repo, &["checkout", "-qb", "topic"]);
+        std::fs::write(repo.join("a.txt"), "2\n").unwrap();
+        git(&repo, &["commit", "-qam", "two"]);
+        let conn = store::open(&dir.path().join("glos.db")).unwrap();
+        let r = Review::open(&conn, &Source::git(&repo, None).unwrap()).unwrap();
+        (dir, conn, r)
+    }
+
+    fn status(conn: &Connection, r: &Review) -> String {
+        r.reload(conn).unwrap().status
+    }
+
+    #[test]
+    fn closing_needs_everything_sent_and_opening_again_reopens() {
+        let f = fx();
+        review_comment(&f, "unsent");
+        let err = close(&f.conn, &f.review.id).unwrap_err().to_string();
+        assert!(err.contains("1 comment not sent"), "{err}");
+        submit(&f.conn, &f.review.id, Verdict::Comment, &[], None).unwrap();
+        close(&f.conn, &f.review.id).unwrap();
+        assert_eq!(status(&f.conn, &f.review), "closed");
+        assert!(Review::list(&f.conn, false).unwrap().is_empty());
+        assert_eq!(Review::list(&f.conn, true).unwrap().len(), 1);
+        assert!(Review::for_folder(&f.conn, f.dir.path()).unwrap().is_none());
+        // Reviewing the same files again opens the same review.
+        let again = Review::open(&f.conn, &f.review.source().unwrap()).unwrap();
+        assert_eq!(
+            (again.id.as_str(), again.status.as_str()),
+            (f.review.id.as_str(), "open")
+        );
+    }
+
+    fn review_comment(f: &Fx, body: &str) {
+        comment(&f.conn, &f.review.id, None, YOU, body).unwrap();
+    }
+
+    #[test]
+    fn reviews_whose_folder_is_gone_are_archived() {
+        let f = fx();
+        let (_o, n) = (f.dir.path().join("x"), f.dir.path().join("x/new"));
+        std::fs::create_dir_all(&n).unwrap();
+        std::fs::create_dir_all(f.dir.path().join("x/old")).unwrap();
+        std::fs::write(n.join("a"), "1\n").unwrap();
+        let gone = Review::open(
+            &f.conn,
+            &Source::diff(&f.dir.path().join("x/old"), &n).unwrap(),
+        )
+        .unwrap();
+        assert!(archive_finished(&f.conn).unwrap().is_empty());
+        std::fs::remove_dir_all(f.dir.path().join("x")).unwrap();
+        let done = archive_finished(&f.conn).unwrap();
+        assert_eq!(done.iter().map(|r| &r.id).collect::<Vec<_>>(), [&gone.id]);
+        assert_eq!(status(&f.conn, &gone), "archived");
+        assert_eq!(status(&f.conn, &f.review), "open");
+        assert!(archive_finished(&f.conn).unwrap().is_empty(), "once");
+    }
+
+    #[test]
+    fn a_deleted_branch_archives_its_review() {
+        let (dir, conn, r) = topic_repo();
+        let repo = dir.path().join("repo");
+        assert!(archive_finished(&conn).unwrap().is_empty());
+        git(&repo, &["checkout", "-q", "main"]);
+        assert!(
+            archive_finished(&conn).unwrap().is_empty(),
+            "not merged: still to review"
+        );
+        git(&repo, &["branch", "-qD", "topic"]);
+        assert_eq!(archive_finished(&conn).unwrap().len(), 1);
+        assert_eq!(status(&conn, &r), "archived");
+    }
+
+    #[test]
+    fn a_merged_branch_archives_its_review_once_reviewed() {
+        let (dir, conn, r) = topic_repo();
+        let repo = dir.path().join("repo");
+        git(&repo, &["checkout", "-q", "main"]);
+        git(&repo, &["merge", "-q", "--ff-only", "topic"]);
+        // Merged, but never reviewed: kept, as a fresh branch with no commits looks the same.
+        assert!(archive_finished(&conn).unwrap().is_empty());
+        submit(&conn, &r.id, Verdict::Approved, &[], None).unwrap();
+        assert_eq!(archive_finished(&conn).unwrap().len(), 1);
+        assert_eq!(status(&conn, &r), "archived");
+    }
+
+    #[test]
+    fn a_fresh_branch_with_work_on_disk_stays_open() {
+        let (dir, conn, r) = topic_repo();
+        let repo = dir.path().join("repo");
+        // A new branch at main, after a round: its tip is in main, but there's work to review.
+        git(&repo, &["checkout", "-q", "main"]);
+        git(&repo, &["checkout", "-qb", "fresh"]);
+        std::fs::write(repo.join("b.txt"), "new\n").unwrap();
+        let fresh = Review::open(&conn, &Source::git(&repo, None).unwrap()).unwrap();
+        submit(&conn, &fresh.id, Verdict::Approved, &[], None).unwrap();
+        assert!(archive_finished(&conn).unwrap().is_empty());
+        assert_eq!(status(&conn, &fresh), "open");
+        assert_eq!(status(&conn, &r), "open");
+    }
+
+    #[test]
+    fn a_git_review_opens_only_on_its_branch() {
+        let (dir, _conn, r) = topic_repo();
+        assert!(r.source().is_ok());
+        git(&dir.path().join("repo"), &["checkout", "-q", "main"]);
+        let err = r.source().err().unwrap().to_string();
+        assert!(
+            err.contains("is of branch topic") && err.contains("on main"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn gc_deletes_old_archived_reviews_and_unused_content() {
+        let f = fx();
+        let blobs = |c: &Connection| -> i64 {
+            c.query_row("SELECT count(*) FROM blobs", [], |r| r.get(0))
+                .unwrap()
+        };
+        comment(
+            &f.conn,
+            &f.review.id,
+            Some((&at("new.rs", 2, 2), FILE)),
+            YOU,
+            "x",
+        )
+        .unwrap();
+        submit(
+            &f.conn,
+            &f.review.id,
+            Verdict::Comment,
+            &[("new.rs".into(), b"snap".to_vec())],
+            None,
+        )
+        .unwrap();
+        assert_eq!(blobs(&f.conn), 2, "the anchor's file and the snapshot");
+        let day = jiff::SignedDuration::from_hours(24);
+        // Open: kept, whatever its age.
+        assert_eq!(gc(&f.conn, jiff::SignedDuration::ZERO).unwrap(), (0, 0));
+        set_review_status(&f.conn, &f.review.id, "archived").unwrap();
+        assert_eq!(gc(&f.conn, day).unwrap(), (0, 0), "archived just now");
+        // An unused content goes even when no review does.
+        put_blob(&f.conn, b"orphan").unwrap();
+        assert_eq!(gc(&f.conn, day).unwrap(), (0, 1));
+        assert_eq!(gc(&f.conn, jiff::SignedDuration::ZERO).unwrap(), (1, 2));
+        assert_eq!(blobs(&f.conn), 0);
+        let left: i64 = f
+            .conn
+            .query_row("SELECT count(*) FROM threads", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "its threads went with it");
+    }
+
+    #[test]
+    fn viewers_are_forgotten_when_their_process_is_gone() {
+        let f = fx();
+        assert!(!viewing(&f.conn, &f.review.id).unwrap());
+        set_viewer(&f.conn, Some(&f.review.id)).unwrap();
+        assert!(viewing(&f.conn, &f.review.id).unwrap());
+        f.conn
+            .execute(
+                "UPDATE viewers SET pid = 999999999 WHERE pid = ?1",
+                [std::process::id()],
+            )
+            .unwrap();
+        assert!(!viewing(&f.conn, &f.review.id).unwrap());
+        let n: i64 = f
+            .conn
+            .query_row("SELECT count(*) FROM viewers", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
 
     #[test]
     fn a_source_has_one_review() {

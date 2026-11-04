@@ -33,7 +33,7 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
 ## The experience
 
 1. An agent finishes a task and calls `request_review`. If glos is open, the request appears
-   there. If not, glos runs your `open_command` (a tmux or kitty split, for example) when you've
+   there. If not, glos runs your `open-command` (a tmux or kitty split, for example) when you've
    set one; otherwise the agent asks you to run `glos`. In a git repo, glos shows the branch since
    it left `main`, uncommitted and untracked files included. You can also run `glos` yourself in
    any repo, or `glos diff old new` on any two files or folders.
@@ -371,7 +371,7 @@ not.
 | `reply` | Reply on a thread |
 | `resolve` | Resolve a thread with a note; `reopen` reverses it |
 | `annotate` | Leave an agent note on a line or range before you review |
-| `request_review` | Say the work is ready, optionally scoped to the files it touched. An open glos shows the request; otherwise glos runs `open_command` if set, and the answer tells the agent to ask you to run `glos` if nothing opened |
+| `request_review` | Say the work is ready, optionally scoped to the files it touched. An open glos shows the request; otherwise glos runs `open-command` if set, and the answer tells the agent to ask you to run `glos` if nothing opened |
 | `suggest` | Suggest a file and line for you to look at. It shows as a notice in your open view, and `space n` jumps there; your view never moves on its own |
 | `wait_for_review` | How a submitted review reaches the agent: waits a few minutes for you to submit, then answers with the review, or "still waiting" so the agent calls again, staying under the host's tool timeout |
 
@@ -420,7 +420,9 @@ subcommand is never ambiguous:
 | `glos mcp` | Run the MCP server over stdio |
 | `glos gc` | Delete old archived reviews and unused snapshot content |
 | `glos doctor` | Like `hx --health`: database, config, theme, languages, terminal colour support, MCP setup |
-| `glos completions <shell>` | Shell completions (`clap_complete`); a man page is generated at build time (`clap_mangen`) |
+| `glos close [<review>]` | Close a review you're done with |
+| `glos --review <id>` | Open a review by its id, wherever it is |
+| `glos completions <shell>` | Shell completions (`clap_complete`); `glos man` prints the man page (`clap_mangen`) |
 
 - **Output:** readable text by default; `--json` for scripts and agents, as `gh` does. Every JSON
   document carries a `"version"` field, and its shape only changes with that version.
@@ -444,11 +446,12 @@ glos works in any terminal and never depends on one.
 
 - **Standalone:** `glos` in a repo finds the branch, its base and any existing review;
   `glos diff old new` reviews two files or folders.
-- **Opening itself (optional):** `open_command` in `config.toml` is a shell command glos runs to
-  open itself in a new pane, for example `tmux split-window -h glos`,
-  `kitten @ launch --location=vsplit glos` (kitty) or `wezterm cli split-pane -- glos`; Ghostty
-  through your own script. Without it, glos never tries to open a window.
-- **When the agent asks:** `request_review` shows in an open glos, runs `open_command`, or has the
+- **Opening itself (optional):** `open-command` in `config.toml` is the start of a shell command
+  that runs the rest in a new pane, for example `tmux split-window -h`,
+  `kitten @ launch --location=vsplit` (kitty) or `wezterm cli split-pane --`; Ghostty through
+  your own script. glos adds its own command line (`glos --db … --review <id>`). Without it,
+  glos never tries to open a window.
+- **When the agent asks:** `request_review` shows in an open glos, runs `open-command`, or has the
   agent ask you to run `glos`, in that order.
 - **`glos open`:** follows the same rule from a shell, so scripts and plugins can launch glos.
 
@@ -554,6 +557,12 @@ the dashboard.
   open-thread counts. Removed lines shown inline in the file view are left for later.
 - **M5, dashboard and launching.** Multi-review dashboard; closing and archiving reviews, `glos gc`;
   `open_command` and `glos open`; shell completions and the man page.
+  *Status (2026-11-04):* built: the dashboard (`space l`, `:dashboard`, `glos dashboard`) as a
+  picker of open reviews with the agent's state and counts, refreshing on its own, `ret` switching
+  to a review; `:close` and `glos close`; reviews archived when their folder or branch is gone or
+  the branch was merged; `glos gc [--days N]`; `open-command` (a prefix glos adds itself to),
+  `glos open` and `glos --review <id>`, used by `request_review` unless a glos already shows the
+  review; `glos completions <shell>` and `glos man`.
 - **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish;
   channel push once Claude Code channels are no longer experimental.
 

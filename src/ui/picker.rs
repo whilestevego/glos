@@ -31,8 +31,37 @@ pub enum Target {
     Thread(String),
     /// A command, by its name: the palette runs it.
     Command(&'static str),
+    /// A review, by its id: the dashboard opens it.
+    Review(String),
     /// Nothing to open: a key the palette only lists.
     Nothing,
+}
+
+/// The picker's keys, as `C-g` lists them.
+pub const KEYS: &[(&str, &str)] = &[
+    ("type", "Filter the list"),
+    ("up, down, C-p, C-n, S-tab, tab", "Move"),
+    ("pageup, pagedown, C-u, C-d", "Move a page"),
+    ("home, end", "First, last"),
+    ("ret", "Open the selected item"),
+    ("esc, C-c", "Close"),
+    ("C-g", "These keys"),
+];
+
+/// `C-g` over a picker: its keys, in a picker.
+pub fn keys_palette(theme: &Theme) -> Picker {
+    let style = theme.get("ui.text.focus");
+    let items = KEYS
+        .iter()
+        .map(|(k, d)| Item {
+            tags: vec![(k.to_string(), style)],
+            text: d.to_string(),
+            target: Target::Nothing,
+        })
+        .collect();
+    let mut p = Picker::new(vec!["keys", "Picker"], items);
+    p.preview = false;
+    p
 }
 
 pub struct Item {
@@ -103,6 +132,12 @@ impl Picker {
             self.matched = scored.into_iter().map(|(i, _)| i).collect();
         }
         self.cursor = self.cursor.min(self.matched.len().saturating_sub(1));
+    }
+
+    /// New items, as when what they list changed; the query stays and the cursor stays put.
+    pub fn set_items(&mut self, items: Vec<Item>) {
+        self.items = items;
+        self.refilter();
     }
 
     pub fn selected(&self) -> Option<&Target> {

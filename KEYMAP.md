@@ -342,6 +342,7 @@ Summary: 147 not applicable, 142 done, 28 to do, 4 replaced.
 | `space m` | `edit_comment` |
 | `space x` | `toggle_resolved` |
 | `space n` | `goto_suggestion` |
+| `space l` | `dashboard` |
 | `space v f` | `view_file` |
 | `space v u` | `view_unified` |
 | `space v s` | `view_split` |
@@ -359,7 +360,6 @@ Planned, on keys Helix leaves free:
 |---|---|
 | `space v` | switch view (M4) |
 | `space o` | switch scope (M4) |
-| `space l` | dashboard (M5) |
 | `]d` | next thread (M2) |
 | `[d` | previous thread (M2) |
 | `]D` | last thread (M2) |

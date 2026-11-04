@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+clap_complete = "4.6.11"
+clap_mangen = "0.3.3"
 crossterm = "0.29.0"
 etcetera = "0.10"
 gix = "0.90.0"
