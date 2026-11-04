@@ -5,8 +5,8 @@ use std::fmt;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::commands::{self as c, Ctx};
 use crate::review::Verdict;
+use glos_helix::commands::{self as c, Ctx};
 
 /// What a command does when it runs.
 #[derive(Clone, Copy)]
@@ -44,7 +44,7 @@ pub enum AppAction {
         main_only: bool,
     },
     /// `s`, `S`, `K`, `A-K`: a regex prompt that acts on the selections.
-    RegexPrompt(super::commands::RegexAction),
+    RegexPrompt(glos_helix::commands::RegexAction),
     JumpForward,
     JumpBackward,
     SaveSelection,

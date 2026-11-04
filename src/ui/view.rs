@@ -3,24 +3,22 @@
 
 use std::borrow::Cow;
 
-use helix_core::{
-    Rope, RopeSlice, Selection,
-    doc_formatter::{DocumentFormatter, TextFormat},
-    graphemes::Grapheme,
-    text_annotations::TextAnnotations,
+use glos_helix::{
+    commands::SCROLLOFF,
+    layout::{DocumentFormatter, TextAnnotations, TextFormat},
+    syntax::{Loader, Syntax},
+    text::{Grapheme, Rope, RopeSlice, RopeSliceExt, Selection},
 };
-use helix_stdx::rope::RopeSliceExt;
 use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
     diff::{self, Hunk},
     source::{self, Change, Content, Kind, Mode as FileMode, Source},
-    syntax::Loader,
     theme::Theme,
 };
 
-use super::{commands::SCROLLOFF, comments::Threads};
+use super::comments::Threads;
 
 /// A file loaded for viewing: a changed file of the review, or any file opened for context.
 pub struct File {
@@ -29,7 +27,7 @@ pub struct File {
     pub sel: Selection,
     pub top: usize,
     pub left: usize,
-    pub syntax: Option<tree_house::Syntax>,
+    pub syntax: Option<Syntax>,
     pub tab_width: usize,
     /// One-line headers above the text: the kind of change, binary, collapsed…
     pub notices: Vec<String>,
@@ -325,11 +323,11 @@ pub fn keep_view(old: File, mut new: File) -> File {
         new.sel = old.sel;
         new.top = old.top;
     } else {
-        let tx = helix_core::diff::compare_ropes(&old.text, &new.text);
+        let tx = glos_helix::text::compare_ropes(&old.text, &new.text);
         let changes = tx.changes();
         new.sel = old.sel.map(changes).ensure_invariants(new.text.slice(..));
         let top = old.text.line_to_char(old.top.min(old.text.len_lines() - 1));
-        let top = changes.map_pos(top, helix_core::Assoc::Before);
+        let top = changes.map_pos(top, glos_helix::text::Assoc::Before);
         new.top = new.text.char_to_line(top.min(new.text.len_chars()));
     }
     new.left = old.left;
@@ -403,7 +401,7 @@ pub fn draw(
                 s,
                 text,
                 text.line_to_byte(top)..text.line_to_byte(last),
-                theme,
+                |st: Style, i| st.patch(theme.highlight(i)),
             );
             &computed
         }
@@ -670,7 +668,7 @@ mod tests {
         std::fs::write(&new, text).unwrap();
         let source = Source::diff(&old, &new).unwrap();
         let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        let loader = Loader::new(&theme).unwrap();
+        let loader = Loader::new(theme.scopes()).unwrap();
         let mut file = File::change(&source.changes[0], &source, &loader);
         file.notices.clear();
         let area = Rect::new(0, 0, w, h);
@@ -744,7 +742,7 @@ mod tests {
         std::fs::write(&new, "x\n").unwrap();
         let source = Source::diff(&old, &new).unwrap();
         let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        let loader = Loader::new(&theme).unwrap();
+        let loader = Loader::new(theme.scopes()).unwrap();
         let mut file = File::change(&source.changes[0], &source, &loader);
         // Two files given directly aren't "generated", so collapse by hand.
         file.collapsed = true;
@@ -783,7 +781,7 @@ mod cursor_tests {
     /// Where the primary cursor is drawn: (column, row) of every cell with its colour.
     fn cursor_cells(text: &str, pos: usize) -> Vec<(u16, u16)> {
         let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        let loader = Loader::new(&theme).unwrap();
+        let loader = Loader::new(theme.scopes()).unwrap();
         let mut file = File::scratch(text, &loader);
         file.sel = Selection::point(pos);
         let area = Rect::new(0, 0, 10, 4);

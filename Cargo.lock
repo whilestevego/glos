@@ -1988,7 +1988,6 @@ name = "glos"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cc",
  "clap",
  "clap_complete",
  "clap_mangen",
@@ -1996,8 +1995,7 @@ dependencies = [
  "etcetera",
  "gix",
  "globset",
- "helix-core",
- "helix-stdx",
+ "glos-helix",
  "ignore",
  "imara-diff",
  "insta",
@@ -2009,7 +2007,6 @@ dependencies = [
  "ratatui",
  "regex",
  "rmcp",
- "ropey",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2018,11 +2015,25 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unicode-width 0.2.3",
+ "uuid",
+]
+
+[[package]]
+name = "glos-helix"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "globset",
+ "helix-core",
+ "helix-stdx",
+ "imara-diff",
+ "regex",
+ "toml",
  "tree-house",
  "tree-house-bindings",
  "tree-sitter-language",
- "unicode-width 0.2.3",
- "uuid",
 ]
 
 [[package]]

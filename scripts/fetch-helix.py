@@ -16,7 +16,7 @@ LANGS = sys.argv[1:] or [
 ]
 QUERY_FILES = ["highlights.scm", "injections.scm", "locals.scm"]
 
-root = Path(__file__).resolve().parent.parent
+root = Path(__file__).resolve().parent.parent / "crates" / "glos-helix"
 out_helix, out_vendor = root / "helix", root / "vendor" / "grammars"
 
 

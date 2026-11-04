@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use helix_core::test::plain;
+use glos_helix::test::plain;
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 use tempfile::TempDir;
 

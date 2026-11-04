@@ -1,7 +1,6 @@
 //! The reader: the full-file view, the statusline, the command line, the key help panel and the
 //! pickers.
 
-mod commands;
 mod comments;
 mod dashboard;
 mod diffview;
@@ -20,9 +19,11 @@ use anyhow::{Context as _, Result};
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use helix_core::{
-    Selection, char_idx_at_visual_offset, text_annotations::TextAnnotations,
-    visual_offset_from_anchor,
+use glos_helix::{
+    commands::{self, Ctx},
+    layout::{TextAnnotations, char_idx_at_visual_offset, visual_offset_from_anchor},
+    syntax::Loader,
+    text::Selection,
 };
 use ratatui::{
     DefaultTerminal, Frame,
@@ -39,10 +40,8 @@ use crate::{
     config::Config,
     review::{self, Anchor, Review, Thread, Verdict, YOU},
     source::{Content, Kind, Source},
-    syntax::Loader,
     theme::{ColorSupport, Theme},
 };
-use commands::Ctx;
 use comments::{CommentBox, Place, ThreadLines, Threads};
 use keymap::{Action, AppAction, Key, Keymaps, Node};
 use picker::{Item, Outcome, Picker, Target};
@@ -469,7 +468,7 @@ pub fn run(start: Start, config: &Config, conn: Connection) -> Result<()> {
 
 impl App {
     fn new(source: Source, config: &Config, theme: Theme, conn: Connection) -> Result<App> {
-        let loader = Loader::new(&theme)?;
+        let loader = Loader::new(theme.scopes())?;
         let review = Review::open(&conn, &source)?;
         let mut app = App {
             files: (0..source.changes.len()).map(|_| None).collect(),
@@ -1226,7 +1225,7 @@ impl App {
         let col = cursor - t.line_to_char(line);
         let dt = doc.text.slice(..);
         let at = doc.line_of(line).min(dt.len_lines() - 1);
-        let len = helix_core::line_ending::line_end_char_index(&dt, at) - dt.line_to_char(at);
+        let len = glos_helix::text::line_end_char_index(&dt, at) - dt.line_to_char(at);
         doc.sel = Selection::point(dt.line_to_char(at) + col.min(len)).ensure_invariants(dt);
         self.alt = Some(Alt {
             cur: self.cur.clone(),
@@ -2885,6 +2884,7 @@ impl App {
             status: None,
             center: false,
             keep_top: false,
+            visual_col: view::visual_col,
         };
         f(&mut cx);
         let (sel, top, left, status, center, keep_top) = (

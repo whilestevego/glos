@@ -328,7 +328,9 @@ not.
   pinned Helix release its `languages.toml` (which maps files to languages and pins each grammar's
   source and revision), the highlight queries and the themes. It fetches each grammar's source at
   the revision Helix pins and vendors it in the repo (committed: about 5 MB of git history per
-  Helix upgrade, and builds never fetch). `build.rs` compiles the grammars with `cc` and links them
+  Helix upgrade, and builds never fetch). All of it lives in the `crates/glos-helix` crate
+  (MPL-2.0), the only part of glos that depends on Helix's crates; glos imports what it needs
+  from there. Its `build.rs` compiles the grammars with `cc` and links them
   statically into `tree-house`, Helix's highlighter; the queries, themes and `languages.toml` are
   embedded with `include_str!`. Each language's queries are compiled the first time it's needed,
   off the UI thread: compiling all of them takes about 260 ms, too slow for the first screen. Using Helix's

@@ -2,11 +2,13 @@
 //! sides, with a [`Row`] per line saying where it came from, so Helix's motions, search and
 //! selections work on it as on any file, and comments map back to the new side.
 
-use helix_core::Rope;
+use glos_helix::text::Rope;
 use ratatui::style::Style;
 
 use super::view::{File, Row};
-use crate::{diff::Hunk, syntax::Loader, theme::Theme};
+use glos_helix::syntax::Loader;
+
+use crate::{diff::Hunk, theme::Theme};
 
 /// Unchanged lines kept around each change in the unified view, as `diff -u` keeps them.
 const CONTEXT: usize = 3;
@@ -33,7 +35,9 @@ fn spans_of(f: &File, loader: &Loader, theme: &Theme) -> Vec<(usize, Style)> {
     match &f.syntax {
         Some(s) => {
             let text = f.text.slice(..);
-            loader.highlights(s, text, 0..text.len_bytes(), theme)
+            loader.highlights(s, text, 0..text.len_bytes(), |st: Style, i| {
+                st.patch(theme.highlight(i))
+            })
         }
         None => vec![],
     }
@@ -208,7 +212,7 @@ mod tests {
 
     fn files(old: &str, new: &str) -> (File, File, Vec<Hunk>, Loader, Theme) {
         let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        let loader = Loader::new(&theme).unwrap();
+        let loader = Loader::new(theme.scopes()).unwrap();
         let p = std::path::Path::new("x.rs");
         let (o, n) = (
             File::side(p, old.as_bytes(), &loader),

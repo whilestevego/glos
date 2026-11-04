@@ -1,5 +1,10 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy
+// of the MPL was not distributed with this file, You can obtain one at
+// https://mozilla.org/MPL/2.0/.
+
 //! Syntax highlighting: Helix's `languages.toml` and queries with grammars compiled into glos,
-//! through Helix's highlighter (`tree-house`).
+//! through Helix's highlighter (`tree-house`). Styles are the caller's: highlights are indices
+//! into the theme scopes given to [`Loader::new`].
 //!
 //! Language matching follows helix-core's `Loader` (globs, extensions, shebangs, injection
 //! regexes); grammars come from `embedded::GRAMMARS` instead of shared libraries on disk. Each
@@ -10,17 +15,17 @@ use std::{
 };
 
 use anyhow::Result;
+use helix_core::RopeSlice;
 use helix_core::syntax::config::{Configuration, FileType, LanguageConfiguration};
 use helix_stdx::rope::RopeSliceExt;
-use ratatui::style::Style;
-use ropey::RopeSlice;
 use tree_house::{
-    InjectionLanguageMarker, Language, LanguageConfig, LanguageLoader, Syntax,
+    InjectionLanguageMarker, LanguageConfig, LanguageLoader,
     highlighter::{Highlight, HighlightEvent, Highlighter},
     tree_sitter::Grammar,
 };
+pub use tree_house::{Language, Syntax};
 
-use crate::{embedded, theme::Theme};
+use crate::embedded;
 
 const PARSE_TIMEOUT: Duration = Duration::from_millis(500); // as Helix
 
@@ -41,7 +46,8 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn new(theme: &Theme) -> Result<Loader> {
+    /// `scopes` are the theme's, in the order [`Loader::highlights`] numbers them.
+    pub fn new(scopes: &[String]) -> Result<Loader> {
         let config: Configuration = toml::from_str(embedded::LANGUAGES_TOML)?;
         let mut loader = Loader {
             langs: vec![],
@@ -49,7 +55,7 @@ impl Loader {
             by_shebang: HashMap::new(),
             globs: globset::GlobSet::empty(),
             glob_langs: vec![],
-            scopes: theme.scopes().to_vec(),
+            scopes: scopes.to_vec(),
         };
         let mut globs = globset::GlobSetBuilder::new();
         for config in config.language {
@@ -159,17 +165,19 @@ impl Loader {
     }
 
     /// Syntax styles over `bytes`: each entry is a byte offset and the style from there on.
-    pub fn highlights(
+    /// A style starts as `S::default()`, and `patch` adds each active highlight (a scope index)
+    /// to it, outermost first.
+    pub fn highlights<S: Clone + Default>(
         &self,
         syntax: &Syntax,
         text: RopeSlice,
         bytes: Range<usize>,
-        theme: &Theme,
-    ) -> Vec<(usize, Style)> {
+        patch: impl Fn(S, usize) -> S,
+    ) -> Vec<(usize, S)> {
         let end = bytes.end as u32;
         let mut hl = Highlighter::new(syntax, text, self, bytes.start as u32..end);
-        let mut out = vec![(bytes.start, Style::default())];
-        let mut style = Style::default();
+        let mut out = vec![(bytes.start, S::default())];
+        let mut style = S::default();
         loop {
             let pos = hl.next_event_offset();
             if pos >= end {
@@ -177,12 +185,12 @@ impl Loader {
             }
             let (event, active) = hl.advance();
             let base = if event == HighlightEvent::Refresh {
-                Style::default()
+                S::default()
             } else {
                 style
             };
-            style = active.fold(base, |s, h: Highlight| s.patch(theme.highlight(h.idx())));
-            out.push((pos as usize, style));
+            style = active.fold(base, |s, h: Highlight| patch(s, h.idx()));
+            out.push((pos as usize, style.clone()));
         }
         out
     }
@@ -281,12 +289,48 @@ fn configure(config: &LanguageConfig, scopes: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::ColorSupport;
-    use ropey::Rope;
+    use helix_core::Rope;
+
+    /// Scopes as a theme lists them; a span's style here is its innermost scope.
+    const SCOPES: &[&str] = &[
+        "keyword",
+        "keyword.function",
+        "type",
+        "string",
+        "constant",
+        "constant.numeric",
+        "function",
+        "variable",
+        "comment",
+        "punctuation",
+        "operator",
+        "tag",
+        "attribute",
+        "property",
+        "label",
+        "markup",
+        "namespace",
+        "constructor",
+        "special",
+    ];
+
+    struct Theme;
+
+    impl Theme {
+        fn index(&self, scope: &str) -> Option<usize> {
+            SCOPES.iter().position(|s| *s == scope)
+        }
+    }
 
     fn loader() -> (Loader, Theme) {
-        let theme = Theme::load("catppuccin_mocha", ColorSupport::TrueColor).unwrap();
-        (Loader::new(&theme).unwrap(), theme)
+        let scopes: Vec<String> = SCOPES.iter().map(|s| s.to_string()).collect();
+        (Loader::new(&scopes).unwrap(), Theme)
+    }
+
+    type Style = Option<usize>;
+
+    fn innermost(_: Style, scope: usize) -> Style {
+        Some(scope)
     }
 
     #[test]
@@ -319,10 +363,10 @@ mod tests {
         let text = Rope::from("const x: number = 1;\n");
         let ts = l.language_for(Path::new("/a.ts"), text.slice(..)).unwrap();
         let syntax = l.parse(text.slice(..), ts).unwrap();
-        let spans = l.highlights(&syntax, text.slice(..), 0..text.len_bytes(), &theme);
-        let keyword = theme.get("keyword");
+        let spans = l.highlights(&syntax, text.slice(..), 0..text.len_bytes(), innermost);
+        let keyword = theme.index("keyword");
         assert!(
-            spans.iter().any(|(at, s)| *at == 0 && s.fg == keyword.fg),
+            spans.iter().any(|(at, s)| *at == 0 && *s == keyword),
             "{spans:?}"
         );
 
@@ -331,15 +375,15 @@ mod tests {
         let lang = l.language_for(Path::new("/a.md"), md.slice(..)).unwrap();
         let syntax = l.parse(md.slice(..), lang).unwrap();
         let fn_at = md.to_string().find("fn").unwrap();
-        let spans = l.highlights(&syntax, md.slice(..), 0..md.len_bytes(), &theme);
+        let spans = l.highlights(&syntax, md.slice(..), 0..md.len_bytes(), innermost);
         let at_fn = spans.iter().rev().find(|(at, _)| *at <= fn_at).unwrap().1;
-        assert_eq!(at_fn.fg, theme.get("keyword.function").fg.or(keyword.fg));
+        assert_eq!(at_fn, theme.index("keyword.function"));
     }
 
-    /// Every language in plans/PLAN.md's list is found by file name and highlights something.
+    /// Every language glos supports (`LANGS` in scripts/fetch-helix.py) is found by file name and highlights something.
     #[test]
     fn every_language_highlights() {
-        let (l, theme) = loader();
+        let (l, _) = loader();
         let samples = [
             ("a.rs", "rust", "fn main() { let x = 1; }\n"),
             ("a.ts", "typescript", "const x: number = 1;\n"),
@@ -368,9 +412,9 @@ mod tests {
             let syntax = l
                 .parse(rope.slice(..), found.unwrap())
                 .unwrap_or_else(|| panic!("{lang} parses"));
-            let spans = l.highlights(&syntax, rope.slice(..), 0..rope.len_bytes(), &theme);
+            let spans = l.highlights(&syntax, rope.slice(..), 0..rope.len_bytes(), innermost);
             assert!(
-                spans.iter().any(|(_, st)| st.fg.is_some()),
+                spans.iter().any(|(_, st)| st.is_some()),
                 "{lang} highlights nothing: {spans:?}"
             );
         }
@@ -401,12 +445,12 @@ mod tests {
 
     #[test]
     fn highlights_only_the_range_asked_for() {
-        let (l, theme) = loader();
+        let (l, _) = loader();
         let text = Rope::from("fn a() {}\nfn b() {}\n");
         let lang = l.language_for(Path::new("/a.rs"), text.slice(..)).unwrap();
         let syntax = l.parse(text.slice(..), lang).unwrap();
         let second = text.line_to_byte(1);
-        let spans = l.highlights(&syntax, text.slice(..), second..text.len_bytes(), &theme);
+        let spans = l.highlights(&syntax, text.slice(..), second..text.len_bytes(), innermost);
         assert!(spans.iter().all(|(at, _)| *at >= second), "{spans:?}");
     }
 }

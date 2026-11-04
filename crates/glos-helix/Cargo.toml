@@ -1,0 +1,22 @@
+[package]
+name = "glos-helix"
+version = "0.1.0"
+edition = "2024"
+description = "Everything glos takes from Helix: helix-core, its highlighter, languages, queries, themes and grammars, and commands ported from helix-term"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+globset = "0.4.21"
+helix-core = { git = "https://github.com/helix-editor/helix", tag = "25.07.1", version = "25.7.1" }
+helix-stdx = { git = "https://github.com/helix-editor/helix", tag = "25.07.1", version = "25.7.1" }
+imara-diff = "0.2"
+regex = "1.13.1"
+toml = "0.8"
+tree-house = { version = "=0.3.0", default-features = false }
+tree-house-bindings = { version = "0.2.4", features = ["tree-sitter-language"] }
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.11.0"

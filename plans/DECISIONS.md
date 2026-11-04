@@ -258,7 +258,7 @@ PLAN.md:
   with vendored queries count as supported.
 - **Drawing goes through helix-core's `DocumentFormatter`,** and scrolling and clicks through its
   visual-offset helpers, so tabs, wide characters and soft wrap match Helix exactly.
-- **Commands ported from helix-term** live in one MPL-2.0 file, `src/ui/commands.rs`, tested in
+- **Commands ported from helix-term** live in one MPL-2.0 file, `src/ui/commands.rs` (now `crates/glos-helix/src/commands.rs`), tested in
   Helix's selection notation. Where a test and helix-core disagreed, helix-core won.
 
 ## M2 (2026-11-04)
@@ -370,6 +370,20 @@ PLAN.md:
   don't open a second one.
 - **The man page is `glos man`** (hidden), not a build-time file: one place to keep it up to
   date, and packagers run `glos man > glos.1`.
+
+## Helix in its own crate (2026-11-04)
+
+- **`crates/glos-helix` (MPL-2.0) holds everything from Helix:** the git dependencies on
+  `helix-core` and `helix-stdx`, `tree-house`, the copied `languages.toml`, queries and themes,
+  the vendored grammars and the `build.rs` that compiles them, the commands ported from
+  `helix-term`, and the highlighting code built on them.
+- **glos never names Helix's crates.** Its `Cargo.toml` doesn't depend on them; it imports from
+  glos-helix, which re-exports only what glos uses (`text`, `layout`, `test`), so that list is
+  what to check on a Helix upgrade.
+- **The highlighter takes the theme's scope names and a function to build styles,** so it needs
+  neither glos's `Theme` nor ratatui. The ported `zm` takes glos's column function the same way.
+- **Not a legal requirement:** MPL-2.0 is per file, so mixing was already allowed. The crate makes
+  the boundary visible and leaves glos free to choose its own licence.
 
 ## The plan folder
 

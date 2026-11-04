@@ -2,9 +2,10 @@
 
 use std::{fmt::Write as _, io::Write, path::Path};
 
+use glos_helix::syntax::Loader;
+
 use crate::{
     clipboard, config,
-    syntax::Loader,
     theme::{ColorSupport, Theme},
 };
 
@@ -71,7 +72,7 @@ fn report(db: &Path, log: Option<&Path>) -> String {
         if cfg.editor.mouse { "on" } else { "off" }
     ));
 
-    match Loader::new(&theme) {
+    match Loader::new(theme.scopes()) {
         Ok(loader) => {
             let langs = loader.health();
             let ok: Vec<_> = langs
