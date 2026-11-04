@@ -1,0 +1,13 @@
+[package]
+name = "spike-helix-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+helix-core = { git = "https://github.com/helix-editor/helix", tag = "25.07.1" }
+
+[profile.release]
+strip = true
