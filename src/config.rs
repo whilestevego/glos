@@ -17,6 +17,14 @@ pub struct Config {
 pub struct Editor {
     /// Helix's `editor.mouse`: on unless turned off.
     pub mouse: bool,
+    pub soft_wrap: SoftWrap,
+}
+
+/// Helix's `[editor.soft-wrap]`: off by default, as in Helix.
+#[derive(Deserialize, Debug, PartialEq, Default)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SoftWrap {
+    pub enable: bool,
 }
 
 impl Default for Config {
@@ -27,7 +35,7 @@ impl Default for Config {
 
 impl Default for Editor {
     fn default() -> Self {
-        Editor { mouse: true }
+        Editor { mouse: true, soft_wrap: SoftWrap::default() }
     }
 }
 
@@ -66,6 +74,7 @@ mod tests {
         let c = parse("theme = \"catppuccin_mocha\"\n[editor]\nmouse = false\n").unwrap();
         assert_eq!(c.theme, "catppuccin_mocha");
         assert!(!c.editor.mouse);
+        assert!(parse("[editor.soft-wrap]\nenable = true\n").unwrap().editor.soft_wrap.enable);
         // Typos are errors, as in Helix, so they don't pass silently.
         assert!(parse("[editor]\nmose = false\n").is_err());
     }

@@ -10,7 +10,6 @@ use toml::{Table, Value};
 use crate::embedded::THEMES;
 
 pub struct Theme {
-    pub name: String,
     styles: HashMap<String, Style>,
     /// Every key, in the order syntax highlights are numbered (see `syntax`).
     scopes: Vec<String>,
@@ -48,7 +47,7 @@ impl Theme {
             scopes.push(key.clone());
             styles.insert(key, style);
         }
-        Ok(Theme { name: name.into(), styles, scopes })
+        Ok(Theme { styles, scopes })
     }
 
     /// The style for `scope`, falling back to broader scopes (`ui.linenr.selected` →

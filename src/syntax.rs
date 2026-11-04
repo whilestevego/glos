@@ -121,6 +121,7 @@ impl Loader {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn name(&self, lang: Language) -> &str {
         &self.langs[lang.idx()].config.language_id
     }

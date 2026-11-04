@@ -49,7 +49,11 @@ fn default_db() -> Result<PathBuf> {
     Ok(etcetera::base_strategy::Xdg::new()?.data_dir().join("glos/glos.db"))
 }
 
+/// When glos started, for the first-screen time in the log (target: under 100 ms).
+pub static STARTED: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
+
 fn main() -> ExitCode {
+    std::sync::LazyLock::force(&STARTED);
     match run() {
         Ok(code) => code,
         Err(e) => {

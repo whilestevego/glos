@@ -10,7 +10,7 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use helix_core::{Selection, doc_formatter::TextFormat};
+use helix_core::{Selection, char_idx_at_visual_offset, text_annotations::TextAnnotations, visual_offset_from_anchor};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -82,6 +82,8 @@ pub struct App {
     last_search: Option<String>,
     /// Helix's `"` register: the last yank.
     yanked: Vec<String>,
+    /// Soft wrap: `[editor.soft-wrap] enable`, or `:toggle soft-wrap`.
+    wrap: bool,
     status: Option<(String, bool)>,
     /// The screen and text area from the last draw, for commands that page or align the view.
     screen: Rect,
@@ -114,6 +116,7 @@ pub fn run(source: Source, config: &Config) -> Result<()> {
         picker: None,
         last_search: None,
         yanked: vec![],
+        wrap: config.editor.soft_wrap.enable,
         status: None,
         screen: Rect::default(),
         view: Rect::default(),
@@ -138,9 +141,13 @@ impl App {
         self.screen = Rect::new(0, 0, size.width, size.height);
         self.view = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
         self.load(0);
+        let mut first = true;
         while !self.quit {
             self.load_preview();
             terminal.draw(|f| self.render(f))?;
+            if std::mem::take(&mut first) {
+                tracing::info!("first screen after {:?}", crate::STARTED.elapsed());
+            }
             match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     if self.key(Key::from(k)) == Some(AppAction::Suspend) {
@@ -469,7 +476,7 @@ impl App {
         }
     }
 
-    /// The character under a screen cell in the file view.
+    /// The character under a screen cell in the file view (Helix's `char_idx_at_visual_offset`).
     fn pos_at(&self, x: u16, y: u16) -> Option<usize> {
         let file = self.file();
         let header = file.notices.len() as u16;
@@ -478,12 +485,13 @@ impl App {
             return None;
         }
         let text = file.text.slice(..);
-        let line = file.top + (y - self.view.y - header) as usize;
-        if line >= text.len_lines() {
-            return Some(text.len_chars());
-        }
-        let col = file.left + (x - self.view.x - gutter) as usize;
-        Some(view::pos_at_col(text, line, col, file.tab_width))
+        let fmt = view::text_format(file, self.view.width.saturating_sub(gutter), self.wrap);
+        let left = if fmt.soft_wrap { 0 } else { file.left };
+        let row = (y - self.view.y - header) as isize;
+        let col = left + (x - self.view.x - gutter) as usize;
+        let anchor = text.line_to_char(file.top.min(text.len_lines() - 1));
+        let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &TextAnnotations::default());
+        Some(pos)
     }
 
     /// Helix's changed-file picker: a change column, then the path.
@@ -541,6 +549,14 @@ impl App {
         match name {
             "" => {}
             "q" | "quit" | "q!" | "quit!" | "qa" | "qa!" => self.quit = true,
+            "toggle" | "toggle-option" => match _args.trim() {
+                "soft-wrap" | "soft-wrap.enable" => {
+                    self.wrap = !self.wrap;
+                    self.status = Some((format!("'soft-wrap.enable' is now set to {}", self.wrap), false));
+                    self.scroll_to_cursor(false);
+                }
+                other => self.status = Some((format!("unknown option '{other}'"), true)),
+            },
             n if n.parse::<usize>().is_ok() => {
                 self.count = NonZeroUsize::new(n.parse().unwrap());
                 self.doc_command(commands::goto_line);
@@ -552,8 +568,8 @@ impl App {
 
     /// Runs a command on the current file's selection, then keeps the cursor in view.
     fn doc_command(&mut self, f: impl FnOnce(&mut Ctx)) {
-        let (count, extend, height, width) =
-            (self.count, self.mode == Mode::Select, self.text_height(), self.view.width);
+        let (count, extend, height, wrap) = (self.count, self.mode == Mode::Select, self.text_height(), self.wrap);
+        let width = self.view.width.saturating_sub(self.file().gutter_width() as u16);
         let file = self.file_mut();
         if file.collapsed || file.binary {
             return;
@@ -566,7 +582,7 @@ impl App {
             hunks: &file.hunks,
             top: file.top,
             height,
-            fmt: TextFormat { tab_width: file.tab_width as u16, viewport_width: width, ..TextFormat::default() },
+            fmt: view::text_format(file, width, wrap),
             status: None,
             center: false,
         };
@@ -580,25 +596,49 @@ impl App {
         self.scroll_to_cursor(center);
     }
 
-    /// Keeps the primary cursor `scrolloff` lines and columns inside the view; with `center`,
-    /// a cursor outside the view is centred instead, as Helix does after a search.
+    /// Keeps the primary cursor `scrolloff` rows and columns inside the view; with `center`,
+    /// a cursor outside the view is centred instead, as Helix does after a search. Rows are
+    /// visual rows, so a wrapped line counts as more than one.
     fn scroll_to_cursor(&mut self, center: bool) {
         let height = self.text_height();
-        let width = (self.view.width as usize).saturating_sub(self.file().gutter_width());
+        let width = self.view.width.saturating_sub(self.file().gutter_width() as u16);
+        let wrap = self.wrap;
         let file = self.file_mut();
+        let fmt = view::text_format(file, width, wrap);
+        let annotations = TextAnnotations::default();
         let text = file.text.slice(..);
         let cursor = file.sel.primary().cursor(text);
         let line = text.char_to_line(cursor);
         let so = commands::SCROLLOFF.min(height.saturating_sub(1) / 2);
-        let outside = line < file.top + so || (height > 0 && line + so >= file.top + height);
+        // The cursor's row below the top of the view, if it's within `height` rows.
+        let row_of = |top: usize| {
+            if line < top {
+                return None;
+            }
+            visual_offset_from_anchor(text, text.line_to_char(top), cursor, &fmt, &annotations, height)
+                .ok()
+                .map(|(p, _)| p.row)
+        };
+        let outside = line < file.top + so || row_of(file.top).is_none_or(|r| r + so >= height);
         if center && outside {
-            file.top = line.saturating_sub(height / 2);
+            file.top = line;
+            // Back up until the cursor is about half way down.
+            while file.top > 0 && row_of(file.top - 1).is_some_and(|r| r <= height / 2) {
+                file.top -= 1;
+            }
         } else if line < file.top + so {
             file.top = line.saturating_sub(so);
-        } else if height > 0 && line + so >= file.top + height {
-            file.top = line + so + 1 - height;
+        } else {
+            while file.top < line && row_of(file.top).is_none_or(|r| r + so >= height) {
+                file.top += 1;
+            }
+        }
+        if fmt.soft_wrap {
+            file.left = 0;
+            return;
         }
         let col = view::visual_col(text, cursor, file.tab_width);
+        let width = width as usize;
         let so = commands::SCROLLOFF.min(width.saturating_sub(1) / 2);
         if col < file.left + so {
             file.left = col.saturating_sub(so);
@@ -618,7 +658,7 @@ impl App {
         self.view = Rect::new(0, 0, area.width, area.height - 2);
         let file = self.file();
         let styles = self.selection_styles();
-        view::draw(buf, self.view, file, file.top, file.left, &self.loader, &self.theme, Some(styles));
+        view::draw(buf, self.view, file, file.top, file.left, self.wrap, &self.loader, &self.theme, Some(styles));
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
         self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
         self.render_picker(buf, area);
@@ -639,7 +679,7 @@ impl App {
         if let Some(file) = file {
             // Centre the first change, as Helix centres a preview on its range.
             let top = file.hunks.first().map_or(0, |h| (h.after.start as usize).saturating_sub(inner.height as usize / 3));
-            view::draw(buf, inner, file, top, 0, &self.loader, &self.theme, None);
+            view::draw(buf, inner, file, top, 0, self.wrap, &self.loader, &self.theme, None);
         }
     }
 
