@@ -118,7 +118,7 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
         for part in [
             "Database:",
-            "(schema v3)",
+            "(schema v4)",
             "Config:",
             "Theme:",
             "Log: unavailable",

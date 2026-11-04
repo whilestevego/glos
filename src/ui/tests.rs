@@ -1488,13 +1488,10 @@ fn one_commit_at_a_time() {
     assert_eq!(t.path(), "b.rs");
     t.keys("] C");
     assert_eq!(t.said(), "The last commit");
-    // A commit is history: no comments here.
+    // Comments work on a commit too.
     t.keys("space c");
-    assert!(
-        t.said().starts_with("The new side is a commit"),
-        "{}",
-        t.said()
-    );
+    assert!(t.app.comment_box.is_some());
+    t.keys("esc q");
     t.keys("[ C [ C");
     assert_eq!(t.said(), "The first commit");
     t.keys("space o b");
@@ -1592,7 +1589,7 @@ fn a_revision_against_your_files() {
 }
 
 #[test]
-fn two_revisions_are_read_only() {
+fn comments_on_two_revisions_keep_their_diff() {
     let mut t = git_repo_with(|r| Source::revs(r, "HEAD~2", Some("HEAD~1")).unwrap());
     let paths: Vec<&str> = t
         .app
@@ -1603,15 +1600,72 @@ fn two_revisions_are_read_only() {
         .collect();
     assert_eq!(paths, ["a.rs"]);
     assert!(t.shows("HEAD~2 vs HEAD~1"), "{}", t.screen());
-    assert!(t.shows("line two"), "the commit's content:\n{}", t.screen());
-    t.keys("space c");
-    assert!(
-        t.said().starts_with("The new side is a commit"),
-        "{}",
-        t.said()
+    // The cursor opens on the change, `line two`, which is the commit's content.
+    t.keys("space c").typed("why two?").keys("esc ret");
+    let th = &t.app.threads[0];
+    let (old, new) = (
+        t.app.source.old_commit.unwrap(),
+        t.app.source.new_commit.unwrap(),
     );
-    assert!(t.app.comment_box.is_none());
-    // Still history after a reload.
+    assert_eq!(th.on.old_rev, Some(old.to_string()));
+    assert_eq!(th.on.new_rev, Some(new.to_string()));
+    let (o, n) = (&old.to_string()[..7], &new.to_string()[..7]);
+    assert_eq!(
+        th.on.diff.as_deref(),
+        Some(format!("HEAD~2 ({o}) vs HEAD~1 ({n})").as_str())
+    );
+    assert!(t.shows("▸ you: why two?"), "{}", t.screen());
+    // Still history after a reload, so the thread keeps its place.
     t.app.files_changed();
-    assert!(t.app.source.history);
+    assert_eq!(t.app.threads[0].anchor.as_ref().unwrap().start, 2);
+    // In the branch's review of your files the same code is still there: shown, marked.
+    let repo = t._dir.path().join("repo");
+    let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+    let app = App::new(
+        Source::git(&repo, None).unwrap(),
+        &config(),
+        theme,
+        t.agent(),
+    )
+    .unwrap();
+    let mut b = T {
+        app,
+        term: Terminal::new(TestBackend::new(72, 14)).unwrap(),
+        _dir: tempfile::tempdir().unwrap(),
+    };
+    b.app.open(Target::Path("a.rs".into()));
+    b.draw();
+    let marker = format!("▸ you: why two? · unsent · on {n}");
+    assert!(b.shows(&marker), "{}", b.screen());
+}
+
+#[test]
+fn comments_on_one_commit_stay_on_it() {
+    let mut t = git_repo();
+    t.keys("space o c");
+    assert_eq!(t.path(), "a.rs");
+    t.keys("space c").typed("on the commit").keys("esc ret");
+    let th = t.app.threads[0].clone();
+    let commit = &t.app.commits[0];
+    assert_eq!(th.on.new_rev, Some(commit.id.to_string()));
+    let diff = th.on.diff.unwrap();
+    assert!(
+        diff.starts_with("commit 1/2 ") && diff.contains("\"two\" vs its parent"),
+        "{diff}"
+    );
+    // The next commit doesn't touch that code; back on your files, it shows where the code is.
+    t.keys("] C");
+    assert!(!t.shows("on the commit"));
+    t.keys("space o b");
+    t.app.open(Target::Path("a.rs".into()));
+    t.draw();
+    assert!(t.shows("▸ you: on the commit"), "{}", t.screen());
+    // A comment made on your files shows in the commit's view too, marked as such.
+    t.keys("space c").typed("on files").keys("esc ret");
+    t.keys("space o c");
+    assert!(
+        t.shows("on files · unsent · on your files"),
+        "{}",
+        t.screen()
+    );
 }

@@ -186,11 +186,14 @@ pub struct Threads {
 /// Lays out the threads of `path` from `threads`: each collapsed to one line unless it's in
 /// `expanded`, like Helix's inline diagnostics. Your threads take `info`'s colour and agents'
 /// `hint`'s, but every comment also names its author.
+/// `here` is the commit on the new side of what's shown (`None` for your files): threads made
+/// on another version say which.
 pub fn layout(
     threads: &[Thread],
     path: &str,
     expanded: &HashSet<String>,
     theme: &Theme,
+    here: Option<&str>,
 ) -> Threads {
     let mut out = Threads::default();
     for (i, t) in threads.iter().enumerate() {
@@ -222,6 +225,12 @@ pub fn layout(
         }
         if t.status != "open" {
             tags.push(t.status.clone());
+        }
+        if t.on.new_rev.as_deref() != here {
+            tags.push(match &t.on.new_rev {
+                Some(c) => format!("on {}", &c[..c.len().min(7)]),
+                None => "on your files".into(),
+            });
         }
         let tags: String = tags.iter().map(|s| format!(" · {s}")).collect();
         if !expanded.contains(&t.id) {
@@ -416,6 +425,7 @@ mod tests {
             created_round: 1,
             anchor_text: None,
             last_seen_at: None,
+            on: Default::default(),
             comments: bodies
                 .iter()
                 .map(|(author, body)| crate::review::Comment {
@@ -446,7 +456,7 @@ mod tests {
             thread("t3", "a.rs", 3, 3, &[("claude", "a note")]),
         ];
         let rows = |expanded: &HashSet<String>| -> Vec<(usize, String)> {
-            layout(&threads, "a.rs", expanded, &theme)
+            layout(&threads, "a.rs", expanded, &theme, None)
                 .rows
                 .into_iter()
                 .flat_map(|(l, rs)| rs.into_iter().map(move |r| (l, r.text)))
@@ -476,7 +486,7 @@ mod tests {
                 "▸ claude: a note · unread"
             ]
         );
-        let l = layout(&threads, "a.rs", &HashSet::new(), &theme);
+        let l = layout(&threads, "a.rs", &HashSet::new(), &theme, None);
         assert_eq!(l.marks.len(), 2);
         assert_eq!((l.marks[0].0, l.marks[0].1), (1, 2));
         // Agents' threads are drawn in another colour.

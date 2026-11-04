@@ -293,6 +293,10 @@ pub struct App {
     run_editor: bool,
     /// The store's `data_version` when last read: it changes when another process writes.
     data_version: i64,
+    /// Threads placed onto versions they weren't made on, by (thread, generation, new side).
+    placed: std::cell::RefCell<HashMap<PlacedKey, Option<Anchor>>>,
+    /// Goes up whenever threads or files are read again, so `placed` is worked out afresh.
+    generation: u64,
     /// Watches the files for changes (none in tests, which call `files_changed`).
     watch: Option<Watch>,
     /// When files last changed, until they settle.
@@ -310,6 +314,9 @@ pub struct App {
     tree: Option<tree::Tree>,
     tree_area: Rect,
 }
+
+/// A thread placed onto a version: (thread id, generation, the new side's commit).
+type PlacedKey = (String, u64, Option<String>);
 
 /// After this long without file changes, threads whose code is gone are marked outdated.
 const SETTLE: Duration = Duration::from_secs(3);
@@ -423,6 +430,8 @@ impl App {
             reminded: false,
             run_editor: false,
             data_version: 0,
+            placed: Default::default(),
+            generation: 0,
             watch: None,
             changed_at: None,
             view_kind: ViewKind::File,
@@ -447,6 +456,8 @@ impl App {
 
     /// Reads the review's threads and state again, after a change here or elsewhere.
     fn reload(&mut self) {
+        self.generation += 1;
+        self.placed.borrow_mut().clear();
         let result = (|| -> Result<()> {
             self.review = self.review.reload(&self.conn)?;
             self.threads = review::threads(&self.conn, &self.review.id)?;
@@ -739,6 +750,8 @@ impl App {
     /// does when a file changes under it. Threads follow their lines.
     fn files_changed(&mut self) {
         self.changed_at = Some(std::time::Instant::now());
+        self.generation += 1;
+        self.placed.borrow_mut().clear();
         if let Some(a) = self.alt.take() {
             self.sync_base(a);
         }
@@ -785,7 +798,7 @@ impl App {
             .collect();
         // Files that are no longer changed stay open for context, where they were.
         for (p, old) in loaded {
-            if p == cur_path || self.jumps.iter().any(|(c, _)| path_of(self, c) == p) {
+            if p == cur_path || jumps.iter().any(|(jp, _)| *jp == p) {
                 self.context.insert(p, old);
             }
         }
@@ -1156,13 +1169,104 @@ impl App {
         }
     }
 
+    /// The commit on the new side of what's shown, as threads record it; `None` for your files.
+    fn here_rev(&self) -> Option<String> {
+        self.source.new_commit.map(|c| c.to_string())
+    }
+
+    /// Where a thread is in what's shown. A thread made on the same new side (your files, or
+    /// this commit) is where it was made; one made on another version is placed onto this one
+    /// by its code, and isn't shown if that code isn't here. Threads in other files keep their
+    /// own lines (they're placed when their file is shown).
+    fn shown_anchor(&self, t: &Thread) -> Option<Anchor> {
+        let a = t.anchor.as_ref()?;
+        let here = self.here_rev();
+        if t.on.new_rev == here || a.path != self.main_path() {
+            return Some(a.clone());
+        }
+        let key = (t.id.clone(), self.generation, here);
+        if let Some(v) = self.placed.borrow().get(&key) {
+            return v.clone();
+        }
+        let text = self.base_file().text.to_string();
+        let v = review::place(&self.conn, &t.id, &text)
+            .ok()
+            .flatten()
+            .map(|(start, end)| Anchor {
+                path: a.path.clone(),
+                start,
+                end,
+            });
+        self.placed.borrow_mut().insert(key, v.clone());
+        v
+    }
+
+    /// The threads with their anchors as shown (see [`shown_anchor`]), in the same order.
+    fn shown_threads(&self) -> Vec<Thread> {
+        self.threads
+            .iter()
+            .map(|t| Thread {
+                anchor: self.shown_anchor(t),
+                ..t.clone()
+            })
+            .collect()
+    }
+
+    /// What's compared, for the threads made on it: the commits on each side and a sentence an
+    /// agent can read.
+    fn diff_context(&self) -> review::DiffContext {
+        let s = &self.source;
+        let short = |id: &gix::ObjectId| id.to_string()[..7].to_string();
+        let old = s.old_commit.as_ref().map(short).unwrap_or_default();
+        let new = s.new_commit.as_ref().map(short).unwrap_or_default();
+        let diff = match (&self.scope, &s.revs, &s.git, &s.paths) {
+            (Scope::Commit(i), _, _, _) => {
+                let c = &self.commits[*i];
+                let parent = match &s.old_commit {
+                    Some(p) => format!("its parent {}", short(p)),
+                    None => "nothing (the first commit)".into(),
+                };
+                format!(
+                    "commit {}/{} {new} \"{}\" vs {parent}",
+                    i + 1,
+                    self.commits.len(),
+                    c.summary
+                )
+            }
+            (Scope::SinceReview(n), ..) => {
+                format!("your files vs what you reviewed in round {n}")
+            }
+            (Scope::Base, Some((o, Some(n))), ..) => format!("{o} ({old}) vs {n} ({new})"),
+            (Scope::Base, Some((o, None)), ..) => {
+                format!("{o} ({old}) vs your files, uncommitted changes included")
+            }
+            (Scope::Base, None, Some(g), _) => format!(
+                "branch {} vs {} (merge base {old}): your files, uncommitted changes included",
+                g.branch.as_deref().unwrap_or("(detached HEAD)"),
+                g.base
+            ),
+            (Scope::Base, None, None, Some((o, n))) => {
+                format!("{} vs {}", o.display(), n.display())
+            }
+            (Scope::Base, None, None, None) => "the review".into(),
+        };
+        review::DiffContext {
+            old_rev: s.old_commit.map(|c| c.to_string()),
+            new_rev: s.new_commit.map(|c| c.to_string()),
+            diff: Some(diff),
+        }
+    }
+
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
-        // A commit is history: threads are on the code on disk.
-        if self.source.history {
-            return Threads::default();
-        }
-        let t = comments::layout(&self.threads, self.main_path(), &self.expanded, &self.theme);
+        let here = self.here_rev();
+        let t = comments::layout(
+            &self.shown_threads(),
+            self.main_path(),
+            &self.expanded,
+            &self.theme,
+            here.as_deref(),
+        );
         let f = self.main_file();
         if f.rows.is_none() {
             return t;
@@ -1251,8 +1355,23 @@ impl App {
                     Some(a) => {
                         self.open(Target::Path(a.path.clone()));
                         self.expanded.insert(t.id.clone());
-                        self.select_lines(a.start as usize - 1, a.end as usize - 1);
-                        self.scroll_to_cursor(true);
+                        // On what's shown now: it may have been made on another version.
+                        match self.shown_anchor(&t) {
+                            Some(a) => {
+                                self.select_lines(a.start as usize - 1, a.end as usize - 1);
+                                self.scroll_to_cursor(true);
+                            }
+                            None => {
+                                let on = t.on.diff.as_deref().unwrap_or("another version");
+                                self.status = Some((
+                                    format!(
+                                        "Its code isn't in what's shown: it was made on {on} \
+                                         (space o changes the scope)"
+                                    ),
+                                    true,
+                                ));
+                            }
+                        }
                     }
                     // A review-level thread has no lines to show: its comment opens instead.
                     None => match t.latest_yours() {
@@ -1281,14 +1400,11 @@ impl App {
 
     /// The thread under the cursor in the file on screen: the innermost one holding its line.
     fn thread_here(&self) -> Option<usize> {
-        if self.source.history {
-            return None;
-        }
         let f = self.main_file();
         let text = f.text.slice(..);
         let line = f.new_line_at(text.char_to_line(f.sel.primary().cursor(text)))? as u32 + 1;
         let path = self.main_path();
-        self.threads
+        self.shown_threads()
             .iter()
             .enumerate()
             .filter_map(|(i, t)| t.anchor.as_ref().map(|a| (i, a)))
@@ -1304,12 +1420,6 @@ impl App {
             && self.source.changes[i].new == Content::None
         {
             return Err("Comments go on the new side, and this file was deleted");
-        }
-        if self.source.history {
-            return Err(
-                "The new side is a commit, not your files: comments are off here (space o b, or \
-                 glos diff <rev> to compare with your files)",
-            );
         }
         let f = self.main_file();
         if f.binary {
@@ -1440,6 +1550,7 @@ impl App {
     /// `ret` in the box: the comment is written to the store, and the box closes.
     fn save_box(&mut self) {
         let file_text = self.base_file().text.to_string();
+        let on = self.diff_context();
         let Some(b) = &mut self.comment_box else {
             return;
         };
@@ -1458,8 +1569,10 @@ impl App {
             _ if body.is_empty() => Ok("Nothing to save"),
             Place::Edit(c) => review::edit(conn, c, &body).map(|_| "Comment saved"),
             Place::Reply(t) => review::reply(conn, t, YOU, &body).map(|_| "Reply saved"),
-            Place::Review => review::comment(conn, id, None, YOU, &body).map(|_| "Comment saved"),
-            Place::Lines(a) => review::comment(conn, id, Some((a, &file_text)), YOU, &body)
+            Place::Review => {
+                review::comment_in(conn, id, None, YOU, &body, &on).map(|_| "Comment saved")
+            }
+            Place::Lines(a) => review::comment_in(conn, id, Some((a, &file_text)), YOU, &body, &on)
                 .map(|_| "Comment saved"),
         };
         match result {
@@ -1524,9 +1637,9 @@ impl App {
     fn goto_thread(&mut self, forward: bool, edge: bool) {
         let path = self.main_path();
         let mut spans: Vec<(usize, usize)> = self
-            .threads
+            .shown_threads()
             .iter()
-            .filter_map(|t| t.anchor.as_ref())
+            .filter_map(|t| t.anchor.clone())
             .filter(|a| a.path == path)
             .map(|a| (a.start as usize - 1, a.end as usize - 1))
             .collect();

@@ -63,9 +63,16 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
   are honoured if present.
 - **A git repo:** `glos` inside it. Branch vs base by default, plus per-commit scope.
 - **Git revisions:** `glos diff HEAD~1` compares a revision with your files (uncommitted work
-  included; comments work and belong to the branch's review); `glos diff HEAD~3 HEAD~1`
-  compares two revisions, read-only, as the per-commit scope is. An existing path wins over a
-  revision of the same name.
+  included); `glos diff HEAD~3 HEAD~1` compares two revisions. An existing path wins over a
+  revision of the same name. Both belong to the branch's review.
+
+**Comments on any diff.** You can comment in every view and scope. Each thread keeps the diff
+it was made on: the commits on each side (or "your files") and a sentence saying what was
+compared (`commit 2/3 d0c4165 "add b" vs its parent 1a2b3c4`). A thread made on your files
+follows them as they change; one made on a commit stays on that commit's code, and is shown in
+other views wherever the same code still is, marked with the version it was made on. Agents get
+the diff with every comment, the files in the review, and whether the code a comment is about is
+still in the files now, has moved, or has changed (outdated).
 
 Each source becomes the same list of changes, and glos diffs text itself with imara-diff. Git is
 only one way to get the old side; everything after that is shared.
@@ -538,8 +545,7 @@ the dashboard.
   sides' lines, so motions, search and selections work in them and comments map to the new side;
   `space o` (`b` base, `r` since your last review, `c` per commit with `]C`/`[C`, `f` filter) and
   `:scope`, `:filter <glob>` / `:filter threads`; `space e` file tree with `+added -removed` and
-  open-thread counts. Commits are read-only: threads are hidden and comments refused there.
-  Removed lines shown inline in the file view are left for later.
+  open-thread counts. Removed lines shown inline in the file view are left for later.
 - **M5, dashboard and launching.** Multi-review dashboard; closing and archiving reviews, `glos gc`;
   `open_command` and `glos open`; shell completions and the man page.
 - **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish;

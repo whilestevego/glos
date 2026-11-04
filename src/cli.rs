@@ -106,6 +106,9 @@ pub fn show(
             .as_ref()
             .map_or("the review".into(), |a| a.to_string());
         writeln!(out, "\nThread {} on {place} ({})", t.id, t.status)?;
+        if let Some(d) = &t.on.diff {
+            writeln!(out, "  made on: {d}")?;
+        }
         for c in &t.comments {
             let mut who = c.author.clone();
             if c.unsent() {
