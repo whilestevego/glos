@@ -31,7 +31,10 @@ pub struct Ctx<'a> {
     pub top: usize,
     pub height: usize,
     pub fmt: TextFormat,
-    pub status: Option<String>,
+    /// A message for the command line; `true` for an error.
+    pub status: Option<(String, bool)>,
+    /// Centre the cursor if it ends up outside the view (Helix's `ensure_cursor_in_view_center`).
+    pub center: bool,
 }
 
 /// Lines kept between the cursor and the edge of the view, as Helix's default `scrolloff`.
@@ -396,7 +399,7 @@ fn hunk_range(h: &Hunk, text: helix_core::RopeSlice) -> Range {
 
 fn goto_change(cx: &mut Ctx, dir: Direction) {
     if cx.hunks.is_empty() {
-        cx.status = Some("No changes in this file".into());
+        cx.status = Some(("No changes in this file".into(), false));
         return;
     }
     let (text, extra, hunks, extend) = (cx.text.slice(..), cx.count() - 1, cx.hunks, cx.extend);
@@ -426,7 +429,7 @@ pub fn goto_prev_change(cx: &mut Ctx) {
 
 fn goto_nth_change(cx: &mut Ctx, idx: usize) {
     let Some(h) = cx.hunks.get(idx.min(cx.hunks.len().saturating_sub(1))) else {
-        cx.status = Some("No changes in this file".into());
+        cx.status = Some(("No changes in this file".into(), false));
         return;
     };
     let new = hunk_range(h, cx.text.slice(..));
@@ -438,6 +441,93 @@ pub fn goto_first_change(cx: &mut Ctx) {
 }
 pub fn goto_last_change(cx: &mut Ctx) {
     goto_nth_change(cx, usize::MAX)
+}
+
+/// The search regex for `query`, with Helix's smart case: case-insensitive unless the query has
+/// an uppercase letter.
+pub fn search_regex(query: &str) -> Option<helix_stdx::rope::Regex> {
+    let case_insensitive = !query.chars().any(char::is_uppercase);
+    helix_stdx::rope::RegexBuilder::new()
+        .syntax(helix_stdx::rope::Config::new().case_insensitive(case_insensitive).multi_line(true))
+        .build(query)
+        .ok()
+}
+
+/// Selects the next match of `regex` after the primary selection (or before it, backwards),
+/// wrapping around the file (Helix's `search_impl`). In select mode the match is added.
+pub fn search(cx: &mut Ctx, regex: &helix_stdx::rope::Regex, forward: bool, show_warnings: bool) {
+    let text = cx.text.slice(..);
+    let primary = cx.sel.primary();
+    let start = if forward {
+        text.char_to_byte(graphemes::ensure_grapheme_boundary_next(text, primary.to()))
+    } else {
+        text.char_to_byte(graphemes::ensure_grapheme_boundary_prev(text, primary.from()))
+    };
+    let mut mat = if forward {
+        regex.find(text.regex_input_at_bytes(start..))
+    } else {
+        regex.find_iter(text.regex_input_at_bytes(..start)).last()
+    };
+    if mat.is_none() {
+        mat = if forward {
+            regex.find(text.regex_input())
+        } else {
+            regex.find_iter(text.regex_input_at_bytes(start..)).last()
+        };
+        if show_warnings {
+            cx.status = Some(match mat {
+                Some(_) => ("Wrapped around document".into(), false),
+                None => ("No more matches".into(), true),
+            });
+        }
+    }
+    let Some(mat) = mat else { return };
+    let (start, end) = (text.byte_to_char(mat.start()), text.byte_to_char(mat.end()));
+    if end == 0 {
+        return; // an empty match at the start isn't worth selecting
+    }
+    let range = Range::new(start, end).with_direction(primary.direction());
+    cx.sel = if cx.extend {
+        cx.sel.clone().push(range)
+    } else {
+        cx.sel.clone().replace(cx.sel.primary_index(), range)
+    };
+    cx.center = true;
+}
+
+/// `n` / `N`: the last search again, `count` times.
+pub fn search_next(cx: &mut Ctx, query: &str, forward: bool) {
+    let Some(regex) = search_regex(query) else { return };
+    for _ in 0..cx.count() {
+        search(cx, &regex, forward, true);
+    }
+}
+
+/// `*` / `A-*`: the selections, escaped, become the search; with `detect_word_boundaries`
+/// they get `\b` where they start or end a word (Helix's `search_selection_impl`).
+pub fn search_selection(cx: &mut Ctx, detect_word_boundaries: bool) -> String {
+    use helix_core::chars::char_is_word;
+    let text = cx.text.slice(..);
+    let at_start = |i: usize| {
+        i < text.len_chars() && char_is_word(text.char(i)) && (i == 0 || !char_is_word(text.char(i - 1)))
+    };
+    let at_end = |i: usize| {
+        i > 0 && i < text.len_chars() && char_is_word(text.char(i - 1)) && !char_is_word(text.char(i))
+    };
+    let mut parts: Vec<String> = cx
+        .sel
+        .iter()
+        .map(|r| {
+            let pre = if detect_word_boundaries && at_start(r.from()) { "\\b" } else { "" };
+            let post = if detect_word_boundaries && at_end(r.to()) { "\\b" } else { "" };
+            format!("{pre}{}{post}", regex::escape(&r.fragment(text)))
+        })
+        .collect();
+    parts.sort();
+    parts.dedup();
+    let query = parts.join("|");
+    cx.status = Some((format!("register '/' set to '{query}'"), false));
+    query
 }
 
 #[cfg(test)]
@@ -459,6 +549,7 @@ mod tests {
             height: 40,
             fmt: TextFormat::default(),
             status: None,
+            center: false,
         };
         for c in cmds {
             c(&mut cx);
@@ -559,5 +650,32 @@ mod tests {
         );
         assert_eq!(run_with("a\nb\nc\nd\ne\n#[f|]#\n", false, &hunks, &[&goto_prev_change]), "a\nb\nc\nd\n#[|e]#\nf\n");
         assert_eq!(run_with(t, false, &hunks, &[&goto_last_change]), "a\nb\nc\nd\n#[e|]#\nf\n");
+    }
+
+    #[test]
+    fn searching() {
+        let re = search_regex("b").unwrap();
+        assert_eq!(run("#[a|]#b ab", &[&|cx| search(cx, &re, true, false)]), "a#[b|]# ab");
+        assert_eq!(run("a#[b|]# ab", &[&|cx| search(cx, &re, true, false)]), "ab a#[b|]#");
+        // Wraps around, and smart case: lowercase matches either case.
+        assert_eq!(run("aB a#[b|]#", &[&|cx| search(cx, &re, true, false)]), "a#[B|]# ab");
+        assert_eq!(run("ab a#[b|]#", &[&|cx| search(cx, &re, false, false)]), "a#[b|]# ab");
+        let upper = search_regex("B").unwrap();
+        assert_eq!(run("#[a|]#b aB", &[&|cx| search(cx, &upper, true, false)]), "ab a#[B|]#");
+        assert_eq!(run("#[a|]#b ab", &[&|cx| search_next(cx, "b", true)]), "a#[b|]# ab");
+    }
+
+    #[test]
+    fn star_detects_word_boundaries() {
+        let (text, sel) = print("#[foo|]# foobar a.b");
+        let rope = Rope::from(text);
+        let mut cx = Ctx {
+            text: &rope, sel, count: None, extend: false, hunks: &[], top: 0, height: 10,
+            fmt: TextFormat::default(), status: None, center: false,
+        };
+        assert_eq!(search_selection(&mut cx, true), "\\bfoo\\b");
+        assert_eq!(search_selection(&mut cx, false), "foo");
+        cx.sel = Selection::single(11, 14);
+        assert_eq!(search_selection(&mut cx, true), "\\ba\\.b");
     }
 }

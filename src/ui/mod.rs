@@ -1,15 +1,16 @@
-//! The reader: the full-file view with Helix's gutter, the statusline, the command line and the
-//! key help panel.
+//! The reader: the full-file view, the statusline, the command line, the key help panel and the
+//! pickers.
 
 mod commands;
 mod keymap;
+mod picker;
+mod view;
 
-use std::{borrow::Cow, num::NonZeroUsize};
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use helix_core::{Rope, RopeSlice, Selection, doc_formatter::TextFormat};
-use helix_stdx::rope::RopeSliceExt;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use helix_core::{Selection, doc_formatter::TextFormat};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -20,13 +21,14 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    diff::{self, Hunk},
-    source::{self, Content, Kind, Mode as FileMode, Source},
+    source::{Kind, Source},
     syntax::Loader,
     theme::{ColorSupport, Theme},
 };
 use commands::Ctx;
 use keymap::{Action, AppAction, Key, Keymaps, Node};
+use picker::{Item, Outcome, Picker, Target};
+use view::{File, clean};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -41,27 +43,29 @@ enum NextKey {
     Textobject(bool),
 }
 
-/// One changed file, loaded the first time it's shown.
-struct File {
-    text: Rope,
-    hunks: Vec<Hunk>,
-    sel: Selection,
-    top: usize,
-    left: usize,
-    syntax: Option<tree_house::Syntax>,
-    tab_width: usize,
-    /// One-line headers above the text: the kind of change, binary, collapsed…
-    notices: Vec<String>,
-    /// Lockfiles and generated files start collapsed; `enter` expands them.
-    collapsed: bool,
-    /// Binary files have no text to show.
-    binary: bool,
+/// The file on screen: one of the review's changes, or another file opened for context.
+#[derive(Clone, PartialEq, Eq)]
+enum Cur {
+    Change(usize),
+    Context(String),
+}
+
+enum PromptKind {
+    Command,
+    /// A search, forward or back; it previews as you type and `esc` puts the selection back.
+    Search { forward: bool, origin: Selection, top: usize },
+}
+
+struct Prompt {
+    kind: PromptKind,
+    line: String,
 }
 
 pub struct App {
     source: Source,
     files: Vec<Option<File>>,
-    cur: usize,
+    context: HashMap<String, File>,
+    cur: Cur,
     mode: Mode,
     theme: Theme,
     loader: Loader,
@@ -70,10 +74,13 @@ pub struct App {
     pending: Vec<Key>,
     count: Option<NonZeroUsize>,
     next_key: Option<NextKey>,
-    /// The `:` command line, while it's open.
-    prompt: Option<String>,
+    prompt: Option<Prompt>,
+    picker: Option<Picker>,
+    /// Helix's `/` register: the last search.
+    last_search: Option<String>,
     status: Option<(String, bool)>,
-    /// The text area from the last draw, for commands that page or align the view.
+    /// The screen and text area from the last draw, for commands that page or align the view.
+    screen: Rect,
     view: Rect,
     quit: bool,
 }
@@ -83,8 +90,9 @@ pub fn run(source: Source, theme: &str) -> Result<()> {
     let loader = Loader::new(&theme)?;
     let mut app = App {
         files: (0..source.changes.len()).map(|_| None).collect(),
+        context: HashMap::new(),
         source,
-        cur: 0,
+        cur: Cur::Change(0),
         mode: Mode::Normal,
         theme,
         loader,
@@ -93,7 +101,10 @@ pub fn run(source: Source, theme: &str) -> Result<()> {
         count: None,
         next_key: None,
         prompt: None,
+        picker: None,
+        last_search: None,
         status: None,
+        screen: Rect::default(),
         view: Rect::default(),
         quit: false,
     };
@@ -107,9 +118,11 @@ pub fn run(source: Source, theme: &str) -> Result<()> {
 impl App {
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         let size = terminal.size()?;
+        self.screen = Rect::new(0, 0, size.width, size.height);
         self.view = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
-        self.load(self.cur);
+        self.load(0);
         while !self.quit {
+            self.load_preview();
             terminal.draw(|f| self.render(f))?;
             match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
@@ -124,113 +137,90 @@ impl App {
     }
 
     fn load(&mut self, i: usize) {
-        if self.files[i].is_some() {
-            return;
+        if self.files[i].is_none() {
+            self.files[i] = Some(File::change(&self.source.changes[i], &self.source, &self.loader));
         }
-        let change = &self.source.changes[i];
-        let read = |c: &Content| self.source.read(c).ok().flatten().unwrap_or_default();
-        let (old, new) = (read(&change.old), read(&change.new));
-        let mut notices = vec![];
-        match change.kind() {
-            Kind::Added => notices.push("new file".to_string()),
-            Kind::Deleted => notices.push("deleted file; showing what was removed".to_string()),
-            Kind::Renamed => notices.push(format!("renamed from {}", change.old_path.as_deref().unwrap_or("?"))),
-            Kind::ModeChanged | Kind::Modified => {}
+    }
+
+    fn load_context(&mut self, path: &str) {
+        if !self.context.contains_key(path) {
+            let file = File::context(path, &self.source, &self.loader);
+            self.context.insert(path.to_string(), file);
         }
-        if let (Some(a), Some(b)) = (change.old_mode, change.new_mode) {
-            if a != b {
-                notices.push(format!("mode changed: {} → {}", mode_name(a), mode_name(b)));
-            }
+    }
+
+    /// The picker's preview needs its file loaded before drawing.
+    fn load_preview(&mut self) {
+        match self.picker.as_ref().and_then(|p| p.selected().cloned()) {
+            Some(Target::Change(i)) => self.load(i),
+            Some(Target::Path(p)) => self.load_context(&p),
+            None => {}
         }
-        if change.new_mode == Some(FileMode::Symlink) || change.old_mode == Some(FileMode::Symlink) {
-            notices.push("symlink; showing its target".to_string());
-        }
-        // A deleted file shows what was there.
-        let shown = if change.new == Content::None { &old } else { &new };
-        let binary = source::is_binary(&old) || source::is_binary(shown);
-        if binary {
-            notices.push("binary file; not shown".to_string());
-        }
-        let collapsed = self.source.collapsed(change);
-        if collapsed {
-            notices.push("generated file, collapsed; enter expands".to_string());
-        }
-        let text = if binary { Rope::new() } else { Rope::from(String::from_utf8_lossy(shown).as_ref()) };
-        let hunks = if binary || change.new == Content::None {
-            vec![]
-        } else {
-            diff::hunks(&String::from_utf8_lossy(&old), &String::from_utf8_lossy(&new))
-        };
-        let path = self.source.root.join(&change.path);
-        let lang = self.loader.language_for(&path, text.slice(..));
-        let syntax = lang.and_then(|l| self.loader.parse(text.slice(..), l));
-        let mut file = File {
-            tab_width: self.loader.tab_width(lang),
-            text,
-            hunks,
-            sel: Selection::point(0),
-            top: 0,
-            left: 0,
-            syntax,
-            notices,
-            collapsed,
-            binary,
-        };
-        // Open on the first change, as a reviewer wants.
-        if let Some(h) = file.hunks.first() {
-            let line = (h.after.start as usize).min(file.text.len_lines().saturating_sub(1));
-            file.sel = Selection::point(file.text.line_to_char(line));
-            file.top = line.saturating_sub(commands::SCROLLOFF);
-        }
-        self.files[i] = Some(file);
     }
 
     fn file(&self) -> &File {
-        self.files[self.cur].as_ref().expect("the current file is loaded")
+        match &self.cur {
+            Cur::Change(i) => self.files[*i].as_ref().expect("the current file is loaded"),
+            Cur::Context(p) => &self.context[p],
+        }
     }
 
     fn file_mut(&mut self) -> &mut File {
-        self.files[self.cur].as_mut().expect("the current file is loaded")
+        match &self.cur {
+            Cur::Change(i) => self.files[*i].as_mut().expect("the current file is loaded"),
+            Cur::Context(p) => self.context.get_mut(p).expect("the current file is loaded"),
+        }
     }
 
-    /// Rows above the text taken by the file's notices.
-    fn header_rows(&self) -> u16 {
-        self.file().notices.len() as u16
+    fn open(&mut self, target: Target) {
+        match target {
+            Target::Change(i) => {
+                self.load(i);
+                self.cur = Cur::Change(i);
+            }
+            Target::Path(p) => {
+                // A changed file opens as its change, with its diff.
+                if let Some(i) = self.source.changes.iter().position(|c| c.path == p) {
+                    return self.open(Target::Change(i));
+                }
+                self.load_context(&p);
+                self.cur = Cur::Context(p);
+            }
+        }
+        self.mode = Mode::Normal;
     }
 
     fn text_height(&self) -> usize {
-        self.view.height.saturating_sub(self.header_rows()) as usize
+        self.view.height.saturating_sub(self.file().notices.len() as u16) as usize
     }
 
     /// Handles one key. Returns the app action that needs the terminal (suspend), if any.
     fn key(&mut self, key: Key) -> Option<AppAction> {
         self.status = None;
-        if let Some(prompt) = &mut self.prompt {
-            match key.code {
-                KeyCode::Esc => self.prompt = None,
-                KeyCode::Enter => {
-                    let line = self.prompt.take().unwrap_or_default();
-                    self.typed_command(line.trim());
+        if let Some(picker) = &mut self.picker {
+            let page = picker.page(Picker::areas(self.screen).0);
+            match picker.key(key, page) {
+                Outcome::Stay => {}
+                Outcome::Close => self.picker = None,
+                Outcome::Open(t) => {
+                    self.picker = None;
+                    self.open(t);
                 }
-                KeyCode::Backspace => {
-                    if prompt.pop().is_none() {
-                        self.prompt = None;
-                    }
-                }
-                KeyCode::Char(c) if key.char().is_some() || key.mods == crossterm::event::KeyModifiers::NONE => {
-                    prompt.push(c)
-                }
-                _ => {}
             }
+            return None;
+        }
+        if self.prompt.is_some() {
+            self.prompt_key(key);
             return None;
         }
         if let Some(next) = self.next_key.take() {
             self.pending.clear();
-            if let Some(ch) = key.char().or(match key.code {
+            let ch = key.char().or(match key.code {
                 KeyCode::Enter => Some('\n'),
                 KeyCode::Tab => Some('\t'),
                 _ => None,
-            }) {
+            });
+            if let Some(ch) = ch {
                 match next {
                     NextKey::Char(f, _) => self.doc_command(|cx| f(cx, ch)),
                     NextKey::Textobject(around) => self.doc_command(|cx| commands::select_textobject(cx, around, ch)),
@@ -291,20 +281,153 @@ impl App {
         result
     }
 
+    fn prompt_key(&mut self, key: Key) {
+        let Some(prompt) = &mut self.prompt else { return };
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(Prompt { kind: PromptKind::Search { origin, top, .. }, .. }) = self.prompt.take() {
+                    let file = self.file_mut();
+                    file.sel = origin;
+                    file.top = top;
+                }
+            }
+            KeyCode::Char('c') if key.mods.contains(KeyModifiers::CONTROL) => {
+                self.prompt_key(Key { code: KeyCode::Esc, mods: KeyModifiers::NONE });
+            }
+            KeyCode::Enter => {
+                let Some(Prompt { kind, line }) = self.prompt.take() else { return };
+                match kind {
+                    PromptKind::Command => self.typed_command(line.trim()),
+                    PromptKind::Search { .. } => {
+                        // An empty search repeats the last one, as in Helix.
+                        if !line.is_empty() {
+                            self.last_search = Some(line);
+                        }
+                        if commands::search_regex(self.last_search.as_deref().unwrap_or("")).is_none() {
+                            self.status = Some(("Invalid regex".into(), true));
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if prompt.line.pop().is_none() {
+                    return self.prompt_key(Key { code: KeyCode::Esc, mods: KeyModifiers::NONE });
+                }
+                self.search_preview();
+            }
+            KeyCode::Char(c) if !key.mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                prompt.line.push(c);
+                self.search_preview();
+            }
+            _ => {}
+        }
+    }
+
+    /// As you type a search, the selection jumps to the first match from where you started.
+    fn search_preview(&mut self) {
+        let Some(Prompt { kind: PromptKind::Search { forward, origin, top }, line }) = &self.prompt else { return };
+        let (forward, origin, top) = (*forward, origin.clone(), *top);
+        let Some(regex) = commands::search_regex(line) else { return };
+        let file = self.file_mut();
+        file.sel = origin;
+        file.top = top;
+        self.doc_command(|cx| commands::search(cx, &regex, forward, false));
+    }
+
     fn app_command(&mut self, action: AppAction) -> Option<AppAction> {
         match action {
             AppAction::SelectMode => self.mode = Mode::Select,
             AppAction::NormalMode => self.mode = Mode::Normal,
-            AppAction::CommandMode => self.prompt = Some(String::new()),
+            AppAction::CommandMode => self.prompt = Some(Prompt { kind: PromptKind::Command, line: String::new() }),
+            AppAction::Search(forward) => {
+                let file = self.file();
+                let kind = PromptKind::Search { forward, origin: file.sel.clone(), top: file.top };
+                self.prompt = Some(Prompt { kind, line: String::new() });
+            }
+            AppAction::SearchNext(forward) => match self.last_search.clone() {
+                Some(q) => self.doc_command(|cx| commands::search_next(cx, &q, forward)),
+                None => self.status = Some(("No previous search".into(), true)),
+            },
+            AppAction::SearchSelection(detect) => {
+                let mut query = None;
+                self.doc_command(|cx| query = Some(commands::search_selection(cx, detect)));
+                if let Some(q) = query {
+                    self.last_search = Some(q);
+                }
+            }
             AppAction::NextFile | AppAction::PrevFile => {
                 let n = self.files.len();
                 let step = self.count.map_or(1, NonZeroUsize::get) % n;
-                self.cur = if action == AppAction::NextFile { (self.cur + step) % n } else { (self.cur + n - step) % n };
-                self.load(self.cur);
+                let i = match self.cur {
+                    Cur::Change(i) if action == AppAction::NextFile => (i + step) % n,
+                    Cur::Change(i) => (i + n - step) % n,
+                    // From a context file, the changes start again.
+                    Cur::Context(_) if action == AppAction::NextFile => 0,
+                    Cur::Context(_) => n - 1,
+                };
+                self.open(Target::Change(i));
+            }
+            AppAction::ChangedFilePicker => self.picker = Some(self.changed_file_picker()),
+            AppAction::FilePicker => self.picker = Some(self.file_picker()),
+            AppAction::ToggleCollapse => {
+                let file = self.file_mut();
+                let marker = "generated file, collapsed; enter expands";
+                if file.notices.iter().any(|n| n == marker) || file.collapsed {
+                    file.collapsed = !file.collapsed;
+                }
             }
             AppAction::Suspend => return Some(AppAction::Suspend),
         }
         None
+    }
+
+    /// Helix's changed-file picker: a change column, then the path.
+    fn changed_file_picker(&self) -> Picker {
+        let t = &self.theme;
+        let items = self
+            .source
+            .changes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let (tag, style) = match c.kind() {
+                    Kind::Added => ("+ added", t.get("diff.plus")),
+                    Kind::Deleted => ("- deleted", t.get("diff.minus")),
+                    Kind::Renamed => ("> renamed", t.get("diff.delta.moved")),
+                    Kind::Modified | Kind::ModeChanged => ("~ modified", t.get("diff.delta")),
+                };
+                let text = match (c.kind(), &c.old_path) {
+                    (Kind::Renamed, Some(o)) => format!("{o} -> {}", c.path),
+                    _ => c.path.clone(),
+                };
+                Item { tags: vec![(tag.into(), style)], text, target: Target::Change(i) }
+            })
+            .collect();
+        Picker::new(vec!["change", "path"], items)
+    }
+
+    /// Helix's file picker over the repo (or folder), honouring `.gitignore`, without hidden
+    /// files. Files open read-only, for context.
+    fn file_picker(&self) -> Picker {
+        let root = &self.source.root;
+        let mut items = vec![];
+        // ponytail: walks synchronously; Helix streams results in. Capped as Helix caps it.
+        let walker = ignore::WalkBuilder::new(root).hidden(true).require_git(false).build();
+        for entry in walker.flatten().take(100_000) {
+            if entry.file_type().is_some_and(|t| t.is_file() || t.is_symlink()) {
+                if let Ok(rel) = entry.path().strip_prefix(root) {
+                    let p = rel.to_string_lossy().into_owned();
+                    // A changed file previews and opens as its change.
+                    let target = match self.source.changes.iter().position(|c| c.path == p) {
+                        Some(i) => Target::Change(i),
+                        None => Target::Path(p.clone()),
+                    };
+                    items.push(Item { tags: vec![], text: p, target });
+                }
+            }
+        }
+        items.sort_by(|a, b| a.text.cmp(&b.text));
+        Picker::new(vec!["path"], items)
     }
 
     /// `:` commands. ponytail: a few for now; the full set with completion comes with M2.
@@ -324,8 +447,9 @@ impl App {
 
     /// Runs a command on the current file's selection, then keeps the cursor in view.
     fn doc_command(&mut self, f: impl FnOnce(&mut Ctx)) {
-        let (count, extend, height, width) = (self.count, self.mode == Mode::Select, self.text_height(), self.view.width);
-        let file = self.files[self.cur].as_mut().expect("loaded");
+        let (count, extend, height, width) =
+            (self.count, self.mode == Mode::Select, self.text_height(), self.view.width);
+        let file = self.file_mut();
         if file.collapsed || file.binary {
             return;
         }
@@ -339,32 +463,37 @@ impl App {
             height,
             fmt: TextFormat { tab_width: file.tab_width as u16, viewport_width: width, ..TextFormat::default() },
             status: None,
+            center: false,
         };
         f(&mut cx);
-        let (sel, top, status) = (cx.sel.ensure_invariants(file.text.slice(..)), cx.top, cx.status);
+        let (sel, top, status, center) = (cx.sel.ensure_invariants(file.text.slice(..)), cx.top, cx.status, cx.center);
         file.sel = sel;
         file.top = top;
-        if let Some(s) = status {
-            self.status = Some((s, false));
+        if status.is_some() {
+            self.status = status;
         }
-        self.scroll_to_cursor();
+        self.scroll_to_cursor(center);
     }
 
-    /// Keeps the primary cursor `scrolloff` lines and columns inside the view.
-    fn scroll_to_cursor(&mut self) {
+    /// Keeps the primary cursor `scrolloff` lines and columns inside the view; with `center`,
+    /// a cursor outside the view is centred instead, as Helix does after a search.
+    fn scroll_to_cursor(&mut self, center: bool) {
         let height = self.text_height();
-        let width = (self.view.width as usize).saturating_sub(self.gutter_width());
+        let width = (self.view.width as usize).saturating_sub(self.file().gutter_width());
         let file = self.file_mut();
         let text = file.text.slice(..);
         let cursor = file.sel.primary().cursor(text);
         let line = text.char_to_line(cursor);
         let so = commands::SCROLLOFF.min(height.saturating_sub(1) / 2);
-        if line < file.top + so {
+        let outside = line < file.top + so || (height > 0 && line + so >= file.top + height);
+        if center && outside {
+            file.top = line.saturating_sub(height / 2);
+        } else if line < file.top + so {
             file.top = line.saturating_sub(so);
         } else if height > 0 && line + so >= file.top + height {
             file.top = line + so + 1 - height;
         }
-        let col = visual_col(text, cursor, file.tab_width);
+        let col = view::visual_col(text, cursor, file.tab_width);
         let so = commands::SCROLLOFF.min(width.saturating_sub(1) / 2);
         if col < file.left + so {
             file.left = col.saturating_sub(so);
@@ -373,153 +502,44 @@ impl App {
         }
     }
 
-    /// Helix's default gutters: a diagnostics column (glos's thread markers), a spacer, line
-    /// numbers (at least 3 wide), a spacer and the diff signs.
-    fn gutter_width(&self) -> usize {
-        let lines = self.file().text.len_lines();
-        let digits = lines.to_string().len().max(3);
-        1 + 1 + digits + 1 + 1
-    }
-
     fn render(&mut self, f: &mut Frame) {
         let area = f.area();
+        self.screen = area;
         let buf = f.buffer_mut();
         buf.set_style(area, self.theme.get("ui.background"));
         if area.height < 3 {
             return;
         }
         self.view = Rect::new(0, 0, area.width, area.height - 2);
-        self.render_file(buf);
+        let file = self.file();
+        let styles = self.selection_styles();
+        view::draw(buf, self.view, file, file.top, file.left, &self.loader, &self.theme, Some(styles));
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
         self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
+        self.render_picker(buf, area);
         self.render_help(f, area);
     }
 
-    fn render_file(&self, buf: &mut Buffer) {
-        let theme = &self.theme;
-        let file = self.file();
-        let view = self.view;
-        let mut y = view.y;
-        for notice in &file.notices {
-            buf.set_stringn(view.x + 1, y, clean(notice), view.width as usize, theme.get("ui.virtual"));
-            y += 1;
-        }
-        if file.collapsed || file.binary {
-            return;
-        }
-        let text = file.text.slice(..);
-        let height = view.height.saturating_sub(y - view.y) as usize;
-        let last = (file.top + height).min(text.len_lines());
-
-        let start_byte = text.line_to_byte(file.top.min(text.len_lines()));
-        let end_byte = text.line_to_byte(last);
-        let spans = match &file.syntax {
-            Some(s) => self.loader.highlights(s, text, start_byte..end_byte, theme),
-            None => vec![],
+    fn render_picker(&mut self, buf: &mut Buffer, area: Rect) {
+        let Some(picker) = &mut self.picker else { return };
+        let (list, preview) = Picker::areas(area);
+        picker.render(buf, list, &self.theme);
+        let Some(preview) = preview else { return };
+        let inner = picker::preview_frame(buf, preview, &self.theme);
+        let file = match picker.selected() {
+            Some(Target::Change(i)) => self.files[*i].as_ref(),
+            Some(Target::Path(p)) => self.context.get(p),
+            None => None,
         };
-        let mut span = 0;
-
-        let digits = text.len_lines().to_string().len().max(3);
-        let gutter = self.gutter_width() as u16;
-        let cursor_lines: Vec<usize> = file.sel.iter().map(|r| text.char_to_line(r.cursor(text))).collect();
-        let primary = file.sel.primary_index();
-        let ranges: Vec<_> = file.sel.iter().map(|r| (r.from(), r.to(), r.cursor(text))).collect();
-
-        let text_style = theme.get("ui.text");
-        let (sel_style, sel_primary, cursor, cursor_primary) = self.selection_styles();
-        let (added, deleted, modified) =
-            (theme.get("diff.plus.gutter"), theme.get("diff.minus.gutter"), theme.get("diff.delta.gutter"));
-
-        let mut hunk_i = 0;
-        for line in file.top..last {
-            // Gutter: line number, then the diff sign as Helix's diff gutter draws it.
-            let selected = cursor_lines.contains(&line);
-            let nr_style = theme.get(if selected { "ui.linenr.selected" } else { "ui.linenr" });
-            buf.set_string(view.x + 2, y, format!("{:>digits$}", line + 1), nr_style);
-            let l = line as u32;
-            while let Some(h) = file.hunks.get(hunk_i) {
-                if h.after.end < l || (!h.after.is_empty() && l == h.after.end) {
-                    hunk_i += 1;
-                } else {
-                    break;
-                }
-            }
-            if let Some(h) = file.hunks.get(hunk_i).filter(|h| h.after.start <= l) {
-                let (sign, style) = if h.before.is_empty() {
-                    ("▍", added)
-                } else if h.after.is_empty() {
-                    ("▔", deleted)
-                } else {
-                    ("▍", modified)
-                };
-                buf.set_string(view.x + gutter - 1, y, sign, style);
-            }
-
-            // Text, from the horizontal offset.
-            let mut col = 0usize;
-            let mut ch = text.line_to_char(line);
-            let x0 = view.x + gutter;
-            let width = view.width.saturating_sub(gutter) as usize;
-            for g in text.line(line).graphemes() {
-                let g: Cow<str> = g.into();
-                let newline = g.ends_with('\n');
-                let byte = text.char_to_byte(ch);
-                while span + 1 < spans.len() && spans[span + 1].0 <= byte {
-                    span += 1;
-                }
-                let mut style = text_style;
-                if let Some((_, s)) = spans.get(span) {
-                    style = style.patch(*s);
-                }
-                for (i, (from, to, cur)) in ranges.iter().enumerate() {
-                    if *from <= ch && ch < *to {
-                        style = style.patch(if i == primary { sel_primary } else { sel_style });
-                    }
-                    if *cur == ch {
-                        style = style.patch(if i == primary { cursor_primary } else { cursor });
-                    }
-                }
-                let (symbol, w): (Cow<str>, usize) = if newline {
-                    (" ".into(), 1)
-                } else if g == "\t" {
-                    let w = file.tab_width - col % file.tab_width;
-                    (" ".repeat(w).into(), w)
-                } else {
-                    let s = clean(&g);
-                    let w = s.width().max(1);
-                    (s, w)
-                };
-                if col + w > file.left && col < file.left + width {
-                    if col >= file.left && col + w <= file.left + width {
-                        let x = x0 + (col - file.left) as u16;
-                        if g == "\t" || newline {
-                            for i in 0..w as u16 {
-                                buf[(x + i, y)].set_symbol(" ").set_style(style);
-                            }
-                        } else {
-                            buf[(x, y)].set_symbol(&symbol).set_style(style);
-                            for i in 1..w as u16 {
-                                buf[(x + i, y)].set_symbol("").set_style(style);
-                            }
-                        }
-                    }
-                }
-                col += w;
-                ch += g.chars().count();
-                if newline {
-                    break;
-                }
-            }
-            // The cursor can sit at the very end of a file with no trailing newline.
-            if ch == text.len_chars() && ranges.iter().any(|r| r.2 == ch) && col >= file.left && col < file.left + width {
-                buf[(x0 + (col - file.left) as u16, y)].set_symbol(" ").set_style(cursor_primary);
-            }
-            y += 1;
+        if let Some(file) = file {
+            // Centre the first change, as Helix centres a preview on its range.
+            let top = file.hunks.first().map_or(0, |h| (h.after.start as usize).saturating_sub(inner.height as usize / 3));
+            view::draw(buf, inner, file, top, 0, &self.loader, &self.theme, None);
         }
     }
 
     /// (selection, primary selection, cursor, primary cursor), as Helix picks them per mode.
-    fn selection_styles(&self) -> (Style, Style, Style, Style) {
+    fn selection_styles(&self) -> view::SelectionStyles {
         let t = &self.theme;
         let sel = t.get("ui.selection");
         let sel_primary = t.try_get("ui.selection.primary").unwrap_or(sel);
@@ -532,13 +552,15 @@ impl App {
     }
 
     fn render_statusline(&self, buf: &mut Buffer, area: Rect) {
-        let t = &self.theme;
-        let base = t.get("ui.statusline");
+        let base = self.theme.get("ui.statusline");
         buf.set_style(area, base);
         let file = self.file();
-        let change = &self.source.changes[self.cur];
+        let (path, which) = match &self.cur {
+            Cur::Change(i) => (self.source.changes[*i].path.as_str(), format!("{}/{} files", i + 1, self.files.len())),
+            Cur::Context(p) => (p.as_str(), "context".to_string()),
+        };
         let mode = if self.mode == Mode::Select { " SEL " } else { " NOR " };
-        let left = format!("{mode} {}", clean(&change.path));
+        let left = format!("{mode} {}", clean(path));
         buf.set_stringn(area.x, area.y, &left, area.width as usize, base);
 
         let text = file.text.slice(..);
@@ -546,15 +568,8 @@ impl App {
         let line = text.char_to_line(cursor);
         let col = cursor - text.line_to_char(line);
         let sels = file.sel.len();
-        let right = format!(
-            " {}/{} files  {} sel{}  {}:{} ",
-            self.cur + 1,
-            self.files.len(),
-            sels,
-            if sels == 1 { "" } else { "s" },
-            line + 1,
-            col + 1
-        );
+        let right =
+            format!(" {which}  {sels} sel{}  {}:{} ", if sels == 1 { "" } else { "s" }, line + 1, col + 1);
         let w = right.width() as u16;
         if w + left.width() as u16 + 1 < area.width {
             buf.set_string(area.x + area.width - w, area.y, &right, base);
@@ -564,9 +579,14 @@ impl App {
     fn render_command_line(&self, buf: &mut Buffer, area: Rect) {
         let t = &self.theme;
         if let Some(p) = &self.prompt {
-            buf.set_stringn(area.x, area.y, format!(":{}", clean(p)), area.width as usize, t.get("ui.text"));
-            let x = area.x + 1 + p.width() as u16;
-            if x < area.x + area.width {
+            let prefix = match p.kind {
+                PromptKind::Command => ":",
+                PromptKind::Search { .. } => "search:",
+            };
+            let shown = format!("{prefix}{}", clean(&p.line));
+            buf.set_stringn(area.x, area.y, &shown, area.width as usize, t.get("ui.text"));
+            let x = area.x + shown.width() as u16;
+            if x < area.right() {
                 buf[(x, area.y)].set_style(t.get("ui.cursor.primary"));
             }
             return;
@@ -614,58 +634,17 @@ impl App {
         let key_w = rows.iter().map(|(k, _)| k.width()).max().unwrap_or(0);
         let lines: Vec<String> = rows.iter().map(|(k, d)| format!("{k:key_w$}  {d}")).collect();
         let width = (lines.iter().map(|l| l.width()).max().unwrap_or(0).max(title.width()) + 4) as u16;
-        let height = lines.len() as u16 + 2;
         let width = width.min(area.width);
-        let height = height.min(area.height.saturating_sub(2));
+        let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
         let rect = Rect::new(area.width - width, area.height.saturating_sub(2 + height), width, height);
         let t = &self.theme;
         let popup = t.get("ui.popup.info");
         f.render_widget(Clear, rect);
-        f.render_widget(
-            Block::default().borders(Borders::ALL).title(title).style(popup).border_style(popup),
-            rect,
-        );
-        let text_style = popup.patch(t.get("ui.text.info"));
+        f.render_widget(Block::default().borders(Borders::ALL).title(title).style(popup).border_style(popup), rect);
+        let text_style: Style = popup.patch(t.get("ui.text.info"));
         for (i, l) in lines.iter().enumerate().take(height.saturating_sub(2) as usize) {
             f.buffer_mut().set_stringn(rect.x + 2, rect.y + 1 + i as u16, l, width.saturating_sub(3) as usize, text_style);
         }
-    }
-}
-
-/// The display column of char `pos` on its line, with tabs expanded.
-fn visual_col(text: RopeSlice, pos: usize, tab_width: usize) -> usize {
-    let line = text.char_to_line(pos);
-    let start = text.line_to_char(line);
-    let mut col = 0;
-    for g in text.slice(start..pos).graphemes() {
-        let g: Cow<str> = g.into();
-        col += if g == "\t" { tab_width - col % tab_width } else { clean(&g).width().max(1) };
-    }
-    col
-}
-
-/// Untrusted text is never drawn raw: control characters become visible symbols, so escape
-/// sequences in code or agent comments can't reach the terminal.
-fn clean(s: &str) -> Cow<'_, str> {
-    if !s.chars().any(char::is_control) {
-        return s.into();
-    }
-    s.chars()
-        .map(|c| match c as u32 {
-            0..=0x1f => char::from_u32(0x2400 + c as u32).unwrap(),
-            0x7f => '␡',
-            _ if c.is_control() => '�',
-            _ => c,
-        })
-        .collect::<String>()
-        .into()
-}
-
-fn mode_name(m: FileMode) -> &'static str {
-    match m {
-        FileMode::File => "file",
-        FileMode::Executable => "executable",
-        FileMode::Symlink => "symlink",
     }
 }
 
@@ -678,24 +657,4 @@ fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn control_characters_are_never_drawn() {
-        assert_eq!(clean("plain"), "plain");
-        assert_eq!(clean("a\x1b]0;pwned\x07b"), "a␛]0;pwned␇b");
-        assert_eq!(clean("\u{9b}31m"), "�31m");
-    }
-
-    #[test]
-    fn columns_expand_tabs_and_wide_chars() {
-        let t = Rope::from("\tab漢x");
-        assert_eq!(visual_col(t.slice(..), 1, 4), 4);
-        assert_eq!(visual_col(t.slice(..), 4, 4), 8);
-        assert_eq!(visual_col(t.slice(..), 5, 4), 8 + 1);
-    }
 }

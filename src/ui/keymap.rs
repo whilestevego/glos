@@ -28,6 +28,14 @@ pub enum AppAction {
     NextFile,
     PrevFile,
     Suspend,
+    /// `/` and `?`: `true` searches forward.
+    Search(bool),
+    SearchNext(bool),
+    /// `*` and `A-*`: `true` detects word boundaries.
+    SearchSelection(bool),
+    FilePicker,
+    ChangedFilePicker,
+    ToggleCollapse,
 }
 
 pub struct Command {
@@ -94,6 +102,15 @@ commands! {
     normal_mode, "Enter normal mode", App(AppAction::NormalMode);
     exit_select_mode, "Exit selection mode", App(AppAction::NormalMode);
     command_mode, "Enter command mode", App(AppAction::CommandMode);
+    search, "Search for regex pattern", App(AppAction::Search(true));
+    rsearch, "Reverse search for regex pattern", App(AppAction::Search(false));
+    search_next, "Select next search match", App(AppAction::SearchNext(true));
+    search_prev, "Select previous search match", App(AppAction::SearchNext(false));
+    search_selection_detect_word_boundaries, "Use current selection as the search pattern, automatically wrapping with `\\b` on word boundaries", App(AppAction::SearchSelection(true));
+    search_selection, "Use current selection as search pattern", App(AppAction::SearchSelection(false));
+    file_picker, "Open file picker", App(AppAction::FilePicker);
+    changed_file_picker, "Open changed file picker", App(AppAction::ChangedFilePicker);
+    toggle_collapse, "Expand or collapse the file", App(AppAction::ToggleCollapse);
     suspend, "Suspend and return to shell", App(AppAction::Suspend);
 }
 
@@ -314,6 +331,18 @@ fn normal_defs() -> Vec<Def> {
             cmd("G", "goto_last_change"),
         ]),
         cmd(",", "keep_primary_selection"),
+        cmd("/", "search"),
+        cmd("?", "rsearch"),
+        cmd("n", "search_next"),
+        cmd("N", "search_prev"),
+        cmd("*", "search_selection_detect_word_boundaries"),
+        cmd("A-*", "search_selection"),
+        // glos: expand or collapse a generated file.
+        cmd("ret", "toggle_collapse"),
+        menu("space", "Space", vec![
+            cmd("f", "file_picker"),
+            cmd("g", "changed_file_picker"),
+        ]),
         cmd("C-b|pageup", "page_up"),
         cmd("C-f|pagedown", "page_down"),
         cmd("C-u", "page_cursor_half_up"),
