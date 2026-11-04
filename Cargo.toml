@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/glos-helix"]
+members = ["crates/glos-helix", "xtask"]
 
 [package]
 name = "glos"

@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(at_fn, theme.index("keyword.function"));
     }
 
-    /// Every language glos supports (`LANGS` in scripts/fetch-helix.py) is found by file name and highlights something.
+    /// Every language glos supports (`LANGS` in xtask/src/fetch_helix.rs) is found by file name and highlights something.
     #[test]
     fn every_language_highlights() {
         let (l, _) = loader();

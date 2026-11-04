@@ -385,6 +385,15 @@ PLAN.md:
 - **Not a legal requirement:** MPL-2.0 is per file, so mixing was already allowed. The crate makes
   the boundary visible and leaves glos free to choose its own licence.
 
+## Maintenance tasks in Rust (2026-11-04)
+
+- **`cargo xtask`, not Python scripts:** `fetch-helix` and `keymap` are a small `xtask` crate in
+  the workspace, so the project is Rust only. `ureq`, `flate2` and `tar` (downloading and
+  unpacking) are its own dependencies, not glos's.
+- **Checked against the scripts they replace:** `fetch-helix` rewrote `crates/glos-helix/` with
+  no difference, and `keymap` produced the same checklist. The checklist lost its "Planned" table:
+  every key in it is built.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.

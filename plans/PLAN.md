@@ -324,7 +324,7 @@ not.
   is. Themes that build on another (`inherits`) and named colours (`[palette]`) are resolved as
   Helix does. A config error is shown at startup, and glos carries on with the defaults, as Helix
   does.
-- **Syntax highlighting:** tree-sitter, with the grammars compiled into glos. A script takes from a
+- **Syntax highlighting:** tree-sitter, with the grammars compiled into glos. `cargo xtask fetch-helix` takes from a
   pinned Helix release its `languages.toml` (which maps files to languages and pins each grammar's
   source and revision), the highlight queries and the themes. It fetches each grammar's source at
   the revision Helix pins and vendors it in the repo (committed: about 5 MB of git history per
@@ -336,10 +336,10 @@ not.
   off the UI thread: compiling all of them takes about 260 ms, too slow for the first screen. Using Helix's
   pinned revisions keeps queries and grammars matching. Queries that build on another language's
   (`; inherits:`) are followed as Helix does. Moving to a new Helix release means rerunning the
-  script.
+  task.
 - **Languages:** a starting set, listed in one file: Rust, TypeScript/TSX, JavaScript, Python, Go,
   C, C++, Java, Ruby, Bash, JSON, TOML, YAML, Markdown, HTML, CSS, SQL and Lua. Adding one is a
-  line plus a rerun of the script. Files in other languages show as plain text.
+  line in `xtask/src/fetch_helix.rs` plus a rerun of the task. Files in other languages show as plain text.
 - **Licences:** Helix's queries, themes and `languages.toml` are MPL-2.0 and stay under it, with
   their notice, in their own folder. Grammars keep their own licences (mostly MIT).
 - **Movement and selections come from Helix itself.** `helix-core` (plain functions over a ropey
@@ -351,7 +351,7 @@ not.
   Helix's own unit tests come with them.
 - **Editing (after the MVP):** the same `helix-core` model with `insert`/`normal`/`select` modes.
   Writes go to the file on the new side, which triggers a live refresh like any other change.
-- **The keymap checklist.** A script generates `KEYMAP.md` from Helix's default keymap at the
+- **The keymap checklist.** `cargo xtask keymap` generates `KEYMAP.md` from Helix's default keymap at the
   pinned release: every Helix command, marked *done*, *not applicable* (LSP, buffers, windows) or
   *replaced* (with the glos action that took its key). That makes coverage checkable, and moving
   to a new Helix release shows exactly what changed.
