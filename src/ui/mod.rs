@@ -313,6 +313,43 @@ pub struct App {
     last_round: Option<u32>,
     tree: Option<tree::Tree>,
     tree_area: Rect,
+    /// While the palette is open: the picker it covers, to go back to.
+    palette: Option<Option<Picker>>,
+}
+
+/// A palette row: the keys, what they do, and the command to run (none for a key only listed).
+type KeyRow = (String, &'static str, Option<&'static str>);
+
+/// What waits until the comment box closes: changing file, pickers and the review's actions.
+fn blocked_in_box(action: AppAction) -> bool {
+    use AppAction as A;
+    matches!(
+        action,
+        A::NextFile
+            | A::PrevFile
+            | A::FilePicker
+            | A::ChangedFilePicker
+            | A::ToggleCollapse
+            | A::JumpForward
+            | A::JumpBackward
+            | A::SaveSelection
+            | A::Comment
+            | A::ReviewComment
+            | A::Reply
+            | A::EditComment
+            | A::Submit(_)
+            | A::ThreadPicker { .. }
+            | A::NextThread(_)
+            | A::EdgeThread(_)
+            | A::NextUnread(_)
+            | A::ToggleResolved
+            | A::GotoSuggestion
+            | A::View(_)
+            | A::Scope(_)
+            | A::NextCommit(_)
+            | A::FilterPrompt
+            | A::FileTree
+    )
 }
 
 /// A thread placed onto a version: (thread id, generation, the new side's commit).
@@ -447,6 +484,7 @@ impl App {
             last_round: None,
             tree: None,
             tree_area: Rect::default(),
+            palette: None,
         };
         app.load(0);
         app.reload();
@@ -1007,6 +1045,7 @@ impl App {
         match self.picker.as_ref().and_then(|p| p.selected().cloned()) {
             Some(Target::Change(i)) => self.load(i),
             Some(Target::Path(p)) => self.load_context(&p),
+            Some(Target::Command(_) | Target::Nothing) => {}
             Some(Target::Thread(id)) => {
                 if let Some((path, _)) = self.thread_place(&id) {
                     match self.source.changes.iter().position(|c| c.path == path) {
@@ -1342,6 +1381,8 @@ impl App {
 
     fn open(&mut self, target: Target) {
         match target {
+            // Commands run through `choose`; there's nothing to open.
+            Target::Command(_) | Target::Nothing => return,
             Target::Change(i) => {
                 let _ = self.push_jump();
                 self.load(i);
@@ -1746,15 +1787,20 @@ impl App {
         if !self.replaying {
             self.status = None;
         }
+        // Ctrl-G anywhere: the keys for where you are. Again, or esc, goes back.
+        if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
+            match self.palette.take() {
+                Some(previous) => self.picker = previous,
+                None => self.open_palette(),
+            }
+            return None;
+        }
         if let Some(picker) = &mut self.picker {
-            let page = picker.page(Picker::areas(self.screen).0);
+            let page = picker.page(picker.areas(self.screen).0);
             match picker.key(key, page) {
                 Outcome::Stay => {}
-                Outcome::Close => self.picker = None,
-                Outcome::Open(t) => {
-                    self.picker = None;
-                    self.open(t);
-                }
+                Outcome::Close => self.picker = self.palette.take().flatten(),
+                Outcome::Open(t) => return self.choose(t),
             }
             return None;
         }
@@ -1841,6 +1887,168 @@ impl App {
             .map(|n| self.pending[..n.min(self.pending.len())].to_vec())
             .unwrap_or_default();
         self.pending = keep;
+        self.execute(command)
+    }
+
+    /// An item chosen in a picker: a file or thread opens; a command runs; a key that's only
+    /// listed (in the palette for the tree, say) goes back to where you were.
+    fn choose(&mut self, t: Target) -> Option<AppAction> {
+        let previous = self.palette.take().flatten();
+        self.picker = None;
+        match t {
+            Target::Command(name) => {
+                let command = keymap::command(name)?;
+                self.pending.clear();
+                return self.execute(command);
+            }
+            Target::Nothing => self.picker = previous,
+            t => self.open(t),
+        }
+        None
+    }
+
+    /// `Ctrl-G` and `space ?`: the palette, listing the keys for where you are (Helix's
+    /// command palette, made contextual). In the file view, choosing a command runs it.
+    fn open_palette(&mut self) {
+        let (title, rows) = self.context_keys();
+        let style = self.theme.get("ui.text.focus");
+        let items = rows
+            .into_iter()
+            .map(|(keys, doc, name)| Item {
+                tags: vec![(keys, style)],
+                text: doc.to_string(),
+                target: name.map_or(Target::Nothing, Target::Command),
+            })
+            .collect();
+        let mut p = Picker::new(vec!["keys", title], items);
+        p.preview = false;
+        self.pending.clear();
+        self.next_key = None;
+        self.count = None;
+        self.palette = Some(self.picker.take());
+        self.picker = Some(p);
+    }
+
+    /// The keys that work where you are: (keys, what they do, the command to run, if any).
+    fn context_keys(&self) -> (&'static str, Vec<KeyRow>) {
+        let fixed = |rows: &[(&str, &'static str)]| -> Vec<KeyRow> {
+            rows.iter()
+                .map(|(k, d)| (k.to_string(), *d, None))
+                .collect()
+        };
+        if self.picker.is_some() {
+            return (
+                "Picker",
+                fixed(&[
+                    ("type", "Filter the list"),
+                    ("up, down, C-p, C-n, S-tab, tab", "Move"),
+                    ("pageup, pagedown, C-u, C-d", "Move a page"),
+                    ("home, end", "First, last"),
+                    ("ret", "Open the selected item"),
+                    ("esc, C-c", "Close"),
+                    ("C-g", "These keys"),
+                ]),
+            );
+        }
+        if let Some(p) = &self.prompt {
+            let mut rows = vec![
+                ("type", "Write the command or pattern"),
+                ("ret", "Run it"),
+                ("esc, C-c", "Cancel"),
+                ("backspace", "Delete; on an empty line, cancel"),
+            ];
+            if matches!(p.kind, PromptKind::Command) {
+                rows.push(("tab, S-tab", "Complete: the next or previous match"));
+            }
+            rows.push(("C-g", "These keys"));
+            return ("Command line", fixed(&rows));
+        }
+        if self.tree.as_ref().is_some_and(|t| t.focused) {
+            return (
+                "File tree",
+                fixed(&[
+                    ("j, down", "Next file"),
+                    ("k, up", "Previous file"),
+                    ("ret, l", "Open the file; the tree stays"),
+                    ("esc", "Back to the file"),
+                    ("q", "Close the tree"),
+                    ("space e", "From the file: back to the tree"),
+                    ("C-g", "These keys"),
+                ]),
+            );
+        }
+        if let Some(b) = &self.comment_box
+            && b.insert
+        {
+            return (
+                "Comment box: insert mode",
+                fixed(&[
+                    ("type", "Write the comment; it's saved as you type"),
+                    ("esc, C-c", "Normal mode: then ret saves and q closes"),
+                    ("ret", "New line"),
+                    ("backspace", "Delete before the cursor"),
+                    ("del", "Delete under the cursor"),
+                    ("left, right, up, down", "Move"),
+                    ("home, end", "Line start, line end"),
+                    ("C-g", "These keys"),
+                ]),
+            );
+        }
+        let mut rows = vec![];
+        let title = if self.comment_box.is_some() {
+            rows.extend(fixed(&[
+                ("ret", "Save the comment"),
+                ("q", "Close the box; the draft is kept"),
+                ("i, a", "Insert before, after the selection"),
+                (":editor", "Edit the comment in $EDITOR"),
+            ]));
+            "Comment box: normal mode"
+        } else if self.mode == Mode::Select {
+            "Select mode"
+        } else {
+            "Normal mode"
+        };
+        let keymap = if self.mode == Mode::Select {
+            &self.keymaps.select
+        } else {
+            &self.keymaps.normal
+        };
+        self.walk_keys(keymap, "", &mut rows);
+        rows.push(("C-g".into(), "These keys", None));
+        (title, rows)
+    }
+
+    /// Every command under `menu` that applies here, with its full key sequence; keys bound to
+    /// the same command are joined.
+    fn walk_keys(&self, menu: &keymap::Menu, prefix: &str, out: &mut Vec<KeyRow>) {
+        let start = out.len();
+        for (key, node) in &menu.keys {
+            let keys = format!("{prefix}{key}");
+            match node {
+                Node::Cmd(c) => {
+                    let boxed = self.comment_box.is_some();
+                    // The box's own keys win over the keymap's, and some actions wait for it.
+                    if boxed
+                        && (matches!(keys.as_str(), "q" | "ret" | "i" | "a")
+                            || matches!(c.action, Action::App(a) if blocked_in_box(a)))
+                    {
+                        continue;
+                    }
+                    if !self.applies(c.name) {
+                        continue;
+                    }
+                    match out[start..].iter_mut().find(|r| r.2 == Some(c.name)) {
+                        Some(r) => r.0 = format!("{}, {keys}", r.0),
+                        None => out.push((keys, c.doc, Some(c.name))),
+                    }
+                }
+                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out),
+            }
+        }
+    }
+
+    /// Runs a command, from its keys or from the palette.
+    fn execute(&mut self, command: &'static keymap::Command) -> Option<AppAction> {
         let result = match command.action {
             Action::Doc(f) => {
                 // As Helix: these jumps go on the jumplist, and these motions repeat with A-.
@@ -2021,35 +2229,7 @@ impl App {
 
     fn app_command(&mut self, action: AppAction) -> Option<AppAction> {
         use AppAction as A;
-        if self.comment_box.is_some()
-            && matches!(
-                action,
-                A::NextFile
-                    | A::PrevFile
-                    | A::FilePicker
-                    | A::ChangedFilePicker
-                    | A::ToggleCollapse
-                    | A::JumpForward
-                    | A::JumpBackward
-                    | A::SaveSelection
-                    | A::Comment
-                    | A::ReviewComment
-                    | A::Reply
-                    | A::EditComment
-                    | A::Submit(_)
-                    | A::ThreadPicker { .. }
-                    | A::NextThread(_)
-                    | A::EdgeThread(_)
-                    | A::NextUnread(_)
-                    | A::ToggleResolved
-                    | A::GotoSuggestion
-                    | A::View(_)
-                    | A::Scope(_)
-                    | A::NextCommit(_)
-                    | A::FilterPrompt
-                    | A::FileTree
-            )
-        {
+        if self.comment_box.is_some() && blocked_in_box(action) {
             self.status = Some((
                 "Close the comment box first: q in normal mode (the draft is kept)".into(),
                 true,
@@ -2155,6 +2335,7 @@ impl App {
                 p.line = "filter ".into();
                 self.prompt = Some(p);
             }
+            A::CommandPalette => self.open_palette(),
             A::FileTree => match &mut self.tree {
                 Some(t) if !t.focused => t.focused = true,
                 Some(_) => self.tree = None,
@@ -2371,7 +2552,7 @@ impl App {
     /// and a click opens.
     fn mouse(&mut self, m: MouseEvent) {
         if let Some(picker) = &mut self.picker {
-            let (list, _) = Picker::areas(self.screen);
+            let (list, _) = picker.areas(self.screen);
             match m.kind {
                 MouseEventKind::ScrollDown => {
                     picker.key(
@@ -2393,8 +2574,7 @@ impl App {
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(t) = picker.target_at(list, m.column, m.row) {
-                        self.picker = None;
-                        self.open(t);
+                        self.choose(t);
                     }
                 }
                 _ => {}
@@ -2887,7 +3067,7 @@ impl App {
         let Some(picker) = &mut self.picker else {
             return;
         };
-        let (list, preview) = Picker::areas(area);
+        let (list, preview) = picker.areas(area);
         picker.render(buf, list, &self.theme);
         let Some(preview) = preview else { return };
         let inner = picker::preview_frame(buf, preview, &self.theme);
@@ -2903,7 +3083,7 @@ impl App {
                 Some((p, line)) => (at_path(&p), Some(line)),
                 None => (None, None),
             },
-            None => (None, None),
+            Some(Target::Command(_) | Target::Nothing) | None => (None, None),
         };
         if let Some(file) = file {
             // Centre the thread, or the first change, as Helix centres a preview on its range.

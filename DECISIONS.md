@@ -338,6 +338,16 @@ PLAN.md:
 - **The per-commit and two-revision diffs share the branch's review,** so their comments reach
   the agent with the rest.
 
+## The key palette (2026-11-04)
+
+- **`Ctrl-G` everywhere:** one key that shows the keys for the current context, insert mode
+  included. `F1` needs `fn` on a Mac; `Ctrl-/` reaches the program differently per terminal;
+  `Option` keys type characters on a Mac; `?` is Helix's reverse search and a typed character
+  in text. `Ctrl-G` is unbound in Helix's every mode, picker and prompt.
+- **It's Helix's command palette** (`space ?`), filtered to what applies, so it's one thing to
+  learn: in the file view `ret` runs the command; elsewhere the keys are listed, and `esc` goes
+  back to where you were (a covered picker comes back with its query).
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.

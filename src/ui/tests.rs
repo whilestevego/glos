@@ -698,7 +698,7 @@ fn mouse_below_notices_and_in_picker() {
     assert_eq!(t.sel(), "one\n#[t|]#wo\n");
     // In the picker a click opens the row under it.
     t.keys("space g");
-    let (list, _) = Picker::areas(t.app.screen);
+    let (list, _) = t.app.picker.as_ref().unwrap().areas(t.app.screen);
     t.mouse(
         MouseEventKind::Down(MouseButton::Left),
         list.x + 4,
@@ -1719,4 +1719,111 @@ fn the_file_tree_starts_open() {
     assert_eq!(t.app.cursor_new_line(), line + 1);
     t.keys("space e q");
     assert!(t.app.tree.is_none());
+}
+
+// ---- The palette: C-g anywhere, space ? in normal mode ----
+
+impl T {
+    /// The palette's title (its second column's header) and its rows' text.
+    fn palette(&self) -> (String, Vec<String>) {
+        let p = self.app.picker.as_ref().expect("the palette is open");
+        let screen = self.screen();
+        (
+            p.columns[1].to_string(),
+            screen.lines().map(str::to_string).collect(),
+        )
+    }
+}
+
+#[test]
+fn palette_screen() {
+    let mut t = T::files_sized(OLD, NEW, 100, 20);
+    t.keys("C-g");
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn palette_lists_what_applies_and_runs_it() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("C-g");
+    let (title, _) = t.palette();
+    assert_eq!(title, "Normal mode");
+    // Typing filters by what a key does.
+    t.typed("comment");
+    assert!(
+        t.shows("space c") && t.shows("Comment on the selected lines"),
+        "{}",
+        t.screen()
+    );
+    // Nothing unsent and no thread: those actions aren't listed.
+    assert!(!t.shows("Reply to the thread"));
+    assert!(!t.shows("Send comments without a verdict"));
+    // ret runs the command, here a submit.
+    t.keys("esc C-g");
+    t.typed("approve").keys("ret");
+    assert!(t.app.picker.is_none());
+    assert!(
+        t.said().starts_with("Round 1 submitted: approved"),
+        "{}",
+        t.said()
+    );
+    // `space ?` is the same palette, and C-g again closes it.
+    t.keys("space ?");
+    assert_eq!(t.palette().0, "Normal mode");
+    t.keys("C-g");
+    assert!(t.app.picker.is_none());
+    // A command that waits for a character still does.
+    t.keys("C-g")
+        .typed("Move to next occurrence of char")
+        .keys("ret");
+    t.keys("x");
+    assert!(t.app.next_key.is_none());
+}
+
+#[test]
+fn palette_in_the_comment_box() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("draft").keys("C-g");
+    assert_eq!(t.palette().0, "Comment box: insert mode");
+    assert!(t.shows("New line"));
+    // esc goes back to typing, the text kept.
+    t.keys("esc");
+    assert!(t.app.picker.is_none());
+    assert!(t.app.comment_box.as_ref().unwrap().insert);
+    t.typed("!");
+    assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "draft!");
+    // In normal mode, the box's own keys first; what waits for the box isn't listed.
+    t.keys("esc C-g");
+    assert_eq!(t.palette().0, "Comment box: normal mode");
+    assert!(t.shows("Save the comment") && t.shows("Close the box"));
+    assert!(
+        !t.shows("Goto next changed file"),
+        "gn waits until the box closes"
+    );
+    assert!(!t.shows("Replay macro"), "q closes the box here");
+}
+
+#[test]
+fn palette_in_the_tree_picker_and_prompt() {
+    let mut t = T::files(OLD, NEW);
+    // The file tree.
+    t.app.app_command(AppAction::FileTree);
+    t.keys("C-g");
+    assert_eq!(t.palette().0, "File tree");
+    assert!(t.shows("Close the tree"));
+    t.keys("ret"); // a listed key: back to the tree, still focused
+    assert!(t.app.picker.is_none() && t.app.tree.as_ref().unwrap().focused);
+    t.keys("q");
+    // A picker: the palette covers it, and esc brings it back with its query.
+    t.keys("space g").typed("main").keys("C-g");
+    assert_eq!(t.palette().0, "Picker");
+    t.keys("esc");
+    assert!(t.shows("main.rs") && t.app.picker.is_some());
+    t.keys("esc");
+    // The command line: the line is kept.
+    t.keys(":").typed("subm").keys("C-g");
+    assert_eq!(t.palette().0, "Command line");
+    assert!(t.shows("Complete"));
+    t.keys("esc");
+    assert_eq!(t.app.prompt.as_ref().unwrap().line, "subm");
 }

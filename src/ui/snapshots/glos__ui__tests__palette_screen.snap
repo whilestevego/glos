@@ -1,0 +1,24 @@
+---
+source: src/ui/tests.rs
+assertion_line: 1739
+expression: t.screen()
+---
+    1  fn main() {
+    2┌────────────────────────────────────────────────────────────────────────────────────────┐
+    3│                                                                                119/119 │
+    4│────────────────────────────────────────────────────────────────────────────────────────│
+    5│   keys     Normal mode                                                                 │
+     │ > h, left  Move left                                                                   │
+     │   j, down  Move down                                                                   │
+     │   k, up    Move up                                                                     │
+     │   l, right Move right                                                                  │
+     │   t        Move till next occurrence of char                                           │
+     │   f        Move to next occurrence of char                                             │
+     │   T        Move till previous occurrence of char                                       │
+     │   F        Move to previous occurrence of char                                         │
+     │   home     Goto line start                                                             │
+     │   end      Goto line end                                                               │
+     │   w        Move to start of next word                                                  │
+     └────────────────────────────────────────────────────────────────────────────────────────┘
+
+ NOR  main.rs                                                                 1/1 files  1 sel  2:1

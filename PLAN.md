@@ -280,6 +280,12 @@ where you are: thread actions when the cursor is on a thread, `]C`/`[C` only in 
 submit only when there's something to submit. The panel is built from the live keymap, so remapped
 keys show their new bindings. It's part of the keymap engine in M1.
 
+**`Ctrl-G` shows every key for where you are,** wherever you are: the file view, the comment box
+(insert or normal mode), the file tree, a picker, the `:` line. It opens Helix's command palette
+(also `space ?` in normal mode), listing only what applies there; type to filter, `ret` runs a
+command, `esc` or `Ctrl-G` goes back. `Ctrl-G` is free in every Helix mode, and every terminal
+sends it the same way (unlike `Ctrl-/`, or `Option` keys on a Mac).
+
 **Mouse:** on by default, and `[editor] mouse = false` turns it off, as in Helix. Click to move the
 cursor, drag to select, wheel to scroll; click files in the tree and picker, click a thread marker
 to expand it, and click buttons in popups. While glos captures the mouse, the terminal's own text
