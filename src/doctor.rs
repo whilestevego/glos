@@ -94,7 +94,17 @@ fn report(db: &Path, log: Option<&Path>) -> String {
         }
         Err(e) => line(format!("Languages: error: {e:#}")),
     }
-    line("MCP: `glos mcp` comes in M2".into());
+    line(
+        match crate::store::open(db).and_then(|c| {
+            Ok(c.query_row("SELECT count(*) FROM sessions", [], |r| r.get::<_, i64>(0))?)
+        }) {
+            Ok(n) => format!(
+                "MCP: {n} agent session{} attached; set up with `claude mcp add glos -- glos mcp`",
+                if n == 1 { "" } else { "s" }
+            ),
+            Err(_) => "MCP: no database, so no sessions".into(),
+        },
+    );
     r
 }
 
@@ -108,7 +118,7 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
         for part in [
             "Database:",
-            "(schema v1)",
+            "(schema v2)",
             "Config:",
             "Theme:",
             "Log: unavailable",
@@ -116,6 +126,7 @@ mod tests {
             "Terminal:",
             "Languages (20):",
             "rust",
+            "MCP: 0 agent sessions attached",
         ] {
             assert!(out.contains(part), "{part} missing from:\n{out}");
         }

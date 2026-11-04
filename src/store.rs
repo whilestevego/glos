@@ -115,6 +115,17 @@ const MIGRATIONS: &[&str] = &[
         last_seen  TEXT NOT NULL
     );
     "#,
+    // v2: delivering submitted rounds to agents, and agents asking for review.
+    r#"
+    -- When an agent's wait_for_review took the round, and which agent.
+    ALTER TABLE rounds ADD COLUMN delivered_at TEXT;
+    ALTER TABLE rounds ADD COLUMN delivered_to TEXT;
+    -- The open request_review, if any: when, by which agent, its note and files (one per line).
+    ALTER TABLE reviews ADD COLUMN requested_at TEXT;
+    ALTER TABLE reviews ADD COLUMN requested_by TEXT;
+    ALTER TABLE reviews ADD COLUMN request_note TEXT;
+    ALTER TABLE reviews ADD COLUMN request_files TEXT;
+    "#,
 ];
 
 /// Opens (creating if needed) the database at `path` and brings its schema up to date.

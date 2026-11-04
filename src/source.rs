@@ -100,8 +100,6 @@ pub fn is_binary(content: &[u8]) -> bool {
     content[..content.len().min(8000)].contains(&0)
 }
 
-// The store keys reviews and records rounds with these from M2.
-#[allow(dead_code)]
 pub struct Git {
     pub repo: gix::ThreadSafeRepository,
     /// The shared git dir (the same for every worktree of a repo), canonical.
@@ -111,7 +109,6 @@ pub struct Git {
     pub branch: Option<String>,
     /// The base ref's name, e.g. `main` or `origin/main`.
     pub base: String,
-    pub merge_base: gix::ObjectId,
     pub head: gix::ObjectId,
 }
 
@@ -120,6 +117,8 @@ pub struct Source {
     /// The root the new side's relative paths are under.
     pub root: PathBuf,
     pub git: Option<Git>,
+    /// The two paths given to `glos diff`, canonical; `None` for git.
+    pub paths: Option<(PathBuf, PathBuf)>,
     /// Paths marked `linguist-generated` in `.gitattributes`.
     generated: Vec<String>,
 }
@@ -196,6 +195,7 @@ impl Source {
             changes: if unchanged { vec![] } else { vec![change] },
             root: new.parent().unwrap_or(Path::new(".")).to_owned(),
             git: None,
+            paths: Some((old.canonicalize()?, new.canonicalize()?)),
             generated: vec![],
         })
     }
@@ -269,6 +269,7 @@ impl Source {
             changes,
             root: new.to_owned(),
             git: None,
+            paths: Some((old.canonicalize()?, new.canonicalize()?)),
             generated: vec![],
         })
     }
@@ -392,12 +393,12 @@ impl Source {
             changes,
             root: worktree.clone(),
             generated,
+            paths: None,
             git: Some(Git {
                 common_dir: repo.common_dir().canonicalize()?,
                 worktree,
                 branch,
                 base,
-                merge_base,
                 head,
                 repo: repo.into_sync(),
             }),

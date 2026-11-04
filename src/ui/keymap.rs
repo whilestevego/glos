@@ -6,6 +6,7 @@ use std::fmt;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::commands::{self as c, Ctx};
+use crate::review::Verdict;
 
 /// What a command does when it runs.
 #[derive(Clone, Copy)]
@@ -50,6 +51,21 @@ pub enum AppAction {
     RepeatLastMotion,
     RecordMacro,
     ReplayMacro,
+    /// `space c`: comment on the selected lines.
+    Comment,
+    /// `space C`: a review-level comment.
+    ReviewComment,
+    Reply,
+    EditComment,
+    Submit(crate::review::Verdict),
+    /// `space d` / `space D`: threads in this file, or the whole review.
+    ThreadPicker {
+        all: bool,
+    },
+    /// `]d` / `[d`: `true` goes forward.
+    NextThread(bool),
+    /// `]D` / `[D`: `true` goes to the last.
+    EdgeThread(bool),
 }
 
 pub struct Command {
@@ -161,6 +177,21 @@ commands! {
     yank_to_clipboard, "Yank selections to clipboard", App(AppAction::YankToClipboard { main_only: false });
     yank_main_selection_to_clipboard, "Yank main selection to clipboard", App(AppAction::YankToClipboard { main_only: true });
     suspend, "Suspend and return to shell", App(AppAction::Suspend);
+    // glos's review actions, on the keys Helix leaves to LSP and editing.
+    comment, "Comment on the selected lines", App(AppAction::Comment);
+    review_comment, "Comment on the whole review", App(AppAction::ReviewComment);
+    reply, "Reply to the thread under the cursor", App(AppAction::Reply);
+    edit_comment, "Edit your latest comment on the thread under the cursor", App(AppAction::EditComment);
+    submit_approve, "Approve", App(AppAction::Submit(Verdict::Approved));
+    submit_changes, "Request changes", App(AppAction::Submit(Verdict::Changes));
+    submit_comment, "Send comments without a verdict", App(AppAction::Submit(Verdict::Comment));
+    // Threads are glos's diagnostics.
+    diagnostics_picker, "Open thread picker", App(AppAction::ThreadPicker { all: false });
+    workspace_diagnostics_picker, "Open thread picker for the whole review", App(AppAction::ThreadPicker { all: true });
+    goto_next_diag, "Goto next thread", App(AppAction::NextThread(true));
+    goto_prev_diag, "Goto previous thread", App(AppAction::NextThread(false));
+    goto_last_diag, "Goto last thread", App(AppAction::EdgeThread(true));
+    goto_first_diag, "Goto first thread", App(AppAction::EdgeThread(false));
 }
 
 pub fn command(name: &str) -> Option<&'static Command> {
@@ -282,20 +313,21 @@ impl Menu {
         self.keys.iter().find(|(k, _)| *k == key).map(|(_, n)| n)
     }
 
-    /// The key help panel's rows: keys bound to the same thing are joined (`h, left`).
-    pub fn help(&self) -> Vec<(String, &'static str)> {
-        let mut rows: Vec<(String, &'static str, *const ())> = vec![];
+    /// The key help panel's rows: keys bound to the same thing are joined (`h, left`). Each
+    /// row has its command's name (none for a menu), so rows that don't apply can be left out.
+    pub fn help(&self) -> Vec<(String, &'static str, Option<&'static str>)> {
+        let mut rows: Vec<(String, &'static str, Option<&'static str>, *const ())> = vec![];
         for (key, node) in &self.keys {
-            let (doc, id) = match node {
-                Node::Cmd(c) => (c.doc, *c as *const Command as *const ()),
-                Node::Menu(m) => (m.name, m as *const Menu as *const ()),
+            let (doc, name, id) = match node {
+                Node::Cmd(c) => (c.doc, Some(c.name), *c as *const Command as *const ()),
+                Node::Menu(m) => (m.name, None, m as *const Menu as *const ()),
             };
-            match rows.iter_mut().find(|r| r.2 == id) {
+            match rows.iter_mut().find(|r| r.3 == id) {
                 Some(r) => r.0 = format!("{}, {key}", r.0),
-                None => rows.push((key.to_string(), doc, id)),
+                None => rows.push((key.to_string(), doc, name, id)),
             }
         }
-        rows.into_iter().map(|(k, d, _)| (k, d)).collect()
+        rows.into_iter().map(|(k, d, n, _)| (k, d, n)).collect()
     }
 }
 
@@ -405,6 +437,8 @@ fn normal_defs() -> Vec<Def> {
             "[",
             "Left bracket",
             vec![
+                cmd("d", "goto_prev_diag"),
+                cmd("D", "goto_first_diag"),
                 cmd("g", "goto_prev_change"),
                 cmd("G", "goto_first_change"),
                 cmd("p", "goto_prev_paragraph"),
@@ -414,6 +448,8 @@ fn normal_defs() -> Vec<Def> {
             "]",
             "Right bracket",
             vec![
+                cmd("d", "goto_next_diag"),
+                cmd("D", "goto_last_diag"),
                 cmd("g", "goto_next_change"),
                 cmd("G", "goto_last_change"),
                 cmd("p", "goto_next_paragraph"),
@@ -459,8 +495,24 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("f", "file_picker"),
                 cmd("g", "changed_file_picker"),
+                cmd("d", "diagnostics_picker"),
+                cmd("D", "workspace_diagnostics_picker"),
                 cmd("y", "yank_to_clipboard"),
                 cmd("Y", "yank_main_selection_to_clipboard"),
+                // Review actions, where Helix has LSP and editing commands.
+                cmd("c", "comment"),
+                cmd("C", "review_comment"),
+                cmd("r", "reply"),
+                cmd("m", "edit_comment"),
+                menu(
+                    "s",
+                    "Submit",
+                    vec![
+                        cmd("a", "submit_approve"),
+                        cmd("r", "submit_changes"),
+                        cmd("c", "submit_comment"),
+                    ],
+                ),
             ],
         ),
         cmd("C-b|pageup", "page_up"),
@@ -529,7 +581,8 @@ mod tests {
     fn help_joins_aliases() {
         let k = Keymaps::default();
         let help = k.normal.help();
-        assert!(help.contains(&("h, left".to_string(), "Move left")));
+        assert!(help.contains(&("h, left".to_string(), "Move left", Some("move_char_left"))));
+        assert!(help.contains(&("g".to_string(), "Goto", None)));
         let Some(Node::Menu(g)) = k.normal.get(Key::parse("g").unwrap()) else {
             panic!()
         };
