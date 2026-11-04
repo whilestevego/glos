@@ -72,6 +72,24 @@ pub enum AppAction {
     ToggleResolved,
     /// `space n`: the line an agent suggested.
     GotoSuggestion,
+    /// `space v` then `f`, `u` or `s`.
+    View(super::ViewKind),
+    /// `space o` then `b`, `r` or `c`.
+    Scope(ScopeKey),
+    /// `]C` / `[C`: the next or previous commit, in the per-commit scope.
+    NextCommit(bool),
+    /// `space o f`: the `:filter` prompt.
+    FilterPrompt,
+    /// `space e`: open, focus or close the file tree.
+    FileTree,
+}
+
+/// Scopes as keys choose them; "since last review" becomes the latest round.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScopeKey {
+    Base,
+    SinceReview,
+    Commits,
 }
 
 pub struct Command {
@@ -202,6 +220,16 @@ commands! {
     goto_prev_unread, "Goto previous unread reply", App(AppAction::NextUnread(false));
     toggle_resolved, "Resolve or reopen the thread under the cursor", App(AppAction::ToggleResolved);
     goto_suggestion, "Goto the line the agent suggested", App(AppAction::GotoSuggestion);
+    view_file, "The whole file, changes in the gutter", App(AppAction::View(super::ViewKind::File));
+    view_unified, "Unified: changes with lines around them", App(AppAction::View(super::ViewKind::Unified));
+    view_split, "Side by side: old and new", App(AppAction::View(super::ViewKind::Split));
+    scope_base, "Branch vs base (or old vs new)", App(AppAction::Scope(ScopeKey::Base));
+    scope_since_review, "Since your last review", App(AppAction::Scope(ScopeKey::SinceReview));
+    scope_commits, "One commit at a time", App(AppAction::Scope(ScopeKey::Commits));
+    filter_files, "Filter files by glob, or to those with threads", App(AppAction::FilterPrompt);
+    goto_next_commit, "Goto next commit", App(AppAction::NextCommit(true));
+    goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
+    file_explorer, "Open the file tree", App(AppAction::FileTree);
 }
 
 pub fn command(name: &str) -> Option<&'static Command> {
@@ -450,6 +478,7 @@ fn normal_defs() -> Vec<Def> {
                 cmd("d", "goto_prev_diag"),
                 cmd("D", "goto_first_diag"),
                 cmd("u", "goto_prev_unread"),
+                cmd("C", "goto_prev_commit"),
                 cmd("g", "goto_prev_change"),
                 cmd("G", "goto_first_change"),
                 cmd("p", "goto_prev_paragraph"),
@@ -462,6 +491,7 @@ fn normal_defs() -> Vec<Def> {
                 cmd("d", "goto_next_diag"),
                 cmd("D", "goto_last_diag"),
                 cmd("u", "goto_next_unread"),
+                cmd("C", "goto_next_commit"),
                 cmd("g", "goto_next_change"),
                 cmd("G", "goto_last_change"),
                 cmd("p", "goto_next_paragraph"),
@@ -518,6 +548,26 @@ fn normal_defs() -> Vec<Def> {
                 cmd("m", "edit_comment"),
                 cmd("x", "toggle_resolved"),
                 cmd("n", "goto_suggestion"),
+                cmd("e", "file_explorer"),
+                menu(
+                    "v",
+                    "View",
+                    vec![
+                        cmd("f", "view_file"),
+                        cmd("u", "view_unified"),
+                        cmd("s", "view_split"),
+                    ],
+                ),
+                menu(
+                    "o",
+                    "Scope",
+                    vec![
+                        cmd("b", "scope_base"),
+                        cmd("r", "scope_since_review"),
+                        cmd("c", "scope_commits"),
+                        cmd("f", "filter_files"),
+                    ],
+                ),
                 menu(
                     "s",
                     "Submit",

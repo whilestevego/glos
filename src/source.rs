@@ -27,6 +27,8 @@ pub enum Content {
     File(PathBuf),
     /// A git blob; for a symlink, its target.
     Blob(gix::ObjectId),
+    /// Content kept by glos: a file as it was when you last submitted.
+    Bytes(std::sync::Arc<[u8]>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +111,7 @@ pub struct Git {
     pub branch: Option<String>,
     /// The base ref's name, e.g. `main` or `origin/main`.
     pub base: String,
+    pub merge_base: gix::ObjectId,
     pub head: gix::ObjectId,
 }
 
@@ -144,6 +147,7 @@ impl Source {
                     )
                 }
             }
+            Content::Bytes(b) => Some(b.to_vec()),
             Content::Blob(id) => {
                 let git = self
                     .git
@@ -399,10 +403,188 @@ impl Source {
                 worktree,
                 branch,
                 base,
+                merge_base,
                 head,
                 repo: repo.into_sync(),
             }),
         })
+    }
+}
+
+/// A commit of the branch, for the per-commit scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    pub id: gix::ObjectId,
+    /// The first line of its message.
+    pub summary: String,
+}
+
+impl Source {
+    /// The branch's commits since its base, oldest first, following first parents.
+    pub fn commits(&self) -> Result<Vec<Commit>> {
+        let g = self.git.as_ref().context("commits need a git repository")?;
+        let repo = g.repo.to_thread_local();
+        let mut out = vec![];
+        for info in repo
+            .rev_walk([g.head])
+            .with_hidden([g.merge_base])
+            .first_parent_only()
+            .all()?
+        {
+            let id = info?.id;
+            let commit = repo.find_commit(id)?;
+            let summary = commit.message()?.summary().to_string();
+            out.push(Commit { id, summary });
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    /// One commit's changes: its first parent's tree against its own.
+    pub fn commit(&self, id: gix::ObjectId) -> Result<Source> {
+        let g = self.git.as_ref().context("commits need a git repository")?;
+        let repo = g.repo.to_thread_local();
+        let commit = repo.find_commit(id)?;
+        let tree = commit.tree()?;
+        let parent = match commit.parent_ids().next() {
+            Some(p) => Some(repo.find_commit(p)?.tree()?),
+            None => None,
+        };
+        use gix::object::tree::diff::ChangeDetached as C;
+        let mut changes = vec![];
+        for c in repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), None)? {
+            let blob = |m: gix::object::tree::EntryMode| m.is_blob() || m.is_link();
+            let change = match c {
+                C::Addition {
+                    location,
+                    entry_mode,
+                    id,
+                    ..
+                } if blob(entry_mode) => Change {
+                    path: location.to_string(),
+                    old_path: None,
+                    old: Content::None,
+                    new: Content::Blob(id),
+                    old_mode: None,
+                    new_mode: Some(tree_mode(entry_mode)),
+                    same_content: false,
+                },
+                C::Deletion {
+                    location,
+                    entry_mode,
+                    id,
+                    ..
+                } if blob(entry_mode) => Change {
+                    path: location.to_string(),
+                    old_path: Some(location.to_string()),
+                    old: Content::Blob(id),
+                    new: Content::None,
+                    old_mode: Some(tree_mode(entry_mode)),
+                    new_mode: None,
+                    same_content: false,
+                },
+                C::Modification {
+                    location,
+                    previous_entry_mode,
+                    previous_id,
+                    entry_mode,
+                    id,
+                } if blob(entry_mode) => Change {
+                    path: location.to_string(),
+                    old_path: Some(location.to_string()),
+                    old: Content::Blob(previous_id),
+                    new: Content::Blob(id),
+                    old_mode: Some(tree_mode(previous_entry_mode)),
+                    new_mode: Some(tree_mode(entry_mode)),
+                    same_content: previous_id == id,
+                },
+                C::Rewrite {
+                    source_location,
+                    source_entry_mode,
+                    source_id,
+                    location,
+                    entry_mode,
+                    id,
+                    ..
+                } if blob(entry_mode) => Change {
+                    path: location.to_string(),
+                    old_path: Some(source_location.to_string()),
+                    old: Content::Blob(source_id),
+                    new: Content::Blob(id),
+                    old_mode: Some(tree_mode(source_entry_mode)),
+                    new_mode: Some(tree_mode(entry_mode)),
+                    same_content: source_id == id,
+                },
+                _ => continue,
+            };
+            changes.push(change);
+        }
+        changes.sort_by(|a, b| a.path.cmp(&b.path));
+        let generated = linguist_generated(&repo, &changes)?;
+        Ok(Source {
+            changes,
+            root: self.root.clone(),
+            git: Some(Git {
+                repo: g.repo.clone(),
+                common_dir: g.common_dir.clone(),
+                worktree: g.worktree.clone(),
+                branch: g.branch.clone(),
+                base: g.base.clone(),
+                merge_base: g.merge_base,
+                head: g.head,
+            }),
+            paths: self.paths.clone(),
+            generated,
+        })
+    }
+
+    /// The changes since you last submitted: each file now against its content in `snapshot`
+    /// (path to content). Files reverted since count too; files unchanged since don't.
+    pub fn since(mut self, snapshot: &HashMap<String, Vec<u8>>) -> Result<Source> {
+        let mut changes = vec![];
+        for c in &self.changes {
+            let now = self.read(&c.new)?;
+            let then = snapshot.get(&c.path);
+            if now.as_ref() == then {
+                continue;
+            }
+            changes.push(Change {
+                path: c.path.clone(),
+                old_path: then.map(|_| c.path.clone()),
+                old: then.map_or(Content::None, |b| Content::Bytes(b.as_slice().into())),
+                new: c.new.clone(),
+                old_mode: then.and(c.new_mode),
+                new_mode: c.new_mode,
+                same_content: false,
+            });
+        }
+        // In the snapshot but not changed any more: reverted to the base since.
+        for (path, then) in snapshot {
+            if self.changes.iter().any(|c| &c.path == path) {
+                continue;
+            }
+            let disk = self.root.join(path);
+            let now = std::fs::read(&disk).ok();
+            if now.as_ref() == Some(then) {
+                continue;
+            }
+            changes.push(Change {
+                path: path.clone(),
+                old_path: Some(path.clone()),
+                old: Content::Bytes(then.as_slice().into()),
+                new: if now.is_some() {
+                    Content::File(disk.clone())
+                } else {
+                    Content::None
+                },
+                old_mode: Some(Mode::File),
+                new_mode: now.is_some().then(|| disk_mode(&disk)).transpose()?,
+                same_content: false,
+            });
+        }
+        changes.sort_by(|a, b| a.path.cmp(&b.path));
+        self.changes = changes;
+        Ok(self)
     }
 }
 
@@ -620,6 +802,93 @@ mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    #[test]
+    fn commits_one_at_a_time() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        git(r, &["init", "-q"]);
+        write(&r.join("a.txt"), "a\n");
+        write(&r.join("c.txt"), &"c\n".repeat(20));
+        git(r, &["add", "."]);
+        git(r, &["commit", "-qm", "base"]);
+        git(r, &["switch", "-qc", "feature"]);
+        write(&r.join("a.txt"), "a changed\n");
+        git(r, &["commit", "-qam", "change a\n\nwith a body"]);
+        write(&r.join("b.txt"), "new\n");
+        git(r, &["mv", "c.txt", "moved.txt"]);
+        git(r, &["add", "."]);
+        git(r, &["commit", "-qm", "add b, move c"]);
+        // Uncommitted work isn't in any commit.
+        write(&r.join("a.txt"), "dirty\n");
+
+        let s = Source::git(r, None).unwrap();
+        let commits = s.commits().unwrap();
+        let summaries: Vec<&str> = commits.iter().map(|c| c.summary.as_str()).collect();
+        assert_eq!(summaries, ["change a", "add b, move c"]);
+        let first = s.commit(commits[0].id).unwrap();
+        assert_eq!(kinds(&first), [("a.txt".to_string(), Kind::Modified)]);
+        let new = first.read(&first.changes[0].new).unwrap().unwrap();
+        assert_eq!(
+            new, b"a changed\n",
+            "the commit's content, not the worktree's"
+        );
+        let second = s.commit(commits[1].id).unwrap();
+        assert_eq!(
+            kinds(&second),
+            [
+                ("b.txt".to_string(), Kind::Added),
+                ("moved.txt".to_string(), Kind::Renamed)
+            ]
+        );
+        // Without git there are no commits.
+        let (o, n) = (r.join("a.txt"), r.join("b.txt"));
+        assert!(Source::diff(&o, &n).unwrap().commits().is_err());
+    }
+
+    fn kinds(s: &Source) -> Vec<(String, Kind)> {
+        s.changes
+            .iter()
+            .map(|c| (c.path.clone(), c.kind()))
+            .collect()
+    }
+
+    #[test]
+    fn since_a_snapshot() {
+        let d = tempfile::tempdir().unwrap();
+        let (o, n) = (d.path().join("o"), d.path().join("n"));
+        write(&o.join("same.txt"), "base\n");
+        write(&n.join("same.txt"), "reviewed\n");
+        write(&o.join("moved.txt"), "base\n");
+        write(&n.join("moved.txt"), "changed again\n");
+        write(&n.join("new.txt"), "added after review\n");
+        write(&o.join("back.txt"), "base\n");
+        write(&n.join("back.txt"), "base\n");
+        let s = Source::diff(&o, &n).unwrap();
+        let snapshot: HashMap<String, Vec<u8>> = [
+            ("same.txt", "reviewed\n"),
+            ("moved.txt", "reviewed\n"),
+            // Changed when reviewed, back to the base now.
+            ("back.txt", "reviewed\n"),
+        ]
+        .into_iter()
+        .map(|(p, c)| (p.to_string(), c.as_bytes().to_vec()))
+        .collect();
+        let since = s.since(&snapshot).unwrap();
+        assert_eq!(
+            kinds(&since),
+            [
+                ("back.txt".to_string(), Kind::Modified),
+                ("moved.txt".to_string(), Kind::Modified),
+                ("new.txt".to_string(), Kind::Added)
+            ]
+        );
+        let c = &since.changes[1];
+        assert_eq!(since.read(&c.old).unwrap().unwrap(), b"reviewed\n");
+        assert_eq!(since.read(&c.new).unwrap().unwrap(), b"changed again\n");
+        let back = &since.changes[0];
+        assert_eq!(since.read(&back.new).unwrap().unwrap(), b"base\n");
     }
 
     #[test]

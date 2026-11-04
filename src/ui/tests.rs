@@ -1319,3 +1319,239 @@ fn threads_follow_changes_made_while_glos_was_closed() {
     let a = app.threads[0].anchor.clone().unwrap();
     assert_eq!((a.start, a.end), (4, 4));
 }
+
+// ---- Views, scopes, the file tree ----
+
+/// A git repo with `main` and a branch `topic` of two commits, then uncommitted work.
+fn git_repo() -> T {
+    let dir = tempfile::tempdir().unwrap();
+    let r = dir.path().join("repo");
+    std::fs::create_dir_all(&r).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(&r)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(r.join("a.rs"), lines(10)).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    git(&["checkout", "-qb", "topic"]);
+    std::fs::write(r.join("a.rs"), lines(10).replace("line 2\n", "line two\n")).unwrap();
+    git(&["commit", "-qam", "two"]);
+    std::fs::write(r.join("b.rs"), "fn b() {}\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "add b"]);
+    std::fs::write(r.join("c.rs"), "uncommitted\n").unwrap();
+    let source = Source::git(&r, None).unwrap();
+    T::new(source, dir, 72, 14, &config())
+}
+
+#[test]
+fn unified_view_screen() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space v u");
+    insta::assert_snapshot!(t.screen());
+    // Removed and added lines differ by colour, which the text snapshot doesn't see.
+    let sign = t.app.main_file().gutter_width() as u16 - 1;
+    let fg = |name: &str| t.app.theme.get(name).fg.unwrap_or(Color::Reset);
+    assert_eq!(t.cell(sign, 1).fg, fg("diff.minus.gutter"));
+    assert_eq!(t.cell(sign, 2).fg, fg("diff.plus.gutter"));
+    assert_ne!(fg("diff.minus.gutter"), fg("diff.plus.gutter"));
+}
+
+#[test]
+fn split_view_screen() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space v s");
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn views_keep_your_place() {
+    let mut t = T::files("", &lines(40));
+    t.keys(":").typed("30").keys("ret");
+    let line = |t: &T| t.app.cursor_new_line();
+    assert_eq!(line(&t), 29);
+    for v in ["u", "s", "f", "u", "f"] {
+        t.keys(&format!("space v {v}"));
+        assert_eq!(line(&t), 29, "view {v}");
+    }
+    assert!(
+        t.sel().contains("#[l|]#ine 30"),
+        "back in the file, on the same line"
+    );
+}
+
+#[test]
+fn unified_folds_and_comments_go_on_the_new_side() {
+    let old = lines(20);
+    let new = old.replace("line 10\n", "line ten\n");
+    let mut t = T::files(&old, &new);
+    t.keys("space v u");
+    assert!(t.shows("⋯ 6 unchanged lines"), "{}", t.screen());
+    assert!(t.shows(" unified"));
+    // The cursor opens on the change; the line above it is the removed one.
+    assert_eq!(t.app.cursor_new_line(), 9);
+    t.keys("k space c");
+    assert!(
+        t.said().starts_with("Comments go on the new side"),
+        "{}",
+        t.said()
+    );
+    // Selecting the removed and added lines comments on the added one.
+    t.keys("x x space c");
+    assert!(t.shows("Comment on main.rs:10 "), "{}", t.screen());
+    t.typed("ten?").keys("esc ret");
+    assert_eq!(t.thread_lines(), [(10, 10, "open".into())]);
+    // The thread shows under its line in the view, and in the file view too.
+    assert!(t.shows("▸ you: ten?"));
+    let row = |t: &T, s: &str| t.screen().lines().position(|l| l.contains(s)).unwrap();
+    assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
+    t.keys("space v f");
+    assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
+}
+
+#[test]
+fn split_keeps_the_sides_level_with_threads() {
+    let mut t = T::files("a\nb\nc\n", "a\nB\nnew\nc\n");
+    t.keys("space v s");
+    t.keys("g g j space c").typed("x").keys("esc ret");
+    let screen = t.screen();
+    let lines: Vec<&str> = screen.lines().collect();
+    // The thread row on the right has a blank row on the left: `c` is level on both sides.
+    let c_row: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.matches(" c").count() == 2)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(c_row.len(), 1, "{screen}");
+    assert!(lines[2].contains("▸ you: x"), "{screen}");
+    assert!(!t.app.wrap(), "side by side never wraps");
+}
+
+#[test]
+fn since_the_last_review() {
+    let mut t = T::folders(|o, n| {
+        for f in ["a.rs", "b.rs"] {
+            std::fs::write(o.join(f), "1\n").unwrap();
+            std::fs::write(n.join(f), "1\n2\n").unwrap();
+        }
+    });
+    t.keys("space o r");
+    assert!(t.said().starts_with("Nothing submitted yet"));
+    assert!(!t.shows("Since your last review"));
+    t.keys("space s a");
+    // The agent changes b.rs after the review.
+    std::fs::write(t._dir.path().join("new/b.rs"), "1\n2\n3\n").unwrap();
+    t.app.files_changed();
+    t.keys("space o r");
+    assert_eq!(t.said(), "Since round 1: 1 file");
+    assert_eq!(t.path(), "b.rs");
+    assert!(t.shows("Since round 1"), "{}", t.screen());
+    // Only line 3 is new since the review.
+    assert_eq!(t.app.base_file().hunks.len(), 1);
+    assert_eq!(t.app.base_file().hunks[0].after, 2..3);
+    t.keys("space o b");
+    assert_eq!(t.said(), "Old vs new: 2 files");
+}
+
+#[test]
+fn one_commit_at_a_time() {
+    let mut t = git_repo();
+    assert_eq!(t.app.source.changes.len(), 3);
+    // `]C` only shows in the per-commit scope.
+    t.keys("]");
+    assert!(!t.shows("Goto next commit"));
+    t.keys("esc space o c");
+    assert!(t.said().starts_with("Commit 1/2"), "{}", t.said());
+    assert_eq!(t.path(), "a.rs");
+    assert!(t.shows("two"), "{}", t.screen());
+    t.keys("] C");
+    assert!(t.said().contains("Commit 2/2") && t.said().contains("add b"));
+    assert_eq!(t.path(), "b.rs");
+    t.keys("] C");
+    assert_eq!(t.said(), "The last commit");
+    // A commit is history: no comments here.
+    t.keys("space c");
+    assert!(t.said().starts_with("A commit is history"));
+    t.keys("[ C [ C");
+    assert_eq!(t.said(), "The first commit");
+    t.keys("space o b");
+    assert!(t.said().starts_with("Branch vs base: 3 files"));
+}
+
+#[test]
+fn filtering_files() {
+    let mut t = T::folders(|o, n| {
+        for f in ["a.rs", "b.md", "c.rs"] {
+            std::fs::write(o.join(f), "1\n").unwrap();
+            std::fs::write(n.join(f), "2\n").unwrap();
+        }
+    });
+    t.keys(":").typed("filter *.rs").keys("ret");
+    assert_eq!(t.said(), "Old vs new, files *.rs: 2 files");
+    t.keys("g n g n");
+    assert_eq!(t.path(), "a.rs", "b.md is left out");
+    t.keys("space c").typed("x").keys("esc ret g n");
+    t.keys(":").typed("filter threads").keys("ret");
+    assert_eq!(t.said(), "Old vs new, files with open threads: 1 file");
+    t.keys(":").typed("filter").keys("ret");
+    assert_eq!(t.said(), "Old vs new: 3 files");
+    t.keys(":").typed("filter [").keys("ret");
+    assert!(t.said().starts_with("Bad glob"));
+}
+
+#[test]
+fn file_tree() {
+    let mut t = T::folders(|o, n| {
+        std::fs::create_dir_all(n.join("src")).unwrap();
+        std::fs::create_dir_all(o.join("src")).unwrap();
+        std::fs::write(o.join("src/a.rs"), "1\n2\n").unwrap();
+        std::fs::write(n.join("src/a.rs"), "1\nTWO\n3\n").unwrap();
+        std::fs::write(n.join("z.md"), "new\n").unwrap();
+    });
+    t.keys("space e");
+    insta::assert_snapshot!(t.screen());
+    assert!(t.shows("+2 -1"));
+    t.keys("j ret");
+    assert_eq!(t.path(), "z.md");
+    // Unfocused, keys go to the file again; the tree stays.
+    t.keys("g g");
+    assert!(t.app.tree.is_some());
+    t.keys("space e k ret");
+    assert_eq!(t.path(), "src/a.rs");
+    // A click opens a file too.
+    let y = t.screen().lines().position(|l| l.contains("z.md")).unwrap() as u16;
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 3, y);
+    assert_eq!(t.path(), "z.md");
+    t.keys("space e q");
+    assert!(t.app.tree.is_none());
+    assert!(!t.shows("Changed files"));
+}
+
+#[test]
+fn view_and_scope_help_list_what_applies() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space v");
+    assert!(!t.shows("The whole file") && t.shows("Unified") && t.shows("Side by side"));
+    t.keys("esc space o");
+    assert!(!t.shows("One commit at a time"), "not git");
+    assert!(!t.shows("Since your last review"), "nothing submitted");
+    assert!(t.shows("Filter files"));
+    t.keys("esc");
+    let (_, items) = completions("view ");
+    assert_eq!(items.len(), 3);
+}

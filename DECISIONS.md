@@ -303,6 +303,24 @@ PLAN.md:
 - **One suggestion per review,** the latest, kept on the review row: a suggestion is a pointer,
   not history.
 
+## M4 (2026-11-04)
+
+- **Views are documents:** the unified and side-by-side views are built as read-only text, each
+  line knowing where it came from (same, added, removed, folded, padding). Helix's motions,
+  search, selections and highlighting work on them unchanged; comments take the selected lines
+  that are on the new side; threads sit under their new-side line. Highlighting comes from each
+  side's own syntax tree, so it's the same as in the file view.
+- **Side by side never wraps,** so both sides stay line for line; padding rows keep changes level,
+  and thread rows on the right have blank rows on the left.
+- **Per-commit scope is history:** threads are anchored to the branch's code, not a commit's, so
+  they're hidden there and comments are refused, rather than shown at the wrong lines.
+- **Since last review** compares each file with its snapshot from the latest round, and counts
+  files reverted since; it works with or without git.
+- **The file tree is a panel,** not a picker: it stays visible while you read, `space e` focuses
+  it, `ret` opens a file and gives focus back, `q` closes it.
+- **`space v` and `space o` are menus,** like `space s`, so the key help panel lists the choices
+  that apply (`]C` only in the per-commit scope, "since last review" only after a submit).
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
