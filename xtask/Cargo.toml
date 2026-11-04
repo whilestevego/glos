@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+description = "glos's maintenance tasks: cargo xtask fetch-helix, cargo xtask keymap"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+flate2 = "1.1.10"
+regex = "1.13.1"
+tar = "0.4.46"
+toml = "0.8"
+ureq = "3.5.1"
