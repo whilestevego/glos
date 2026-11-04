@@ -38,10 +38,23 @@ pub struct Review {
     pub requested_by: Option<String>,
     pub request_note: Option<String>,
     pub updated_at: String,
+    /// An agent's latest `suggest`: a line for you to look at.
+    pub suggestion: Option<Suggestion>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Suggestion {
+    pub at: String,
+    pub by: String,
+    pub path: String,
+    pub line: u32,
+    pub note: String,
 }
 
 const REVIEW_COLS: &str = "id, source_kind, folder, old_path, new_path, branch, base, status, \
-                           requested_at, requested_by, request_note, updated_at";
+                           requested_at, requested_by, request_note, updated_at, \
+                           suggested_at, suggested_by, suggested_path, suggested_line, \
+                           suggested_note";
 
 fn review_row(r: &Row) -> rusqlite::Result<Review> {
     Ok(Review {
@@ -57,6 +70,16 @@ fn review_row(r: &Row) -> rusqlite::Result<Review> {
         requested_by: r.get(9)?,
         request_note: r.get(10)?,
         updated_at: r.get(11)?,
+        suggestion: match r.get::<_, Option<String>>(12)? {
+            Some(at) => Some(Suggestion {
+                at,
+                by: r.get(13)?,
+                path: r.get(14)?,
+                line: r.get(15)?,
+                note: r.get::<_, Option<String>>(16)?.unwrap_or_default(),
+            }),
+            None => None,
+        },
     })
 }
 
@@ -174,6 +197,24 @@ impl Review {
         }
     }
 
+    /// An agent points you at a line; an open glos shows it, and `space n` goes there.
+    pub fn suggest(
+        &self,
+        conn: &Connection,
+        by: &str,
+        path: &str,
+        line: u32,
+        note: &str,
+    ) -> Result<()> {
+        conn.execute(
+            "UPDATE reviews SET suggested_at = ?2, suggested_by = ?3, suggested_path = ?4,
+                    suggested_line = ?5, suggested_note = ?6, updated_at = ?2
+             WHERE id = ?1",
+            params![self.id, now(), by, path, line, note],
+        )?;
+        Ok(())
+    }
+
     /// An agent says its work is ready, optionally naming the files it touched.
     pub fn request(&self, conn: &Connection, by: &str, note: &str, files: &[String]) -> Result<()> {
         conn.execute(
@@ -214,6 +255,8 @@ pub struct Thread {
     pub created_round: u32,
     /// The anchored lines' text when the thread was made.
     pub anchor_text: Option<String>,
+    /// When you last opened it: agents' comments after this are unread.
+    pub last_seen_at: Option<String>,
     pub comments: Vec<Comment>,
 }
 
@@ -239,6 +282,13 @@ impl Comment {
 }
 
 impl Thread {
+    /// Has comments from agents you haven't opened the thread to see.
+    pub fn unread(&self) -> bool {
+        self.comments.iter().any(|c| {
+            c.author != YOU && self.last_seen_at.as_ref().is_none_or(|s| &c.created_at > s)
+        })
+    }
+
     /// Your latest comment in the thread, which `space m` edits.
     pub fn latest_yours(&self) -> Option<&Comment> {
         self.comments.iter().rev().find(|c| c.author == YOU)
@@ -249,7 +299,8 @@ impl Thread {
 pub fn threads(conn: &Connection, review_id: &str) -> Result<Vec<Thread>> {
     let mut threads: Vec<Thread> = conn
         .prepare(
-            "SELECT id, path, line_start, line_end, status, created_round, anchor_text
+            "SELECT id, path, line_start, line_end, status, created_round, anchor_text,
+                    last_seen_at
              FROM threads WHERE review_id = ?1 ORDER BY path, line_start, rowid",
         )?
         .query_map([review_id], |r| {
@@ -267,6 +318,7 @@ pub fn threads(conn: &Connection, review_id: &str) -> Result<Vec<Thread>> {
                 status: r.get(4)?,
                 created_round: r.get(5)?,
                 anchor_text: r.get(6)?,
+                last_seen_at: r.get(7)?,
                 comments: vec![],
             })
         })?
@@ -318,6 +370,46 @@ pub fn comment(
     author: &str,
     body: &str,
 ) -> Result<String> {
+    comment_as(conn, review_id, anchor, author, "comment", body)
+}
+
+/// An agent's note on its own change, made before you review: a thread like a comment's, of
+/// kind `annotation`.
+pub fn annotate(
+    conn: &Connection,
+    review_id: &str,
+    anchor: &Anchor,
+    file: &str,
+    author: &str,
+    body: &str,
+) -> Result<String> {
+    let lines = file.split_inclusive('\n').count().max(1) as u32;
+    if anchor.start == 0 || anchor.start > anchor.end || anchor.end > lines {
+        bail!(
+            "{} has {lines} lines; lines {}-{} aren't in it",
+            anchor.path,
+            anchor.start,
+            anchor.end
+        );
+    }
+    comment_as(
+        conn,
+        review_id,
+        Some((anchor, file)),
+        author,
+        "annotation",
+        body,
+    )
+}
+
+fn comment_as(
+    conn: &Connection,
+    review_id: &str,
+    anchor: Option<(&Anchor, &str)>,
+    author: &str,
+    kind: &str,
+    body: &str,
+) -> Result<String> {
     let tx = conn.unchecked_transaction()?;
     let id = new_id();
     let round = next_round(&tx, review_id)?;
@@ -352,18 +444,24 @@ pub fn comment(
             )?;
         }
     }
-    add_comment(&tx, &id, author, body)?;
+    add_comment(&tx, &id, author, kind, body)?;
     touch(&tx, review_id)?;
     tx.commit()?;
     Ok(id)
 }
 
-fn add_comment(conn: &Connection, thread_id: &str, author: &str, body: &str) -> Result<String> {
+fn add_comment(
+    conn: &Connection,
+    thread_id: &str,
+    author: &str,
+    kind: &str,
+    body: &str,
+) -> Result<String> {
     let id = new_id();
     conn.execute(
-        "INSERT INTO comments (id, thread_id, author, body, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, thread_id, author, body, now()],
+        "INSERT INTO comments (id, thread_id, author, kind, body, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, thread_id, author, kind, body, now()],
     )?;
     Ok(id)
 }
@@ -381,10 +479,161 @@ fn review_of_thread(conn: &Connection, thread_id: &str) -> Result<String> {
 pub fn reply(conn: &Connection, thread_id: &str, author: &str, body: &str) -> Result<String> {
     let tx = conn.unchecked_transaction()?;
     let review = review_of_thread(&tx, thread_id)?;
-    let id = add_comment(&tx, thread_id, author, body)?;
+    let id = add_comment(&tx, thread_id, author, "comment", body)?;
     touch(&tx, &review)?;
     tx.commit()?;
     Ok(id)
+}
+
+/// Resolves or reopens a thread, with a note when one is given (as a comment by `by`).
+/// Reopening is also how an outdated thread comes back.
+pub fn set_status(
+    conn: &Connection,
+    thread_id: &str,
+    status: &str,
+    by: &str,
+    note: &str,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    let review = review_of_thread(&tx, thread_id)?;
+    if !note.trim().is_empty() {
+        add_comment(&tx, thread_id, by, "comment", note.trim())?;
+    }
+    tx.execute(
+        "UPDATE threads SET status = ?2 WHERE id = ?1",
+        params![thread_id, status],
+    )?;
+    touch(&tx, &review)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// You opened the thread: its agents' comments so far are read.
+pub fn mark_seen(conn: &Connection, thread_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE threads SET last_seen_at = ?2 WHERE id = ?1",
+        params![thread_id, now()],
+    )?;
+    Ok(())
+}
+
+/// What [`reanchor`] did to a file's threads.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Reanchored {
+    /// Threads placed on new lines.
+    pub moved: usize,
+    /// Threads whose text is gone, not yet marked outdated: the files haven't settled.
+    pub pending: usize,
+    pub outdated: usize,
+}
+
+/// Places the threads on `path` again now that its content is `new`, and records where they
+/// went (with `new` as their content from now on). Threads whose text is gone become outdated
+/// only when `settled`, so they don't flicker while an agent is mid-edit. Outdated threads stay
+/// where they were until reopened.
+pub fn reanchor(
+    conn: &Connection,
+    review_id: &str,
+    path: &str,
+    new: &str,
+    settled: bool,
+) -> Result<Reanchored> {
+    /// A thread as stored, with its file's content when it was last placed.
+    struct Stored {
+        id: String,
+        start: u32,
+        end: u32,
+        text: String,
+        above: String,
+        below: String,
+        status: String,
+        old: String,
+    }
+    let rows: Vec<Stored> = conn
+        .prepare(
+            "SELECT t.id, t.line_start, t.line_end, t.anchor_text, t.context_above,
+                    t.context_below, t.status, b.content
+             FROM threads t JOIN blobs b ON b.hash = t.file_hash
+             WHERE t.review_id = ?1 AND t.path = ?2 AND t.status != 'outdated'",
+        )?
+        .query_map(params![review_id, path], |r| {
+            let content: Vec<u8> = r.get(7)?;
+            Ok(Stored {
+                id: r.get(0)?,
+                start: r.get(1)?,
+                end: r.get(2)?,
+                text: r.get(3)?,
+                above: r.get(4)?,
+                below: r.get(5)?,
+                status: r.get(6)?,
+                old: String::from_utf8_lossy(&content).into_owned(),
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut done = Reanchored::default();
+    let tx = conn.unchecked_transaction()?;
+    let mut hash = None;
+    for Stored {
+        id,
+        start,
+        end,
+        text,
+        above,
+        below,
+        status,
+        old,
+    } in rows
+    {
+        if old == new {
+            continue;
+        }
+        let a = crate::reanchor::Anchored {
+            old: &old,
+            start: start as usize - 1,
+            end: end as usize - 1,
+            text: &text,
+            above: &above,
+            below: &below,
+        };
+        match crate::reanchor::place(&a, new) {
+            Some((s, e)) => {
+                let hash = match &hash {
+                    Some(h) => h,
+                    None => hash.insert(put_blob(&tx, new.as_bytes())?),
+                };
+                let lines: Vec<&str> = new.split_inclusive('\n').collect();
+                let ctx = |r: std::ops::Range<usize>| lines.get(r).unwrap_or_default().concat();
+                tx.execute(
+                    "UPDATE threads SET line_start = ?2, line_end = ?3, file_hash = ?4,
+                            context_above = ?5, context_below = ?6
+                     WHERE id = ?1",
+                    params![
+                        id,
+                        s as u32 + 1,
+                        e as u32 + 1,
+                        hash,
+                        ctx(s.saturating_sub(3)..s),
+                        ctx(e + 1..(e + 4).min(lines.len()))
+                    ],
+                )?;
+                if (s as u32 + 1, e as u32 + 1) != (start, end) {
+                    done.moved += 1;
+                }
+            }
+            // A resolved thread whose code is gone stays resolved.
+            None if status != "open" => {}
+            None if settled => {
+                tx.execute(
+                    "UPDATE threads SET status = 'outdated' WHERE id = ?1",
+                    [&id],
+                )?;
+                done.outdated += 1;
+            }
+            None => done.pending += 1,
+        }
+    }
+    tx.commit()?;
+    Ok(done)
 }
 
 /// Changes a comment. Before it's sent this is silent; after, the comment is marked edited and
@@ -962,6 +1211,146 @@ mod tests {
         assert_eq!(
             draft(&f.conn, id, "line:a:1-1").unwrap().as_deref(),
             Some("other")
+        );
+    }
+
+    #[test]
+    fn agents_annotate_reply_resolve_and_reopen() {
+        let f = fx();
+        let id = &f.review.id;
+        let t = annotate(
+            &f.conn,
+            id,
+            &at("new.rs", 2, 3),
+            FILE,
+            "claude",
+            "why I did this",
+        )
+        .unwrap();
+        let th = |f: &Fx| {
+            threads(&f.conn, id)
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == t)
+                .unwrap()
+        };
+        assert_eq!(th(&f).comments[0].kind, "annotation");
+        assert!(
+            th(&f).unread(),
+            "an agent's note is unread until you open it"
+        );
+        // Out of range is refused.
+        let err = annotate(&f.conn, id, &at("new.rs", 8, 12), FILE, "claude", "x").unwrap_err();
+        assert!(err.to_string().contains("8 lines"), "{err}");
+        assert!(annotate(&f.conn, id, &at("new.rs", 0, 1), FILE, "claude", "x").is_err());
+
+        mark_seen(&f.conn, &t).unwrap();
+        assert!(!th(&f).unread());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        reply(&f.conn, &t, "claude", "also").unwrap();
+        assert!(th(&f).unread(), "a new reply is unread");
+        // Your own replies never are.
+        mark_seen(&f.conn, &t).unwrap();
+        reply(&f.conn, &t, YOU, "ok").unwrap();
+        assert!(!th(&f).unread());
+
+        set_status(
+            &f.conn,
+            &t,
+            "resolved",
+            "claude",
+            "fixed in the next commit",
+        )
+        .unwrap();
+        assert_eq!(th(&f).status, "resolved");
+        assert_eq!(
+            th(&f).comments.last().unwrap().body,
+            "fixed in the next commit"
+        );
+        // No note, no comment.
+        let n = th(&f).comments.len();
+        set_status(&f.conn, &t, "open", YOU, "  ").unwrap();
+        assert_eq!((th(&f).status.as_str(), th(&f).comments.len()), ("open", n));
+        assert!(set_status(&f.conn, "nope", "open", YOU, "").is_err());
+    }
+
+    #[test]
+    fn suggestions_are_kept_on_the_review() {
+        let f = fx();
+        assert_eq!(f.review.suggestion, None);
+        f.review
+            .suggest(&f.conn, "claude", "new.rs", 4, "start here")
+            .unwrap();
+        let s = f.review.reload(&f.conn).unwrap().suggestion.unwrap();
+        assert_eq!(
+            (s.by.as_str(), s.path.as_str(), s.line, s.note.as_str()),
+            ("claude", "new.rs", 4, "start here")
+        );
+    }
+
+    #[test]
+    fn reanchoring_moves_threads_and_outdates_them_once_settled() {
+        let f = fx();
+        let id = &f.review.id;
+        let moves = comment(&f.conn, id, Some((&at("new.rs", 5, 6), FILE)), YOU, "e f").unwrap();
+        let goes = comment(&f.conn, id, Some((&at("new.rs", 2, 2), FILE)), YOU, "b").unwrap();
+        let done = comment(&f.conn, id, Some((&at("new.rs", 3, 3), FILE)), YOU, "c").unwrap();
+        set_status(&f.conn, &done, "resolved", YOU, "").unwrap();
+        let get = |t: &str| {
+            threads(&f.conn, id)
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == t)
+                .unwrap()
+        };
+
+        // Two lines added at the top; `b` and `c` rewritten.
+        let new = "x\ny\na\nB\nC\nd\ne\nf\ng\nh\n";
+        let r = reanchor(&f.conn, id, "new.rs", new, false).unwrap();
+        assert_eq!(
+            r,
+            Reanchored {
+                moved: 1,
+                pending: 1,
+                outdated: 0
+            }
+        );
+        assert_eq!(get(&moves).anchor.unwrap(), at("new.rs", 7, 8));
+        assert_eq!(
+            get(&goes).status,
+            "open",
+            "not outdated until the files settle"
+        );
+        // Once settled it's outdated, and stays where it was.
+        let r = reanchor(&f.conn, id, "new.rs", new, true).unwrap();
+        assert_eq!(
+            r,
+            Reanchored {
+                moved: 0,
+                pending: 0,
+                outdated: 1
+            }
+        );
+        assert_eq!(get(&goes).status, "outdated");
+        assert_eq!(get(&goes).anchor.unwrap(), at("new.rs", 2, 2));
+        // A resolved thread whose code went stays resolved.
+        assert_eq!(get(&done).status, "resolved");
+
+        // The moved thread now maps from the new content: another line above moves it again.
+        let newer = format!("z\n{new}");
+        reanchor(&f.conn, id, "new.rs", &newer, true).unwrap();
+        assert_eq!(get(&moves).anchor.unwrap(), at("new.rs", 8, 9));
+        // An outdated thread doesn't come back on its own, even if its text returns…
+        reanchor(&f.conn, id, "new.rs", FILE, true).unwrap();
+        assert_eq!(get(&goes).status, "outdated");
+        // …but reopening it brings it back into re-anchoring.
+        set_status(&f.conn, &goes, "open", YOU, "").unwrap();
+        reanchor(&f.conn, id, "new.rs", FILE, true).unwrap();
+        assert_eq!(get(&goes).status, "open");
+        // Other files' threads are untouched.
+        assert_eq!(
+            reanchor(&f.conn, id, "other.rs", "", true).unwrap(),
+            Reanchored::default()
         );
     }
 

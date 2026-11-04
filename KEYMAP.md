@@ -334,8 +334,12 @@ Summary: 147 not applicable, 140 done, 29 to do, 5 replaced.
 
 | Key | glos command |
 |---|---|
+| `[ u` | `goto_prev_unread` |
+| `] u` | `goto_next_unread` |
 | `ret` | `toggle_collapse` |
 | `space m` | `edit_comment` |
+| `space x` | `toggle_resolved` |
+| `space n` | `goto_suggestion` |
 | `space s a` | `submit_approve` |
 | `space s r` | `submit_changes` |
 | `space s c` | `submit_comment` |
@@ -344,11 +348,9 @@ Planned, on keys Helix leaves free:
 
 | Key | Action |
 |---|---|
-| `space x` | resolve or reopen the thread (M3) |
 | `space v` | switch view (M4) |
 | `space o` | switch scope (M4) |
 | `space l` | dashboard (M5) |
-| `space n` | jump to the agent's suggestion (M3) |
 | `]d` | next thread (M2) |
 | `[d` | previous thread (M2) |
 | `]D` | last thread (M2) |

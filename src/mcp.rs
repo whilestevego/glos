@@ -20,12 +20,18 @@ use rmcp::{
 use rusqlite::{Connection, params};
 use serde::Deserialize;
 
-use crate::review::{self, Review, Round, Thread, Verdict, YOU};
+use crate::review::{self, Anchor, Review, Round, Thread, Verdict, YOU};
 
 const INSTRUCTIONS: &str = "glos is the user's code reviewer. When your work is ready, call \
-request_review, then wait_for_review: it answers with the user's review when they submit it \
-(call it again while it says it's still waiting). Address every comment, then request review \
-again. get_review shows the review's state and threads at any time.";
+request_review (annotate lines first if a note would help the reviewer), then wait_for_review: \
+it answers with the user's review when they submit it (call it again while it says it's still \
+waiting). Answer every comment with reply, and resolve the threads you've addressed with a note \
+of what you did; then request review again. get_review shows the review's state and threads at \
+any time; suggest points the user at a line.";
+
+/// What an agent's action came to: done (and what to tell it), or refused (and why). Over MCP
+/// both are the tool's answer; the CLI exits 1 on a refusal.
+pub type Outcome = std::result::Result<String, String>;
 
 /// How long one `wait_for_review` waits by default, staying under hosts' tool timeouts.
 const WAIT: Duration = Duration::from_secs(240);
@@ -189,6 +195,136 @@ impl Agent {
         ))
     }
 
+    /// The review, or the answer to give when there is none.
+    fn need_review(&self) -> Result<std::result::Result<Review, String>> {
+        Ok(self.review()?.ok_or_else(|| {
+            format!(
+                "There's no review for {} yet. Call request_review first.",
+                self.folder.display()
+            )
+        }))
+    }
+
+    /// A thread of this review the agent can see, or why not.
+    fn thread(&self, r: &Review, id: &str) -> Result<std::result::Result<Thread, String>> {
+        Ok(visible(review::threads(&self.conn, &r.id)?)
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| format!("No thread {id} in this review; get_review lists them.")))
+    }
+
+    /// `reply`: an answer on a thread, shown to the user at once, marked unread.
+    pub fn reply(&mut self, name: &str, thread: &str, body: &str) -> Result<Outcome> {
+        let r = match self.need_review()? {
+            Ok(r) => r,
+            Err(msg) => return Ok(Err(msg)),
+        };
+        if let Err(msg) = self.thread(&r, thread)? {
+            return Ok(Err(msg));
+        }
+        if body.trim().is_empty() {
+            return Ok(Err("A reply needs a body.".into()));
+        }
+        review::reply(&self.conn, thread, name, body.trim())?;
+        self.touch();
+        Ok(Ok(format!("Replied on thread {thread}.")))
+    }
+
+    /// `resolve` (with a note saying what was done) and `reopen`.
+    pub fn set_status(
+        &mut self,
+        name: &str,
+        thread: &str,
+        open: bool,
+        note: &str,
+    ) -> Result<Outcome> {
+        let r = match self.need_review()? {
+            Ok(r) => r,
+            Err(msg) => return Ok(Err(msg)),
+        };
+        if let Err(msg) = self.thread(&r, thread)? {
+            return Ok(Err(msg));
+        }
+        if !open && note.trim().is_empty() {
+            return Ok(Err("Resolving needs a note saying what you did.".into()));
+        }
+        let status = if open { "open" } else { "resolved" };
+        review::set_status(&self.conn, thread, status, name, note)?;
+        self.touch();
+        Ok(Ok(format!("Thread {thread} is {status}.")))
+    }
+
+    /// A file of the review by its path relative to the review's folder, read from disk (the
+    /// new side), refusing paths that lead out of it.
+    fn file(&self, r: &Review, path: &str) -> std::result::Result<String, String> {
+        let root = PathBuf::from(&r.folder);
+        let full = root
+            .join(path)
+            .canonicalize()
+            .map_err(|e| format!("{path}: {e}"))?;
+        if !full.starts_with(&root) {
+            return Err(format!("{path} isn't inside {}", r.folder));
+        }
+        std::fs::read(&full)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .map_err(|e| format!("{path}: {e}"))
+    }
+
+    /// `annotate`: an agent's note on lines of its change, before the user reviews.
+    pub fn annotate(
+        &mut self,
+        name: &str,
+        path: &str,
+        start: u32,
+        end: Option<u32>,
+        body: &str,
+    ) -> Result<Outcome> {
+        let r = match self.need_review()? {
+            Ok(r) => r,
+            Err(msg) => return Ok(Err(msg)),
+        };
+        let file = match self.file(&r, path) {
+            Ok(f) => f,
+            Err(msg) => return Ok(Err(msg)),
+        };
+        let anchor = Anchor {
+            path: path.trim_start_matches("./").to_string(),
+            start,
+            end: end.unwrap_or(start),
+        };
+        if body.trim().is_empty() {
+            return Ok(Err("A note needs a body.".into()));
+        }
+        let t = match review::annotate(&self.conn, &r.id, &anchor, &file, name, body.trim()) {
+            Ok(t) => t,
+            Err(e) => return Ok(Err(format!("{e:#}"))),
+        };
+        self.touch();
+        Ok(Ok(format!("Note left on {anchor} as thread {t}.")))
+    }
+
+    /// `suggest`: points the user at a line, without moving their view.
+    pub fn suggest(&mut self, name: &str, path: &str, line: u32, note: &str) -> Result<Outcome> {
+        let r = match self.need_review()? {
+            Ok(r) => r,
+            Err(msg) => return Ok(Err(msg)),
+        };
+        let file = match self.file(&r, path) {
+            Ok(f) => f,
+            Err(msg) => return Ok(Err(msg)),
+        };
+        let lines = file.split_inclusive('\n').count().max(1) as u32;
+        if line == 0 || line > lines {
+            return Ok(Err(format!("{path} has {lines} lines.")));
+        }
+        let path = path.trim_start_matches("./");
+        r.suggest(&self.conn, name, path, line, note)?;
+        self.touch();
+        Ok(Ok(format!(
+            "Suggested {path}:{line}. The user sees it as a notice and can jump there; their view doesn't move."
+        )))
+    }
+
     /// One look for a submitted round nobody has received yet: the review as the answer.
     pub fn try_take(&mut self, name: &str) -> Result<Option<String>> {
         let Some(r) = self.review()? else {
@@ -281,8 +417,9 @@ fn delivery(r: &Review, round: &Round, threads: &[Thread]) -> String {
     out += match round.verdict {
         Verdict::Approved => "The work is approved: finish up.",
         Verdict::Changes => {
-            "Changes are requested: address every comment, then call request_review and \
-             wait_for_review again."
+            "Changes are requested: address every comment, reply on each thread (resolve the \
+             ones you've addressed, with a note), then call request_review and wait_for_review \
+             again."
         }
         Verdict::Comment => {
             "These are comments without a verdict: answer them or take them into account, then \
@@ -313,6 +450,47 @@ struct RequestReview {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+struct Reply {
+    thread_id: String,
+    body: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct Resolve {
+    thread_id: String,
+    /// What you did about it.
+    note: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct Reopen {
+    thread_id: String,
+    /// Why, if there's something to say.
+    note: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct Annotate {
+    /// The file, relative to the review's folder (the repo root in git).
+    path: String,
+    /// The first line (1-based) of the lines the note is about.
+    line: u32,
+    /// The last line, if more than one.
+    end_line: Option<u32>,
+    body: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct Suggest {
+    /// The file, relative to the review's folder (the repo root in git).
+    path: String,
+    /// The line (1-based).
+    line: u32,
+    /// Why the user should look there.
+    note: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 struct WaitForReview {
     /// How long to wait before answering "still waiting", in seconds (default 240, at most 600).
     timeout_secs: Option<u64>,
@@ -329,6 +507,11 @@ fn client_name(ctx: &RequestContext<RoleServer>) -> String {
     ctx.peer
         .peer_info()
         .map_or("agent".into(), |i| i.client_info.name.clone())
+}
+
+/// Over MCP a refusal is an answer like any other: the agent reads why.
+fn said(o: Outcome) -> String {
+    o.unwrap_or_else(|e| e)
 }
 
 fn internal(e: anyhow::Error) -> ErrorData {
@@ -360,6 +543,82 @@ impl Server {
             p.note.as_deref().unwrap_or(""),
             &p.files.unwrap_or_default(),
         )
+        .map_err(internal)
+    }
+
+    #[tool(
+        description = "Reply on a thread of the review. The user sees it at once, marked unread."
+    )]
+    async fn reply(
+        &self,
+        Parameters(p): Parameters<Reply>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let mut a = self.agent.lock().unwrap();
+        a.reply(&client_name(&ctx), &p.thread_id, &p.body)
+            .map(said)
+            .map_err(internal)
+    }
+
+    #[tool(description = "Resolve a thread you've addressed, with a note saying what you did.")]
+    async fn resolve(
+        &self,
+        Parameters(p): Parameters<Resolve>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let mut a = self.agent.lock().unwrap();
+        a.set_status(&client_name(&ctx), &p.thread_id, false, &p.note)
+            .map(said)
+            .map_err(internal)
+    }
+
+    #[tool(description = "Reopen a resolved or outdated thread.")]
+    async fn reopen(
+        &self,
+        Parameters(p): Parameters<Reopen>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let mut a = self.agent.lock().unwrap();
+        a.set_status(
+            &client_name(&ctx),
+            &p.thread_id,
+            true,
+            p.note.as_deref().unwrap_or(""),
+        )
+        .map(said)
+        .map_err(internal)
+    }
+
+    #[tool(
+        description = "Leave a note on lines of your change before the user reviews it: why you did something, or where you're unsure. It shows under those lines, marked as yours."
+    )]
+    async fn annotate(
+        &self,
+        Parameters(p): Parameters<Annotate>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let mut a = self.agent.lock().unwrap();
+        a.annotate(&client_name(&ctx), &p.path, p.line, p.end_line, &p.body)
+            .map(said)
+            .map_err(internal)
+    }
+
+    #[tool(
+        description = "Suggest a file and line for the user to look at. It shows as a notice in glos, and they can jump there; their view never moves on its own."
+    )]
+    async fn suggest(
+        &self,
+        Parameters(p): Parameters<Suggest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let mut a = self.agent.lock().unwrap();
+        a.suggest(
+            &client_name(&ctx),
+            &p.path,
+            p.line,
+            p.note.as_deref().unwrap_or(""),
+        )
+        .map(said)
         .map_err(internal)
     }
 
@@ -580,6 +839,73 @@ mod tests {
         // Not git: the agent is told how the user starts a review.
         let out = a.request_review("claude", "", &[]).unwrap();
         assert!(out.contains("glos diff"), "{out}");
+    }
+
+    #[test]
+    fn agents_reply_resolve_and_reopen_only_what_they_can_see() {
+        let (_d, mut a, r) = setup();
+        let t = review::comment(&a.conn, &r.id, Some((&at(2, 2), FILE)), YOU, "why?").unwrap();
+        // Unsent: the agent can't see the thread, so can't touch it.
+        assert!(said(a.reply("claude", &t, "because").unwrap()).starts_with("No thread"));
+        review::submit(&a.conn, &r.id, Verdict::Changes, &[], None).unwrap();
+        assert_eq!(
+            said(a.reply("claude", &t, "because").unwrap()),
+            format!("Replied on thread {t}.")
+        );
+        assert_eq!(
+            said(a.reply("claude", &t, "  ").unwrap()),
+            "A reply needs a body."
+        );
+        assert!(said(a.set_status("claude", &t, false, "").unwrap()).contains("needs a note"));
+        assert_eq!(
+            said(a.set_status("claude", &t, false, "renamed it").unwrap()),
+            format!("Thread {t} is resolved.")
+        );
+        let th = &review::threads(&a.conn, &r.id).unwrap()[0];
+        assert_eq!(th.status, "resolved");
+        let bodies: Vec<&str> = th.comments.iter().map(|c| c.body.as_str()).collect();
+        assert_eq!(bodies, ["why?", "because", "renamed it"]);
+        assert_eq!(th.comments[1].author, "claude");
+        assert!(th.unread());
+        assert!(said(a.set_status("claude", &t, true, "").unwrap()).ends_with("is open."));
+        assert!(said(a.reply("claude", "nope", "x").unwrap()).starts_with("No thread nope"));
+    }
+
+    #[test]
+    fn agents_annotate_and_suggest_within_the_review() {
+        let (d, mut a, r) = setup();
+        let out = said(
+            a.annotate("claude", "a.rs", 2, Some(3), "unsure here")
+                .unwrap(),
+        );
+        assert!(out.starts_with("Note left on a.rs:2-3 as thread"), "{out}");
+        let th = &review::threads(&a.conn, &r.id).unwrap()[0];
+        assert_eq!(th.comments[0].kind, "annotation");
+        assert_eq!(th.anchor_text.as_deref(), Some("two\nthree\n"));
+        // An agent's own note is visible to it straight away.
+        assert!(a.get_review(None).unwrap().contains("claude: unsure here"));
+        assert!(said(a.annotate("claude", "a.rs", 9, None, "x").unwrap()).contains("4 lines"));
+        assert!(
+            said(a.annotate("claude", "nope.rs", 1, None, "x").unwrap()).starts_with("nope.rs:")
+        );
+        // Paths can't lead out of the review's folder.
+        std::fs::write(d.path().join("secret"), "s\n").unwrap();
+        assert!(
+            said(a.annotate("claude", "../secret", 1, None, "x").unwrap()).contains("isn't inside")
+        );
+
+        assert!(
+            said(a.suggest("claude", "a.rs", 3, "look").unwrap()).starts_with("Suggested a.rs:3")
+        );
+        let s = r.reload(&a.conn).unwrap().suggestion.unwrap();
+        assert_eq!(
+            (s.path.as_str(), s.line, s.by.as_str()),
+            ("a.rs", 3, "claude")
+        );
+        assert_eq!(
+            said(a.suggest("claude", "a.rs", 5, "").unwrap()),
+            "a.rs has 4 lines."
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@ mod diff;
 mod doctor;
 mod embedded;
 mod mcp;
+mod reanchor;
 mod review;
 mod source;
 mod store;
@@ -58,6 +59,35 @@ enum Command {
     },
     /// A review's rounds, threads and comments: this folder's, or the one with this id.
     Show { review: Option<String> },
+    /// Reply on a thread, as an agent without MCP would.
+    Reply {
+        thread: String,
+        body: String,
+        #[command(flatten)]
+        author: Author,
+    },
+    /// Resolve a thread, with a note saying what was done.
+    Resolve {
+        thread: String,
+        note: String,
+        #[command(flatten)]
+        author: Author,
+    },
+    /// Reopen a resolved or outdated thread.
+    Reopen {
+        thread: String,
+        note: Option<String>,
+        #[command(flatten)]
+        author: Author,
+    },
+    /// Leave a note on lines of a file (`12` or `12-14`) before review.
+    Annotate {
+        path: String,
+        lines: String,
+        body: String,
+        #[command(flatten)]
+        author: Author,
+    },
     /// Submit the unsent comments as a round: approve, changes or comment.
     Submit {
         #[arg(value_parser = parse_verdict)]
@@ -66,6 +96,13 @@ enum Command {
         #[arg(long)]
         review: Option<String>,
     },
+}
+
+#[derive(clap::Args)]
+struct Author {
+    /// Who's writing: the agent's name.
+    #[arg(long = "as", default_value = "agent")]
+    name: String,
 }
 
 fn parse_verdict(s: &str) -> Result<review::Verdict, String> {
@@ -145,6 +182,29 @@ fn run() -> Result<ExitCode> {
         }
         Some(Command::Show { review }) => {
             cli::show(&conn, review.as_deref(), &cwd, cli.json, out)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(
+            Command::Reply { author, .. }
+            | Command::Resolve { author, .. }
+            | Command::Reopen { author, .. }
+            | Command::Annotate { author, .. },
+        ) => {
+            use cli::AgentAction as A;
+            let name = author.name.clone();
+            let action = match cli.command.unwrap() {
+                Command::Reply { thread, body, .. } => A::Reply { thread, body },
+                Command::Resolve { thread, note, .. } => A::Resolve { thread, note },
+                Command::Reopen { thread, note, .. } => A::Reopen {
+                    thread,
+                    note: note.unwrap_or_default(),
+                },
+                Command::Annotate {
+                    path, lines, body, ..
+                } => A::Annotate { path, lines, body },
+                _ => unreachable!(),
+            };
+            cli::agent(conn, &cwd, &name, action, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Submit { verdict, review }) => {

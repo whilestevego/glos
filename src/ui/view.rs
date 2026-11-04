@@ -183,6 +183,25 @@ impl File {
     }
 }
 
+/// `new`, a file read again, with `old`'s view: selections and scroll mapped through the change
+/// as Helix maps them when a file changes on disk, and the horizontal scroll and collapse kept.
+pub fn keep_view(old: File, mut new: File) -> File {
+    if old.text == new.text {
+        new.sel = old.sel;
+        new.top = old.top;
+    } else {
+        let tx = helix_core::diff::compare_ropes(&old.text, &new.text);
+        let changes = tx.changes();
+        new.sel = old.sel.map(changes).ensure_invariants(new.text.slice(..));
+        let top = old.text.line_to_char(old.top.min(old.text.len_lines() - 1));
+        let top = changes.map_pos(top, helix_core::Assoc::Before);
+        new.top = new.text.char_to_line(top.min(new.text.len_chars()));
+    }
+    new.left = old.left;
+    new.collapsed = old.collapsed;
+    new
+}
+
 /// How `draw` styles a selection: (selection, primary selection, cursor, primary cursor).
 pub type SelectionStyles = (Style, Style, Style, Style);
 

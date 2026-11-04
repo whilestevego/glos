@@ -97,7 +97,19 @@ fn request_submit_and_wait() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     names.sort();
-    assert_eq!(names, ["get_review", "request_review", "wait_for_review"]);
+    assert_eq!(
+        names,
+        [
+            "annotate",
+            "get_review",
+            "reopen",
+            "reply",
+            "request_review",
+            "resolve",
+            "suggest",
+            "wait_for_review"
+        ]
+    );
 
     let text = |v: &Value| {
         v["result"]["content"][0]["text"]
