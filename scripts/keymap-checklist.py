@@ -65,7 +65,7 @@ def parse_glos(src):
     return walk(defs_of("normal_defs"), [], [])
 
 
-# Keys PLAN.md gives to review actions, and when they arrive.
+# Keys plans/PLAN.md gives to review actions, and when they arrive.
 PLANNED = {
     "space c": "comment on the selection (M2)", "space C": "review-level comment (M2)",
     "space r": "reply to the thread (M2)", "space m": "edit your latest comment (M2)",
@@ -130,5 +130,5 @@ out = [
     *([""] + ["Planned, on keys Helix leaves free:", "", "| Key | Action |", "|---|---|"] + planned_new if planned_new else []),
     "",
 ]
-(root / "KEYMAP.md").write_text("\n".join(out))
-print("wrote KEYMAP.md:", ", ".join(f"{n} {s}" for s, n in counts.items()))
+(root / "plans" / "KEYMAP.md").write_text("\n".join(out))
+print("wrote plans/KEYMAP.md:", ", ".join(f"{n} {s}" for s, n in counts.items()))

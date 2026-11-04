@@ -374,3 +374,4 @@ PLAN.md:
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
+- **Moved 2026-11-04** into `plans/`, with `KEYMAP.md`, the home for agents' plans from now on.
