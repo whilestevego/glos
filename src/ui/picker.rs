@@ -27,6 +27,8 @@ const MIN_WIDTH_FOR_PREVIEW: u16 = 72;
 pub enum Target {
     Change(usize),
     Path(String),
+    /// A thread, by its id.
+    Thread(String),
 }
 
 pub struct Item {

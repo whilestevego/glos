@@ -1,8 +1,11 @@
+mod cli;
 mod clipboard;
 mod config;
 mod diff;
 mod doctor;
 mod embedded;
+mod mcp;
+mod review;
 mod source;
 mod store;
 mod syntax;
@@ -32,6 +35,10 @@ struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
+    /// JSON output for scripts and agents (`list`, `show`, `submit`).
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -42,6 +49,27 @@ enum Command {
     Diff { old: PathBuf, new: PathBuf },
     /// Check glos's setup, like `hx --health`.
     Doctor,
+    /// Run the MCP server for an agent, over stdio (`claude mcp add glos -- glos mcp`).
+    Mcp,
+    /// Reviews on this machine: open ones, or every one with `--all`.
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// A review's rounds, threads and comments: this folder's, or the one with this id.
+    Show { review: Option<String> },
+    /// Submit the unsent comments as a round: approve, changes or comment.
+    Submit {
+        #[arg(value_parser = parse_verdict)]
+        verdict: review::Verdict,
+        /// The review's id; this folder's review if not given.
+        #[arg(long)]
+        review: Option<String>,
+    },
+}
+
+fn parse_verdict(s: &str) -> Result<review::Verdict, String> {
+    review::Verdict::parse(s).ok_or_else(|| "approve, changes or comment".into())
 }
 
 /// XDG folders on macOS too, as Helix does.
@@ -103,12 +131,33 @@ fn run() -> Result<ExitCode> {
         doctor::run(&mut std::io::stdout(), &db, log.as_deref())?;
         return Ok(ExitCode::SUCCESS);
     }
-    let _conn = store::open(&db)?;
+    let conn = store::open(&db)?;
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let out = &mut std::io::stdout();
+    match &cli.command {
+        Some(Command::Mcp) => {
+            mcp::run(conn)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::List { all }) => {
+            cli::list(&conn, *all, cli.json, out)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::Show { review }) => {
+            cli::show(&conn, review.as_deref(), &cwd, cli.json, out)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::Submit { verdict, review }) => {
+            cli::submit(&conn, review.as_deref(), &cwd, *verdict, cli.json, out)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        _ => {}
+    }
 
     let (config, config_error) = config::load();
     let source = match cli.command {
-        Some(Command::Doctor) => unreachable!(),
         Some(Command::Diff { old, new }) => Source::diff(&old, &new)?,
+        Some(_) => unreachable!(),
         None => match Source::git(&std::env::current_dir()?, None) {
             Ok(s) => s,
             Err(e) if gix::discover(".").is_err() => {
@@ -132,6 +181,6 @@ fn run() -> Result<ExitCode> {
         eprintln!("Press <ENTER> to continue with the default config");
         let _ = std::io::stdin().read_line(&mut String::new());
     }
-    ui::run(source, &config)?;
+    ui::run(source, &config, conn)?;
     Ok(ExitCode::SUCCESS)
 }

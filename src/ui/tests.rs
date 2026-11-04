@@ -53,7 +53,8 @@ impl T {
 
     fn new(source: Source, dir: TempDir, w: u16, h: u16, config: &Config) -> T {
         let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        let app = App::new(source, config, theme).unwrap();
+        let conn = crate::store::open(&dir.path().join("glos.db")).unwrap();
+        let app = App::new(source, config, theme, conn).unwrap();
         let mut t = T {
             app,
             term: Terminal::new(TestBackend::new(w, h)).unwrap(),
@@ -715,4 +716,363 @@ fn mouse_off_in_config_is_still_safe() {
     let mut t = T::new(Source::diff(&o, &n).unwrap(), dir, 40, 8, &c);
     t.mouse(MouseEventKind::ScrollDown, 0, 0);
     assert_eq!(t.top(), 0);
+}
+
+// ---- Commenting ----
+
+impl T {
+    /// The status line's text, or "".
+    fn said(&self) -> String {
+        self.status().unwrap_or("").to_string()
+    }
+
+    fn bodies(&self) -> Vec<String> {
+        self.app
+            .threads
+            .iter()
+            .flat_map(|t| t.comments.iter().map(|c| c.body.clone()))
+            .collect()
+    }
+
+    /// The help panel's text, as a screen row search.
+    fn shows(&self, text: &str) -> bool {
+        self.screen().contains(text)
+    }
+}
+
+#[test]
+fn comment_box_screen() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("x space c").typed("rename `x`");
+    insta::assert_snapshot!(t.screen());
+    t.keys("esc ret");
+    // Saved, the thread shows as one line under its line, with a mark in the gutter.
+    insta::assert_snapshot!("thread_marker", t.screen());
+}
+
+#[test]
+fn commenting_on_a_selection_saves_at_once() {
+    let mut t = T::files(OLD, NEW);
+    // The cursor opens on the first change, line 2; `x` then `x` selects lines 2–3.
+    t.keys("x x space c");
+    assert!(
+        t.app.comment_box.as_ref().unwrap().insert,
+        "opens in insert mode"
+    );
+    assert!(t.shows("Comment on main.rs:2-3"), "{}", t.screen());
+    assert!(t.shows(" INS "));
+    t.typed("why").keys("ret").typed("not hi?");
+    // esc leaves insert mode; ret saves.
+    t.keys("esc");
+    assert!(t.shows(" NOR "));
+    t.keys("ret");
+    assert!(t.app.comment_box.is_none());
+    assert_eq!(t.bodies(), ["why\nnot hi?"]);
+    let a = t.app.threads[0].anchor.clone().unwrap();
+    assert_eq!((a.path.as_str(), a.start, a.end), ("main.rs", 2, 3));
+    assert_eq!(t.said(), "Comment saved · 1 unsent; space s submits");
+    assert!(t.shows("1 unsent"), "{}", t.screen());
+    // It's in the store, so a new app on the same database sees it.
+    let n = review::unsent(&t.app.conn, &t.app.review.id).unwrap();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn drafts_survive_closing_the_box() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("half a thou");
+    t.keys("esc q");
+    assert!(t.app.comment_box.is_none());
+    assert!(t.said().starts_with("Draft kept"), "{}", t.said());
+    assert!(t.bodies().is_empty(), "nothing is sent by closing");
+    // Back on the same line, the draft returns, cursor at its end.
+    t.keys("space c");
+    assert_eq!(t.said(), "Draft restored");
+    t.typed("ght").keys("esc ret");
+    assert_eq!(t.bodies(), ["half a thought"]);
+    // Saved, the draft is gone.
+    t.keys("space c");
+    assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "");
+    // An empty box saves nothing.
+    t.keys("esc ret");
+    assert_eq!(t.said(), "Nothing to save");
+    assert_eq!(t.bodies().len(), 1);
+}
+
+#[test]
+fn motions_work_in_the_box_and_files_stay_put() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("one two three").keys("esc");
+    // Normal-mode motions act on the box's text, as in Helix.
+    t.keys("b b");
+    assert_eq!(t.sel(), "one #[|two ]#three");
+    t.keys("i").typed("big ").keys("esc");
+    assert_eq!(
+        t.app.comment_box.as_ref().unwrap().body(),
+        "one big two three"
+    );
+    // Changing file, pickers and submitting wait until the box closes.
+    t.keys("g n");
+    assert!(t.said().starts_with("Close the comment box first"));
+    t.keys("space g");
+    assert!(t.app.picker.is_none());
+    // `:` commands still work, and `:q` with a draft just quits: the draft is saved.
+    t.keys(":").typed("q").keys("ret");
+    assert!(t.app.quit);
+}
+
+#[test]
+fn threads_open_and_close() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c")
+        .typed("first line\nsecond")
+        .keys("esc ret");
+    assert!(t.shows("▸ you: first line · unsent"), "{}", t.screen());
+    assert!(!t.shows("second"));
+    // ret on the thread's line opens it…
+    t.keys("ret");
+    assert!(t.shows("▾ thread"), "{}", t.screen());
+    assert!(t.shows("    second"));
+    // …and closes it again.
+    t.keys("ret");
+    assert!(!t.shows("second"));
+    // A click on the marker opens it too.
+    let y = t.app.thread_hits[0].0;
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 10, y);
+    assert!(t.shows("    second"));
+}
+
+#[test]
+fn opened_threads_count_when_scrolling() {
+    let body = (1..=8)
+        .map(|i| format!("l{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut t = T::files("", &lines(40));
+    t.keys("g g space c").typed(&body).keys("esc ret ret");
+    assert_eq!(t.top(), 0);
+    // Nine thread rows sit under line 1: line 4 is already low in a 12-row view.
+    t.keys("3 j");
+    assert!(t.top() > 0, "the cursor was scrolled into view");
+    let screen = t.screen();
+    let cursor_row = screen.lines().position(|l| l.contains("line 4")).unwrap();
+    assert!(cursor_row + 5 < 12, "scrolloff kept:\n{screen}");
+}
+
+#[test]
+fn editing_and_deleting_a_comment() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("tpyo").keys("esc ret");
+    t.keys("space m");
+    assert!(t.shows("Edit comment"));
+    assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "tpyo");
+    t.keys("backspace backspace backspace backspace")
+        .typed("typo")
+        .keys("esc ret");
+    assert_eq!(t.bodies(), ["typo"]);
+    // Saving it empty asks once, then deletes it.
+    t.keys("space m");
+    for _ in 0..4 {
+        t.keys("backspace");
+    }
+    t.keys("esc ret");
+    assert!(t.said().contains("deletes the comment"));
+    assert!(t.app.comment_box.is_some());
+    t.keys("ret");
+    assert_eq!(t.said(), "Comment deleted");
+    assert!(t.app.threads.is_empty());
+    // With no thread here, there's nothing to edit or reply to.
+    t.keys("space m");
+    assert_eq!(t.said(), "No comment of yours here");
+    t.keys("space r");
+    assert_eq!(t.said(), "No thread here to reply to");
+}
+
+#[test]
+fn replies_and_review_level_comments() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("one").keys("esc ret");
+    t.keys("space r").typed("two").keys("esc ret");
+    assert_eq!(t.said(), "Reply saved · 2 unsent; space s submits");
+    assert_eq!(t.app.threads.len(), 1);
+    assert_eq!(t.bodies(), ["one", "two"]);
+    t.keys("space C");
+    assert!(t.shows("Comment on the review"));
+    t.typed("overall fine").keys("esc ret");
+    assert_eq!(t.app.threads.len(), 2);
+    assert!(t.app.threads[0].anchor.is_none());
+}
+
+#[test]
+fn no_comments_on_deleted_or_binary_files() {
+    let mut t = T::folders(|o, n| {
+        std::fs::write(o.join("gone.rs"), "bye\n").unwrap();
+        std::fs::write(n.join("bin.dat"), b"\x00\x01").unwrap();
+    });
+    assert_eq!(t.path(), "bin.dat");
+    t.keys("space c");
+    assert!(t.app.comment_box.is_none());
+    assert!(t.said().contains("binary"));
+    t.keys("g n space c");
+    assert_eq!(t.path(), "gone.rs");
+    assert!(t.said().contains("deleted"), "{}", t.said());
+}
+
+#[test]
+fn the_final_empty_line_comments_on_the_last_line() {
+    let mut t = T::files("a\n", "a\nb\n");
+    t.keys("g e space c");
+    assert!(t.shows("Comment on main.rs:2 "), "{}", t.screen());
+}
+
+#[test]
+fn submitting_with_a_verdict() {
+    let mut t = T::files(OLD, NEW);
+    // With nothing to send, only approving applies, and the help panel says so.
+    t.keys("space s");
+    assert!(t.shows("Approve"));
+    assert!(!t.shows("Request changes"), "{}", t.screen());
+    t.keys("esc");
+    t.keys("space s r");
+    assert!(t.said().starts_with("nothing to submit"), "{}", t.said());
+    t.keys("space c").typed("fix").keys("esc ret");
+    t.keys("space s");
+    assert!(t.shows("Request changes") && t.shows("Send comments without a verdict"));
+    t.keys("r");
+    assert_eq!(
+        t.said(),
+        "Round 1 submitted: changes requested, 1 comment. The agent gets it from wait_for_review"
+    );
+    assert_eq!(t.app.unsent, 0);
+    assert!(!t.shows("unsent"));
+    // What was reviewed is kept: every file's new side.
+    let snap: i64 = t
+        .app
+        .conn
+        .query_row(
+            "SELECT count(*) FROM snapshot_files WHERE round = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(snap, 1);
+    // An approval with nothing new is an LGTM.
+    t.keys(":").typed("submit approve").keys("ret");
+    assert!(
+        t.said()
+            .starts_with("Round 2 submitted: approved, 0 comments")
+    );
+    t.keys(":").typed("submit maybe").keys("ret");
+    assert!(t.said().starts_with("Submit how?"));
+}
+
+#[test]
+fn quitting_with_unsent_comments_reminds_once() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("x").keys("esc ret");
+    t.keys(":").typed("q").keys("ret");
+    assert!(!t.app.quit);
+    assert!(t.said().starts_with("1 comment not sent"), "{}", t.said());
+    t.keys(":").typed("q").keys("ret");
+    assert!(t.app.quit);
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("x").keys("esc ret");
+    t.keys(":").typed("q!").keys("ret");
+    assert!(t.app.quit);
+}
+
+#[test]
+fn thread_motions_and_pickers() {
+    let mut t = T::files("", &lines(20));
+    for line in [3, 9, 15] {
+        t.keys(":").typed(&line.to_string());
+        t.keys("ret space c")
+            .typed(&format!("at {line}"))
+            .keys("esc ret");
+    }
+    t.keys("g g ] d");
+    assert!(
+        t.sel().contains("#[line 3\n|]#"),
+        "selects the thread's lines"
+    );
+    t.keys("] d ] d");
+    assert!(t.sel().contains("#[line 15\n|]#"));
+    t.keys("] d");
+    assert_eq!(t.said(), "No more threads in this file");
+    t.keys("[ d");
+    assert!(t.sel().contains("#[line 9\n|]#"));
+    t.keys("[ D");
+    assert!(t.sel().contains("#[line 3\n|]#"));
+    t.keys("] D");
+    assert!(t.sel().contains("#[line 15\n|]#"));
+    // The whole review's thread picker, filtered, opens a thread on its lines and opens it.
+    t.keys("space D").typed("at 9").keys("ret");
+    assert!(t.sel().contains("#[line 9\n|]#"));
+    assert!(t.shows("▾ thread"));
+}
+
+#[test]
+fn a_review_level_thread_opens_its_comment_from_the_picker() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space C").typed("overall").keys("esc ret");
+    t.keys("space D ret");
+    assert!(t.shows("Edit comment"), "{}", t.screen());
+    assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "overall");
+}
+
+#[test]
+fn help_lists_only_what_applies() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space");
+    assert!(t.shows("Comment on the selected lines"));
+    assert!(!t.shows("Reply to the thread"), "no thread here yet");
+    t.keys("esc space c").typed("x").keys("esc ret space");
+    assert!(t.shows("Reply to the thread"));
+    assert!(t.shows("Edit your latest comment"));
+    // Off the thread's line, the thread actions go again.
+    t.keys("esc g g space");
+    assert!(!t.shows("Reply to the thread"));
+}
+
+#[test]
+fn command_completion() {
+    let mut t = T::files(OLD, NEW);
+    t.keys(":");
+    // Every command is listed with what it does.
+    assert!(t.shows("submit") && t.shows("Comment on the whole review"));
+    t.typed("su").keys("tab");
+    assert_eq!(t.app.prompt.as_ref().unwrap().line, "submit");
+    t.typed(" ").keys("tab");
+    assert_eq!(t.app.prompt.as_ref().unwrap().line, "submit approve");
+    t.keys("tab");
+    assert_eq!(t.app.prompt.as_ref().unwrap().line, "submit changes");
+    t.keys("S-tab S-tab");
+    assert_eq!(t.app.prompt.as_ref().unwrap().line, "submit comment");
+    // Aliases find their command.
+    let (_, items) = completions("qa");
+    assert_eq!(
+        items.iter().map(|i| i.0.as_str()).collect::<Vec<_>>(),
+        ["quit", "quit!"]
+    );
+    assert!(completions("nope").1.is_empty());
+    assert_eq!(completions("toggle s").1[0].0, "soft-wrap");
+}
+
+#[test]
+fn a_request_from_another_process_shows_without_moving_the_view() {
+    let mut t = T::files("", &lines(40));
+    t.keys("2 0 j");
+    let (sel, top) = (t.sel(), t.top());
+    // An MCP server writes to the same database.
+    let other = crate::store::open(&t._dir.path().join("glos.db")).unwrap();
+    t.app
+        .review
+        .request(&other, "claude", "ready: added the parser", &[])
+        .unwrap();
+    t.app.refresh();
+    assert_eq!(
+        t.said(),
+        "claude asks for a review: ready: added the parser"
+    );
+    assert_eq!((t.sel(), t.top()), (sel, top));
 }

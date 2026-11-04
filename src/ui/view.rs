@@ -20,7 +20,7 @@ use crate::{
     theme::Theme,
 };
 
-use super::commands::SCROLLOFF;
+use super::{commands::SCROLLOFF, comments::Threads};
 
 /// A file loaded for viewing: a changed file of the review, or any file opened for context.
 pub struct File {
@@ -37,6 +37,8 @@ pub struct File {
     pub collapsed: bool,
     /// Binary files have no text to show.
     pub binary: bool,
+    /// Line numbers and diff signs; the comment box has none.
+    pub gutter: bool,
 }
 
 impl File {
@@ -146,12 +148,37 @@ impl File {
             notices,
             collapsed: false,
             binary,
+            gutter: true,
         }
+    }
+
+    /// A buffer for writing in (the comment box): Markdown, with no gutter.
+    pub fn scratch(text: &str, loader: &Loader) -> File {
+        let mut f = File::new(
+            std::path::Path::new("comment.md"),
+            text.as_bytes(),
+            false,
+            vec![],
+            vec![],
+            loader,
+        );
+        f.gutter = false;
+        f
+    }
+
+    /// Highlights the text again after it changed.
+    pub fn reparse(&mut self, loader: &Loader) {
+        let text = self.text.slice(..);
+        let lang = loader.language_for(std::path::Path::new("comment.md"), text);
+        self.syntax = lang.and_then(|l| loader.parse(text, l));
     }
 
     /// Helix's default gutters: a diagnostics column (glos's thread markers), a spacer, line
     /// numbers (at least 3 wide), a spacer and the diff signs.
     pub fn gutter_width(&self) -> usize {
+        if !self.gutter {
+            return 0;
+        }
         1 + 1 + self.text.len_lines().to_string().len().max(3) + 1 + 1
     }
 }
@@ -177,6 +204,8 @@ pub fn text_format(file: &File, width: u16, wrap: bool) -> TextFormat {
 /// Draws `file`'s notices and text into `area`, from line `top`: with the gutter and the
 /// selection for the main view, without them for a preview. Lines are laid out by helix-core's
 /// `DocumentFormatter`, so tabs, wide characters and soft wrap fall where Helix puts them.
+/// Threads are drawn under their lines; returns the screen row of each thread row drawn, with
+/// its thread.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     buf: &mut Buffer,
@@ -188,11 +217,13 @@ pub fn draw(
     loader: &Loader,
     theme: &Theme,
     main: Option<SelectionStyles>,
-) {
+    threads: &Threads,
+) -> Vec<(u16, usize)> {
+    let mut hits = vec![];
     let mut y = area.y;
     for notice in &file.notices {
         if y >= area.bottom() {
-            return;
+            return hits;
         }
         buf.set_stringn(
             area.x + 1,
@@ -204,7 +235,7 @@ pub fn draw(
         y += 1;
     }
     if file.collapsed || file.binary {
-        return;
+        return hits;
     }
     let text = file.text.slice(..);
     let height = area.bottom().saturating_sub(y) as usize;
@@ -281,11 +312,20 @@ pub fn draw(
                     ("▍", modified, true)
                 }
             });
+        let mark = threads
+            .marks
+            .iter()
+            .find(|(s, e, _)| *s <= line && line <= *e)
+            .map(|m| m.2);
         let gutter_row = |buf: &mut Buffer, row: usize, y: u16| {
-            if main.is_none() {
+            if main.is_none() || gutter == 0 {
                 return;
             }
             if row == 0 {
+                // The diagnostics column: a thread on this line.
+                if let Some(style) = mark {
+                    buf.set_string(area.x, y, "●", style);
+                }
                 let selected = cursor_lines.contains(&line);
                 let nr_style = theme.get(if selected {
                     "ui.linenr.selected"
@@ -382,8 +422,17 @@ pub fn draw(
             }
         }
         y += rows as u16;
+        for r in threads.rows.get(&line).into_iter().flatten() {
+            if y >= bottom {
+                break;
+            }
+            buf.set_stringn(x0, y, clean(&r.text), width as usize, r.style);
+            hits.push((y, r.thread));
+            y += 1;
+        }
         line += 1;
     }
+    hits
 }
 
 /// The display column of char `pos` on its line, with tabs expanded.
@@ -466,7 +515,16 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let styles = main.then(SelectionStyles::default);
         draw(
-            &mut buf, area, &file, 0, left, wrap, &loader, &theme, styles,
+            &mut buf,
+            area,
+            &file,
+            0,
+            left,
+            wrap,
+            &loader,
+            &theme,
+            styles,
+            &Threads::default(),
         );
         (0..h)
             .map(|y| {
@@ -531,7 +589,18 @@ mod tests {
         file.notices = vec!["collapsed".into()];
         let area = Rect::new(0, 0, 20, 3);
         let mut buf = Buffer::empty(area);
-        draw(&mut buf, area, &file, 0, 0, false, &loader, &theme, None);
+        draw(
+            &mut buf,
+            area,
+            &file,
+            0,
+            0,
+            false,
+            &loader,
+            &theme,
+            None,
+            &Threads::default(),
+        );
         let row = |y| {
             (0..20)
                 .map(|x| buf[(x, y)].symbol())

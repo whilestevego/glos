@@ -2,11 +2,16 @@
 //! pickers.
 
 mod commands;
+mod comments;
 mod keymap;
 mod picker;
 mod view;
 
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroUsize,
+    time::Duration,
+};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -21,18 +26,21 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::Style,
-    widgets::{Block, Borders, Clear},
+    widgets::{Block, Borders, Clear, Widget},
 };
+use rusqlite::Connection;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
     clipboard,
     config::Config,
-    source::{Kind, Source},
+    review::{self, Anchor, Review, Thread, Verdict, YOU},
+    source::{Content, Kind, Source},
     syntax::Loader,
     theme::{ColorSupport, Theme},
 };
 use commands::Ctx;
+use comments::{CommentBox, Place, ThreadLines, Threads};
 use keymap::{Action, AppAction, Key, Keymaps, Node};
 use picker::{Item, Outcome, Picker, Target};
 use view::{File, clean};
@@ -78,6 +86,85 @@ enum PromptKind {
 struct Prompt {
     kind: PromptKind,
     line: String,
+    /// While tabbing through `:` completions: what was typed, and which completion is shown.
+    completion: Option<(String, usize)>,
+}
+
+impl Prompt {
+    fn new(kind: PromptKind) -> Prompt {
+        Prompt {
+            kind,
+            line: String::new(),
+            completion: None,
+        }
+    }
+}
+
+/// The comment box's height, borders included.
+const BOX_HEIGHT: u16 = 8;
+
+/// `:` commands, with their aliases and descriptions, for running and completing them.
+const TYPABLE: &[(&str, &[&str], &str)] = &[
+    (
+        "quit",
+        &["q", "qa"],
+        "Close glos; reminds you once of unsent comments",
+    ),
+    (
+        "quit!",
+        &["q!", "qa!"],
+        "Close glos now; unsent comments are kept",
+    ),
+    ("comment", &[], "Comment on the selected lines"),
+    ("review-comment", &[], "Comment on the whole review"),
+    ("reply", &[], "Reply to the thread under the cursor"),
+    (
+        "edit-comment",
+        &[],
+        "Edit your latest comment on the thread under the cursor",
+    ),
+    (
+        "submit",
+        &[],
+        "Submit the review to the agent: approve, changes or comment",
+    ),
+    ("editor", &[], "Edit the open comment in $VISUAL or $EDITOR"),
+    ("toggle-option", &["toggle"], "Toggle an option: soft-wrap"),
+];
+
+/// What `:` can complete `line` with: where the completed word starts, and the words with
+/// their descriptions. Command names complete first, then `submit`'s and `toggle`'s argument.
+fn completions(line: &str) -> (usize, Vec<(String, &'static str)>) {
+    match line.split_once(' ') {
+        None => (
+            0,
+            TYPABLE
+                .iter()
+                .filter(|(name, aliases, _)| {
+                    name.starts_with(line) || aliases.iter().any(|a| a.starts_with(line))
+                })
+                .map(|(name, _, doc)| (name.to_string(), *doc))
+                .collect(),
+        ),
+        Some((cmd, arg)) => {
+            let args: &[(&str, &'static str)] = match cmd {
+                "submit" => &[
+                    ("approve", "Approve"),
+                    ("changes", "Request changes"),
+                    ("comment", "Send comments without a verdict"),
+                ],
+                "toggle" | "toggle-option" => &[("soft-wrap", "Soft-wrap long lines")],
+                _ => &[],
+            };
+            (
+                cmd.len() + 1,
+                args.iter()
+                    .filter(|(a, _)| a.starts_with(arg.trim_start()))
+                    .map(|(a, d)| (a.to_string(), *d))
+                    .collect(),
+            )
+        }
+    }
 }
 
 pub struct App {
@@ -115,9 +202,26 @@ pub struct App {
     screen: Rect,
     view: Rect,
     quit: bool,
+    /// The store, and the review of this source in it.
+    conn: Connection,
+    review: Review,
+    threads: Vec<Thread>,
+    unsent: usize,
+    /// Threads opened from their one-line marker.
+    expanded: HashSet<String>,
+    comment_box: Option<CommentBox>,
+    /// Where the comment box was drawn, and each thread row (screen row, thread index).
+    box_area: Rect,
+    thread_hits: Vec<(u16, usize)>,
+    /// Quitting with unsent comments reminds you once.
+    reminded: bool,
+    /// `:editor` asked for; the event loop runs it, since it needs the terminal.
+    run_editor: bool,
+    /// The store's `data_version` when last read: it changes when another process writes.
+    data_version: i64,
 }
 
-pub fn run(source: Source, config: &Config) -> Result<()> {
+pub fn run(source: Source, config: &Config, conn: Connection) -> Result<()> {
     let theme = match Theme::load(&config.theme, ColorSupport::detect()) {
         Ok(t) => t,
         Err(e) => {
@@ -125,13 +229,13 @@ pub fn run(source: Source, config: &Config) -> Result<()> {
             Theme::load("default", ColorSupport::detect())?
         }
     };
-    let mut app = App::new(source, config, theme)?;
+    let mut app = App::new(source, config, theme, conn)?;
     // Raw mode and the alternate screen; the terminal is restored on a panic too.
     let mut terminal = ratatui::init();
     if config.editor.mouse {
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     }
-    let result = app.event_loop(&mut terminal);
+    let result = app.event_loop(&mut terminal, config.editor.mouse);
     if config.editor.mouse {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     }
@@ -140,8 +244,9 @@ pub fn run(source: Source, config: &Config) -> Result<()> {
 }
 
 impl App {
-    fn new(source: Source, config: &Config, theme: Theme) -> Result<App> {
+    fn new(source: Source, config: &Config, theme: Theme, conn: Connection) -> Result<App> {
         let loader = Loader::new(&theme)?;
+        let review = Review::open(&conn, &source)?;
         let mut app = App {
             files: (0..source.changes.len()).map(|_| None).collect(),
             context: HashMap::new(),
@@ -169,9 +274,71 @@ impl App {
             screen: Rect::default(),
             view: Rect::default(),
             quit: false,
+            conn,
+            review,
+            threads: vec![],
+            unsent: 0,
+            expanded: HashSet::new(),
+            comment_box: None,
+            box_area: Rect::default(),
+            thread_hits: vec![],
+            reminded: false,
+            run_editor: false,
+            data_version: 0,
         };
         app.load(0);
+        app.reload();
+        app.data_version = app.data_version();
+        if app.review.requested_at.is_some() {
+            app.status = Some((app.request_message(), false));
+        }
         Ok(app)
+    }
+
+    /// Reads the review's threads and state again, after a change here or elsewhere.
+    fn reload(&mut self) {
+        let result = (|| -> Result<()> {
+            self.review = self.review.reload(&self.conn)?;
+            self.threads = review::threads(&self.conn, &self.review.id)?;
+            self.unsent = review::unsent(&self.conn, &self.review.id)?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            self.status = Some((format!("{e:#}"), true));
+        }
+    }
+
+    fn data_version(&self) -> i64 {
+        self.conn
+            .pragma_query_value(None, "data_version", |r| r.get(0))
+            .unwrap_or(0)
+    }
+
+    /// Picks up what other processes (an agent's MCP server, the CLI) wrote to the store. Your
+    /// view never moves; a new review request shows in the command line.
+    fn refresh(&mut self) {
+        let v = self.data_version();
+        if v == self.data_version {
+            return;
+        }
+        self.data_version = v;
+        let before = self.review.requested_at.clone();
+        self.reload();
+        if self.review.requested_at.is_some() && self.review.requested_at != before {
+            self.status = Some((self.request_message(), false));
+        }
+    }
+
+    fn request_message(&self) -> String {
+        let r = &self.review;
+        let by = r.requested_by.as_deref().unwrap_or("an agent");
+        match r.request_note.as_deref().filter(|n| !n.is_empty()) {
+            Some(note) => format!(
+                "{by} asks for a review: {}",
+                note.lines().next().unwrap_or("")
+            ),
+            None => format!("{by} asks for a review"),
+        }
     }
 
     /// One frame: the picker's preview is loaded first.
@@ -179,27 +346,71 @@ impl App {
         self.load_preview();
         self.render(f);
     }
-    fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+    fn event_loop(&mut self, terminal: &mut DefaultTerminal, mouse: bool) -> Result<()> {
         let size = terminal.size()?;
         self.screen = Rect::new(0, 0, size.width, size.height);
-        self.view = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
+        self.layout();
         let mut first = true;
         while !self.quit {
             terminal.draw(|f| self.draw(f))?;
             if std::mem::take(&mut first) {
                 tracing::info!("first screen after {:?}", crate::STARTED.elapsed());
             }
-            match event::read()? {
-                Event::Key(k) if k.kind != KeyEventKind::Release => {
-                    if self.key(Key::from(k)) == Some(AppAction::Suspend) {
-                        suspend(terminal)?;
+            // About twice a second, look for what other processes wrote.
+            if event::poll(Duration::from_millis(500))? {
+                match event::read()? {
+                    Event::Key(k) if k.kind != KeyEventKind::Release => {
+                        if self.key(Key::from(k)) == Some(AppAction::Suspend) {
+                            suspend(terminal)?;
+                        }
                     }
+                    Event::Mouse(m) => self.mouse(m),
+                    _ => {} // resizes and anything else just redraw
                 }
-                Event::Mouse(m) => self.mouse(m),
-                _ => {} // resizes and anything else just redraw
             }
+            if std::mem::take(&mut self.run_editor) {
+                self.external_editor(terminal, mouse)?;
+            }
+            self.refresh();
         }
         Ok(())
+    }
+
+    /// `:editor`: hands the terminal to `$EDITOR` with the comment box's text, then takes it back.
+    fn external_editor(&mut self, terminal: &mut DefaultTerminal, mouse: bool) -> Result<()> {
+        let Some(b) = &self.comment_box else {
+            return Ok(());
+        };
+        let text = b.file.text.to_string();
+        if mouse {
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        }
+        ratatui::restore();
+        let result = comments::external_edit(&comments::editor(), &text);
+        crossterm::terminal::enable_raw_mode()?;
+        crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+        if mouse {
+            crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+        }
+        terminal.clear()?;
+        match result {
+            Ok(new) => self.set_box_text(&new),
+            Err(e) => self.status = Some((format!("{e:#}"), true)),
+        }
+        Ok(())
+    }
+
+    /// Splits the screen: the file view, the comment box when it's open, then the statusline
+    /// and the command line.
+    fn layout(&mut self) {
+        let (w, h) = (self.screen.width, self.screen.height.saturating_sub(2));
+        let box_h = if self.comment_box.is_some() {
+            BOX_HEIGHT.min(h.saturating_sub(3))
+        } else {
+            0
+        };
+        self.view = Rect::new(0, 0, w, h - box_h);
+        self.box_area = Rect::new(0, h - box_h, w, box_h);
     }
 
     fn load(&mut self, i: usize) {
@@ -224,28 +435,114 @@ impl App {
         match self.picker.as_ref().and_then(|p| p.selected().cloned()) {
             Some(Target::Change(i)) => self.load(i),
             Some(Target::Path(p)) => self.load_context(&p),
+            Some(Target::Thread(id)) => {
+                if let Some((path, _)) = self.thread_place(&id) {
+                    match self.source.changes.iter().position(|c| c.path == path) {
+                        Some(i) => self.load(i),
+                        None => self.load_context(&path),
+                    }
+                }
+            }
             None => {}
         }
     }
 
+    /// A line thread's file and first line (0-based).
+    fn thread_place(&self, id: &str) -> Option<(String, usize)> {
+        let a = self.threads.iter().find(|t| t.id == id)?.anchor.as_ref()?;
+        Some((a.path.clone(), a.start as usize - 1))
+    }
+
+    /// The file keys act on: the comment box while it's open, else the file on screen.
     fn file(&self) -> &File {
+        match &self.comment_box {
+            Some(b) => &b.file,
+            None => self.main_file(),
+        }
+    }
+
+    // `if let` can't return the borrow here (a borrow checker limit), so this checks first.
+    #[allow(clippy::unnecessary_unwrap)]
+    fn file_mut(&mut self) -> &mut File {
+        if self.comment_box.is_some() {
+            return &mut self.comment_box.as_mut().unwrap().file;
+        }
+        self.main_file_mut()
+    }
+
+    /// The file on screen, under the comment box if one is open.
+    fn main_file(&self) -> &File {
         match &self.cur {
             Cur::Change(i) => self.files[*i].as_ref().expect("the current file is loaded"),
             Cur::Context(p) => &self.context[p],
         }
     }
 
-    fn file_mut(&mut self) -> &mut File {
+    fn main_file_mut(&mut self) -> &mut File {
         match &self.cur {
             Cur::Change(i) => self.files[*i].as_mut().expect("the current file is loaded"),
             Cur::Context(p) => self.context.get_mut(p).expect("the current file is loaded"),
         }
     }
 
+    /// The path of the file on screen, as threads are anchored.
+    fn main_path(&self) -> &str {
+        match &self.cur {
+            Cur::Change(i) => &self.source.changes[*i].path,
+            Cur::Context(p) => p,
+        }
+    }
+
+    /// The threads of the file on screen, as drawn.
+    fn main_threads(&self) -> Threads {
+        comments::layout(&self.threads, self.main_path(), &self.expanded, &self.theme)
+    }
+
+    /// Thread rows as helix-core annotations, so scrolling and the mouse see them; none in the
+    /// comment box.
+    fn annotations(&self) -> TextAnnotations<'static> {
+        let mut a = TextAnnotations::default();
+        if self.comment_box.is_none() {
+            let lines = ThreadLines::new(&self.main_threads(), self.main_file().text.slice(..));
+            a.add_line_annotation(Box::new(lines));
+        }
+        a
+    }
+
+    /// Soft wrap of the focused file: the comment box always wraps.
+    fn wrap(&self) -> bool {
+        self.wrap || self.comment_box.is_some()
+    }
+
+    /// The focused file's text area: (rows, columns).
+    fn text_size(&self) -> (usize, u16) {
+        match &self.comment_box {
+            Some(_) => (
+                self.box_area.height.saturating_sub(2) as usize,
+                self.box_area.width.saturating_sub(2),
+            ),
+            None => {
+                let f = self.main_file();
+                (
+                    self.view.height.saturating_sub(f.notices.len() as u16) as usize,
+                    self.view.width.saturating_sub(f.gutter_width() as u16),
+                )
+            }
+        }
+    }
+
+    /// Runs `f` with the file on screen focused, even while the comment box is open.
+    fn on_main<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let b = self.comment_box.take();
+        let r = f(self);
+        self.comment_box = b;
+        r
+    }
+
     fn open(&mut self, target: Target) {
-        let _ = self.push_jump();
         match target {
             Target::Change(i) => {
+                let _ = self.push_jump();
                 self.load(i);
                 self.cur = Cur::Change(i);
             }
@@ -254,17 +551,350 @@ impl App {
                 if let Some(i) = self.source.changes.iter().position(|c| c.path == p) {
                     return self.open(Target::Change(i));
                 }
+                let _ = self.push_jump();
                 self.load_context(&p);
                 self.cur = Cur::Context(p);
+            }
+            Target::Thread(id) => {
+                let Some(t) = self.threads.iter().find(|t| t.id == id).cloned() else {
+                    return;
+                };
+                match &t.anchor {
+                    Some(a) => {
+                        self.open(Target::Path(a.path.clone()));
+                        self.expanded.insert(t.id.clone());
+                        self.select_lines(a.start as usize - 1, a.end as usize - 1);
+                        self.scroll_to_cursor(true);
+                    }
+                    // A review-level thread has no lines to show: its comment opens instead.
+                    None => match t.latest_yours() {
+                        Some(c) => self.open_box(Place::Edit(c.id.clone())),
+                        None => self.open_box(Place::Reply(t.id.clone())),
+                    },
+                }
+                return;
             }
         }
         self.mode = Mode::Normal;
     }
 
-    fn text_height(&self) -> usize {
-        self.view
-            .height
-            .saturating_sub(self.file().notices.len() as u16) as usize
+    /// Selects whole lines `start..=end` (0-based) of the file on screen, as `x` does.
+    fn select_lines(&mut self, start: usize, end: usize) {
+        let file = self.main_file_mut();
+        let text = file.text.slice(..);
+        let last = text.len_lines() - 1;
+        let (from, to) = (
+            text.line_to_char(start.min(last)),
+            text.line_to_char((end + 1).min(last)),
+        );
+        file.sel = Selection::single(from, to.max(from)).ensure_invariants(text);
+    }
+
+    /// The thread under the cursor in the file on screen: the innermost one holding its line.
+    fn thread_here(&self) -> Option<usize> {
+        let f = self.main_file();
+        let text = f.text.slice(..);
+        let line = text.char_to_line(f.sel.primary().cursor(text)) as u32 + 1;
+        let path = self.main_path();
+        self.threads
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| t.anchor.as_ref().map(|a| (i, a)))
+            .filter(|(_, a)| a.path == path && a.start <= line && line <= a.end)
+            .max_by_key(|(_, a)| a.start)
+            .map(|(i, _)| i)
+    }
+
+    /// Where a comment on the selection would go: the primary selection's lines, on the new
+    /// side. The final empty line of a file isn't a line to comment on.
+    fn can_comment(&self) -> Result<Anchor, &'static str> {
+        if let Cur::Change(i) = self.cur
+            && self.source.changes[i].new == Content::None
+        {
+            return Err("Comments go on the new side, and this file was deleted");
+        }
+        let f = self.main_file();
+        if f.binary {
+            return Err("A binary file has no lines to comment on");
+        }
+        if f.collapsed {
+            return Err("Expand the file first: ret");
+        }
+        let text = f.text.slice(..);
+        let n = text.len_lines();
+        let last = if n > 1 && text.line(n - 1).len_chars() == 0 {
+            n - 2
+        } else {
+            n - 1
+        };
+        let (s, e) = f.sel.primary().line_range(text);
+        let e = e.min(last);
+        Ok(Anchor {
+            path: self.main_path().to_string(),
+            start: s.min(e) as u32 + 1,
+            end: e as u32 + 1,
+        })
+    }
+
+    /// Opens the comment box for `place`, with its draft if one was saved.
+    fn open_box(&mut self, place: Place) {
+        let initial = match &place {
+            Place::Edit(c) => self
+                .threads
+                .iter()
+                .flat_map(|t| &t.comments)
+                .find(|x| &x.id == c)
+                .map(|x| x.body.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        let text = match review::draft(&self.conn, &self.review.id, &place.key()) {
+            Ok(Some(d)) => {
+                self.status = Some(("Draft restored".into(), false));
+                d
+            }
+            Ok(None) => initial,
+            Err(e) => {
+                self.status = Some((format!("{e:#}"), true));
+                initial
+            }
+        };
+        self.comment_box = Some(CommentBox::new(place, &text, &self.loader));
+        self.mode = Mode::Normal;
+        self.pending.clear();
+        self.layout();
+        // The commented lines stay in view above the box.
+        self.on_main(|app| app.scroll_to_cursor(false));
+        self.scroll_to_cursor(false);
+    }
+
+    fn set_box_text(&mut self, text: &str) {
+        if let Some(b) = &mut self.comment_box {
+            b.set_text(text, &self.loader);
+            self.save_draft();
+            self.scroll_to_cursor(false);
+        }
+    }
+
+    /// The box's text is saved as you type, so closing, quitting or a crash keeps it.
+    fn save_draft(&mut self) {
+        let Some(b) = &self.comment_box else { return };
+        let body = b.file.text.to_string();
+        if let Err(e) = review::save_draft(&self.conn, &self.review.id, &b.place.key(), &body) {
+            self.status = Some((format!("Couldn't save the draft: {e:#}"), true));
+        }
+    }
+
+    /// Keys the comment box handles itself: everything in insert mode, and `ret` (save), `q`
+    /// (close), `i` and `a` in normal mode. The rest go through the keymap as usual.
+    fn box_key(&mut self, key: Key) -> bool {
+        let Some(b) = &mut self.comment_box else {
+            return false;
+        };
+        let ctrl = key.mods.contains(KeyModifiers::CONTROL);
+        if b.insert {
+            if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+                b.leave_insert();
+            } else if !key
+                .mods
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && b.insert_key(key.code, &self.loader)
+            {
+                self.save_draft();
+            }
+            self.scroll_to_cursor(false);
+            return true;
+        }
+        match key.code {
+            KeyCode::Enter if key.mods.is_empty() => self.save_box(),
+            KeyCode::Char('q') if key.mods.is_empty() => self.close_box(),
+            KeyCode::Char(c @ ('i' | 'a')) if key.mods.is_empty() => {
+                b.enter_insert(c == 'a');
+                self.mode = Mode::Normal;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn close_box(&mut self) {
+        if let Some(b) = self.comment_box.take()
+            && !b.body().is_empty()
+        {
+            self.status = Some((
+                "Draft kept: it comes back when you reopen the box there".into(),
+                false,
+            ));
+        }
+        self.mode = Mode::Normal;
+        self.layout();
+    }
+
+    /// `ret` in the box: the comment is written to the store, and the box closes.
+    fn save_box(&mut self) {
+        let file_text = self.main_file().text.to_string();
+        let Some(b) = &mut self.comment_box else {
+            return;
+        };
+        let body = b.body();
+        let (conn, id) = (&self.conn, &self.review.id);
+        let result = match &b.place {
+            Place::Edit(_) if body.is_empty() && !b.confirm_delete => {
+                b.confirm_delete = true;
+                self.status = Some((
+                    "Saving it empty deletes the comment: ret again deletes it, q keeps it".into(),
+                    true,
+                ));
+                return;
+            }
+            Place::Edit(c) if body.is_empty() => review::delete(conn, c).map(|_| "Comment deleted"),
+            _ if body.is_empty() => Ok("Nothing to save"),
+            Place::Edit(c) => review::edit(conn, c, &body).map(|_| "Comment saved"),
+            Place::Reply(t) => review::reply(conn, t, YOU, &body).map(|_| "Reply saved"),
+            Place::Review => review::comment(conn, id, None, YOU, &body).map(|_| "Comment saved"),
+            Place::Lines(a) => review::comment(conn, id, Some((a, &file_text)), YOU, &body)
+                .map(|_| "Comment saved"),
+        };
+        match result {
+            Ok(msg) => {
+                let _ = review::save_draft(conn, id, &b.place.key(), "");
+                self.comment_box = None;
+                self.mode = Mode::Normal;
+                self.layout();
+                self.reload();
+                let unsent = match self.unsent {
+                    n if n > 0 && msg != "Nothing to save" => {
+                        format!(" · {n} unsent; space s submits")
+                    }
+                    _ => String::new(),
+                };
+                self.status = Some((format!("{msg}{unsent}"), false));
+            }
+            Err(e) => self.status = Some((format!("{e:#}"), true)),
+        }
+    }
+
+    /// `space s`: every unsent comment goes to the agent as one round, with a verdict.
+    fn submit(&mut self, verdict: Verdict) {
+        let files: Vec<(String, Vec<u8>)> = self
+            .source
+            .changes
+            .iter()
+            .filter_map(|c| match self.source.read(&c.new) {
+                Ok(Some(bytes)) => Some((c.path.clone(), bytes)),
+                _ => None,
+            })
+            .collect();
+        let head = self.source.git.as_ref().map(|g| g.head.to_string());
+        match review::submit(
+            &self.conn,
+            &self.review.id,
+            verdict,
+            &files,
+            head.as_deref(),
+        ) {
+            Ok(r) => {
+                self.reload();
+                self.status = Some((
+                    format!(
+                        "Round {} submitted: {}, {} comment{}. The agent gets it from wait_for_review",
+                        r.n,
+                        verdict.describe(),
+                        r.comments,
+                        if r.comments == 1 { "" } else { "s" }
+                    ),
+                    false,
+                ));
+            }
+            Err(e) => self.status = Some((format!("{e:#}"), true)),
+        }
+    }
+
+    /// `]d`, `[d`, `]D`, `[D`: to a thread in the file on screen, selecting its lines.
+    fn goto_thread(&mut self, forward: bool, edge: bool) {
+        let path = self.main_path();
+        let mut spans: Vec<(usize, usize)> = self
+            .threads
+            .iter()
+            .filter_map(|t| t.anchor.as_ref())
+            .filter(|a| a.path == path)
+            .map(|a| (a.start as usize - 1, a.end as usize - 1))
+            .collect();
+        spans.sort();
+        spans.dedup();
+        let f = self.main_file();
+        let text = f.text.slice(..);
+        let line = text.char_to_line(f.sel.primary().cursor(text));
+        let target = match (edge, forward) {
+            (true, true) => spans.last(),
+            (true, false) => spans.first(),
+            (false, true) => spans.iter().find(|s| s.0 > line),
+            (false, false) => spans.iter().rev().find(|s| s.0 < line),
+        };
+        match target.copied() {
+            Some((s, e)) => {
+                self.select_lines(s, e);
+                self.scroll_to_cursor(false);
+            }
+            None => self.status = Some(("No more threads in this file".into(), false)),
+        }
+    }
+
+    /// `space d` / `space D`: Helix's diagnostic pickers, over threads.
+    fn thread_picker(&self, all: bool) -> Picker {
+        let t = &self.theme;
+        let path = self.main_path();
+        let items = self
+            .threads
+            .iter()
+            .filter(|th| all || th.anchor.as_ref().is_some_and(|a| a.path == path))
+            .map(|th| {
+                let unsent = th.comments.iter().any(|c| c.unsent());
+                let (status, style) = if unsent {
+                    ("unsent", t.get("warning"))
+                } else {
+                    (th.status.as_str(), t.get("info"))
+                };
+                let place = th
+                    .anchor
+                    .as_ref()
+                    .map_or("review".into(), |a| a.to_string());
+                let first = th.comments.first();
+                Item {
+                    tags: vec![(status.into(), style), (place, t.get("ui.text"))],
+                    text: format!(
+                        "{}: {}",
+                        first.map_or("", |c| c.author.as_str()),
+                        first.map_or("", |c| c.body.lines().next().unwrap_or(""))
+                    ),
+                    target: Target::Thread(th.id.clone()),
+                }
+            })
+            .collect();
+        Picker::new(vec!["status", "place", "comment"], items)
+    }
+
+    /// Whether a command applies where you are, for the key help panel: thread actions on a
+    /// thread, submits with something to send.
+    fn applies(&self, name: &str) -> bool {
+        let here = || {
+            let path = self.main_path();
+            self.threads
+                .iter()
+                .any(|t| t.anchor.as_ref().is_some_and(|a| a.path == path))
+        };
+        match name {
+            "reply" => self.thread_here().is_some(),
+            "edit_comment" => self
+                .thread_here()
+                .is_some_and(|i| self.threads[i].latest_yours().is_some()),
+            "submit_changes" | "submit_comment" => self.unsent > 0,
+            "comment" => self.can_comment().is_ok(),
+            "goto_next_diag" | "goto_prev_diag" | "goto_first_diag" | "goto_last_diag"
+            | "diagnostics_picker" => here(),
+            "workspace_diagnostics_picker" => !self.threads.is_empty(),
+            _ => true,
+        }
     }
 
     /// Handles one key. Returns the app action that needs the terminal (suspend), if any.
@@ -318,6 +948,10 @@ impl App {
             self.count = None;
             return None;
         }
+        if self.comment_box.is_some() && self.pending.is_empty() && self.box_key(key) {
+            self.count = None;
+            return None;
+        }
         // A count, as in Helix: digits before a command (a leading 0 isn't one).
         if self.pending.is_empty()
             && let Some(d) = key.char().and_then(|c| c.to_digit(10))
@@ -365,10 +999,12 @@ impl App {
         let result = match command.action {
             Action::Doc(f) => {
                 // As Helix: these jumps go on the jumplist, and these motions repeat with A-.
-                if matches!(
-                    command.name,
-                    "goto_file_start" | "goto_last_line" | "goto_line"
-                ) {
+                if self.comment_box.is_none()
+                    && matches!(
+                        command.name,
+                        "goto_file_start" | "goto_last_line" | "goto_line"
+                    )
+                {
                     let _ = self.push_jump();
                 }
                 if matches!(
@@ -428,7 +1064,7 @@ impl App {
                 });
             }
             KeyCode::Enter => {
-                let Some(Prompt { kind, line }) = self.prompt.take() else {
+                let Some(Prompt { kind, line, .. }) = self.prompt.take() else {
                     return;
                 };
                 match kind {
@@ -453,7 +1089,29 @@ impl App {
                     }
                 }
             }
+            KeyCode::Tab | KeyCode::BackTab if matches!(prompt.kind, PromptKind::Command) => {
+                // Helix's completion: each tab shows the next match for what was typed.
+                let typed = match &prompt.completion {
+                    Some((t, _)) => t.clone(),
+                    None => prompt.line.clone(),
+                };
+                let (start, items) = completions(&typed);
+                if items.is_empty() {
+                    return;
+                }
+                let n = items.len();
+                let back = key.code == KeyCode::BackTab || key.mods.contains(KeyModifiers::SHIFT);
+                let i = match (&prompt.completion, back) {
+                    (None, true) => n - 1,
+                    (None, false) => 0,
+                    (Some((_, i)), true) => (i + n - 1) % n,
+                    (Some((_, i)), false) => (i + 1) % n,
+                };
+                prompt.line = format!("{}{}", &typed[..start], items[i].0);
+                prompt.completion = Some((typed, i));
+            }
             KeyCode::Backspace => {
+                prompt.completion = None;
                 if prompt.line.pop().is_none() {
                     return self.prompt_key(Key {
                         code: KeyCode::Esc,
@@ -467,6 +1125,7 @@ impl App {
                     .mods
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
+                prompt.completion = None;
                 prompt.line.push(c);
                 self.search_preview();
             }
@@ -480,6 +1139,7 @@ impl App {
         if let Some(Prompt {
             kind: PromptKind::Regex { action, origin },
             line,
+            ..
         }) = &self.prompt
         {
             let (action, origin) = (*action, origin.clone());
@@ -499,6 +1159,7 @@ impl App {
                     top,
                 },
             line,
+            ..
         }) = &self.prompt
         else {
             return;
@@ -514,15 +1175,61 @@ impl App {
     }
 
     fn app_command(&mut self, action: AppAction) -> Option<AppAction> {
+        use AppAction as A;
+        if self.comment_box.is_some()
+            && matches!(
+                action,
+                A::NextFile
+                    | A::PrevFile
+                    | A::FilePicker
+                    | A::ChangedFilePicker
+                    | A::ToggleCollapse
+                    | A::JumpForward
+                    | A::JumpBackward
+                    | A::SaveSelection
+                    | A::Comment
+                    | A::ReviewComment
+                    | A::Reply
+                    | A::EditComment
+                    | A::Submit(_)
+                    | A::ThreadPicker { .. }
+                    | A::NextThread(_)
+                    | A::EdgeThread(_)
+            )
+        {
+            self.status = Some((
+                "Close the comment box first: q in normal mode (the draft is kept)".into(),
+                true,
+            ));
+            return None;
+        }
         match action {
+            A::Comment => match self.can_comment() {
+                Ok(a) => self.open_box(Place::Lines(a)),
+                Err(e) => self.status = Some((e.into(), true)),
+            },
+            A::ReviewComment => self.open_box(Place::Review),
+            A::Reply => match self.thread_here() {
+                Some(i) => self.open_box(Place::Reply(self.threads[i].id.clone())),
+                None => self.status = Some(("No thread here to reply to".into(), true)),
+            },
+            A::EditComment => {
+                match self
+                    .thread_here()
+                    .and_then(|i| self.threads[i].latest_yours())
+                    .map(|c| c.id.clone())
+                {
+                    Some(c) => self.open_box(Place::Edit(c)),
+                    None => self.status = Some(("No comment of yours here".into(), true)),
+                }
+            }
+            A::Submit(v) => self.submit(v),
+            A::ThreadPicker { all } => self.picker = Some(self.thread_picker(all)),
+            A::NextThread(forward) => self.goto_thread(forward, false),
+            A::EdgeThread(last) => self.goto_thread(last, true),
             AppAction::SelectMode => self.mode = Mode::Select,
             AppAction::NormalMode => self.mode = Mode::Normal,
-            AppAction::CommandMode => {
-                self.prompt = Some(Prompt {
-                    kind: PromptKind::Command,
-                    line: String::new(),
-                })
-            }
+            AppAction::CommandMode => self.prompt = Some(Prompt::new(PromptKind::Command)),
             AppAction::Search(forward) => {
                 let file = self.file();
                 let kind = PromptKind::Search {
@@ -530,10 +1237,7 @@ impl App {
                     origin: file.sel.clone(),
                     top: file.top,
                 };
-                self.prompt = Some(Prompt {
-                    kind,
-                    line: String::new(),
-                });
+                self.prompt = Some(Prompt::new(kind));
             }
             AppAction::SearchNext(forward) => match self.last_search.clone() {
                 Some(q) => self.doc_command(|cx| commands::search_next(cx, &q, forward)),
@@ -561,7 +1265,15 @@ impl App {
             AppAction::ChangedFilePicker => self.picker = Some(self.changed_file_picker()),
             AppAction::FilePicker => self.picker = Some(self.file_picker()),
             AppAction::ToggleCollapse => {
-                let file = self.file_mut();
+                // On a thread, ret opens or closes it.
+                if let Some(i) = self.thread_here() {
+                    let id = self.threads[i].id.clone();
+                    if !self.expanded.remove(&id) {
+                        self.expanded.insert(id);
+                    }
+                    return None;
+                }
+                let file = self.main_file_mut();
                 let marker = "generated file, collapsed; enter expands";
                 if file.notices.iter().any(|n| n == marker) || file.collapsed {
                     file.collapsed = !file.collapsed;
@@ -601,10 +1313,7 @@ impl App {
                     action,
                     origin: self.file().sel.clone(),
                 };
-                self.prompt = Some(Prompt {
-                    kind,
-                    line: String::new(),
-                });
+                self.prompt = Some(Prompt::new(kind));
             }
             AppAction::SaveSelection => {
                 let _ = self.push_jump();
@@ -671,7 +1380,7 @@ impl App {
     /// Helix's `push_jump`: the current place goes on the jumplist, dropping anything ahead
     /// (helix-view `JumpList::push_impl`, capacity 30). Returns how many fell off the front.
     fn push_jump(&mut self) -> usize {
-        let entry = (self.cur.clone(), self.file().sel.clone());
+        let entry = (self.cur.clone(), self.main_file().sel.clone());
         self.jumps.truncate(self.jump);
         let mut removed = 0;
         if self.jumps.last() != Some(&entry) {
@@ -702,7 +1411,7 @@ impl App {
             current = current.saturating_sub(self.push_jump());
         }
         self.jump = current;
-        let here = (self.cur.clone(), self.file().sel.clone());
+        let here = (self.cur.clone(), self.main_file().sel.clone());
         if self.jumps.get(self.jump)? == &here {
             self.jump = self.jump.checked_sub(1)?;
         }
@@ -743,7 +1452,17 @@ impl App {
             }
             return;
         }
-        if self.prompt.is_some() {
+        if self.prompt.is_some() || self.comment_box.is_some() {
+            return;
+        }
+        // A click on a thread opens or closes it.
+        if m.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some(&(_, i)) = self.thread_hits.iter().find(|(y, _)| *y == m.row)
+        {
+            let id = self.threads[i].id.clone();
+            if !self.expanded.remove(&id) {
+                self.expanded.insert(id);
+            }
             return;
         }
         match m.kind {
@@ -773,7 +1492,7 @@ impl App {
 
     /// The character under a screen cell in the file view (Helix's `char_idx_at_visual_offset`).
     fn pos_at(&self, x: u16, y: u16) -> Option<usize> {
-        let file = self.file();
+        let file = self.main_file();
         let header = file.notices.len() as u16;
         let gutter = file.gutter_width() as u16;
         if y < self.view.y + header
@@ -790,8 +1509,7 @@ impl App {
         let row = (y - self.view.y - header) as isize;
         let col = left + (x - self.view.x - gutter) as usize;
         let anchor = text.line_to_char(file.top.min(text.len_lines() - 1));
-        let (pos, _) =
-            char_idx_at_visual_offset(text, anchor, row, col, &fmt, &TextAnnotations::default());
+        let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &self.annotations());
         Some(pos)
     }
 
@@ -857,13 +1575,44 @@ impl App {
         Picker::new(vec!["path"], items)
     }
 
-    /// `:` commands. ponytail: a few for now; the full set with completion comes with M2.
+    /// `:` commands (see [`TYPABLE`]), and `:<n>` to go to line n.
     fn typed_command(&mut self, line: &str) {
-        let (name, _args) = line.split_once(' ').unwrap_or((line, ""));
+        let (name, args) = line.split_once(' ').unwrap_or((line, ""));
         match name {
             "" => {}
+            "q" | "quit" | "qa" if self.unsent > 0 && !self.reminded => {
+                self.reminded = true;
+                let n = self.unsent;
+                self.status = Some((
+                    format!(
+                        "{n} comment{} not sent to the agent: space s submits; :q again quits and keeps {}",
+                        if n == 1 { "" } else { "s" },
+                        if n == 1 { "it" } else { "them" }
+                    ),
+                    true,
+                ));
+            }
             "q" | "quit" | "q!" | "quit!" | "qa" | "qa!" => self.quit = true,
-            "toggle" | "toggle-option" => match _args.trim() {
+            "comment" => _ = self.app_command(AppAction::Comment),
+            "review-comment" => _ = self.app_command(AppAction::ReviewComment),
+            "reply" => _ = self.app_command(AppAction::Reply),
+            "edit-comment" => _ = self.app_command(AppAction::EditComment),
+            "submit" => match Verdict::parse(args.trim()) {
+                Some(v) => _ = self.app_command(AppAction::Submit(v)),
+                None => {
+                    self.status = Some((
+                        "Submit how? :submit approve, :submit changes or :submit comment".into(),
+                        true,
+                    ))
+                }
+            },
+            "editor" => match self.comment_box {
+                Some(_) => self.run_editor = true,
+                None => {
+                    self.status = Some(("No comment box is open: space c opens one".into(), true))
+                }
+            },
+            "toggle" | "toggle-option" => match args.trim() {
                 "soft-wrap" | "soft-wrap.enable" => {
                     self.wrap = !self.wrap;
                     self.status = Some((
@@ -885,16 +1634,8 @@ impl App {
 
     /// Runs a command on the current file's selection, then keeps the cursor in view.
     fn doc_command(&mut self, f: impl FnOnce(&mut Ctx)) {
-        let (count, extend, height, wrap) = (
-            self.count,
-            self.mode == Mode::Select,
-            self.text_height(),
-            self.wrap,
-        );
-        let width = self
-            .view
-            .width
-            .saturating_sub(self.file().gutter_width() as u16);
+        let (count, extend, wrap) = (self.count, self.mode == Mode::Select, self.wrap());
+        let (height, width) = self.text_size();
         let file = self.file_mut();
         if file.collapsed || file.binary {
             return;
@@ -937,15 +1678,11 @@ impl App {
     /// a cursor outside the view is centred instead, as Helix does after a search. Rows are
     /// visual rows, so a wrapped line counts as more than one.
     fn scroll_to_cursor(&mut self, center: bool) {
-        let height = self.text_height();
-        let width = self
-            .view
-            .width
-            .saturating_sub(self.file().gutter_width() as u16);
-        let wrap = self.wrap;
+        let (height, width) = self.text_size();
+        let wrap = self.wrap();
+        let annotations = self.annotations();
         let file = self.file_mut();
         let fmt = view::text_format(file, width, wrap);
-        let annotations = TextAnnotations::default();
         let text = file.text.slice(..);
         let cursor = file.sel.primary().cursor(text);
         let line = text.char_to_line(cursor);
@@ -1010,10 +1747,15 @@ impl App {
         if area.height < 3 {
             return;
         }
-        self.view = Rect::new(0, 0, area.width, area.height - 2);
-        let file = self.file();
-        let styles = self.selection_styles();
-        view::draw(
+        self.layout();
+        let file = self.main_file();
+        // Under the comment box, the commented lines keep normal mode's colours.
+        let styles = if self.comment_box.is_some() {
+            self.selection_styles_in("normal")
+        } else {
+            self.selection_styles()
+        };
+        self.thread_hits = view::draw(
             buf,
             self.view,
             file,
@@ -1023,11 +1765,89 @@ impl App {
             &self.loader,
             &self.theme,
             Some(styles),
+            &self.main_threads(),
         );
+        self.render_box(buf);
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
         self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
+        self.render_completion(buf, Rect::new(0, 0, area.width, area.height - 2));
         self.render_picker(buf, area);
         self.render_help(f, area);
+    }
+
+    /// The comment box, docked under the file view, with its place as the title.
+    fn render_box(&self, buf: &mut Buffer) {
+        let Some(b) = &self.comment_box else { return };
+        let t = &self.theme;
+        let popup = t.get("ui.popup");
+        let hint = if b.insert {
+            " esc: normal mode "
+        } else {
+            " ret saves · q closes · :editor "
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", clean(&b.place.title())))
+            .title_bottom(hint)
+            .style(popup)
+            .border_style(popup);
+        let inner = block.inner(self.box_area);
+        Clear.render(self.box_area, buf);
+        block.render(self.box_area, buf);
+        view::draw(
+            buf,
+            inner,
+            &b.file,
+            b.file.top,
+            b.file.left,
+            true,
+            &self.loader,
+            t,
+            Some(self.selection_styles()),
+            &Threads::default(),
+        );
+    }
+
+    /// `:` completions above the command line, as Helix lists them, with what each does.
+    fn render_completion(&self, buf: &mut Buffer, area: Rect) {
+        let Some(Prompt {
+            kind: PromptKind::Command,
+            line,
+            completion,
+        }) = &self.prompt
+        else {
+            return;
+        };
+        let typed = completion
+            .as_ref()
+            .map_or(line.as_str(), |(t, _)| t.as_str());
+        let (_, items) = completions(typed);
+        if items.is_empty() || area.height == 0 {
+            return;
+        }
+        let t = &self.theme;
+        let rows = items.len().min(area.height as usize).min(10);
+        let name_w = items.iter().map(|(n, _)| n.width()).max().unwrap_or(0);
+        let selected = completion.as_ref().map(|(_, i)| *i);
+        // The selected one stays in view.
+        let first = selected.map_or(0, |i| (i + 1).saturating_sub(rows));
+        let y0 = area.bottom() - rows as u16;
+        for (row, (i, (name, doc))) in items.iter().enumerate().skip(first).take(rows).enumerate() {
+            let style = if Some(i) == selected {
+                t.get("ui.menu.selected")
+            } else {
+                t.get("ui.menu")
+            };
+            let r = Rect::new(area.x, y0 + row as u16, area.width, 1);
+            buf.set_style(r, style);
+            buf.set_stringn(
+                r.x + 1,
+                r.y,
+                format!("{name:name_w$}  {doc}"),
+                area.width.saturating_sub(2) as usize,
+                style,
+            );
+        }
     }
 
     fn render_picker(&mut self, buf: &mut Buffer, area: Rect) {
@@ -1038,16 +1858,24 @@ impl App {
         picker.render(buf, list, &self.theme);
         let Some(preview) = preview else { return };
         let inner = picker::preview_frame(buf, preview, &self.theme);
-        let file = match picker.selected() {
-            Some(Target::Change(i)) => self.files[*i].as_ref(),
-            Some(Target::Path(p)) => self.context.get(p),
-            None => None,
+        let selected = picker.selected().cloned();
+        let at_path = |p: &str| match self.source.changes.iter().position(|c| c.path == p) {
+            Some(i) => self.files[i].as_ref(),
+            None => self.context.get(p),
+        };
+        let (file, line) = match &selected {
+            Some(Target::Change(i)) => (self.files[*i].as_ref(), None),
+            Some(Target::Path(p)) => (self.context.get(p), None),
+            Some(Target::Thread(id)) => match self.thread_place(id) {
+                Some((p, line)) => (at_path(&p), Some(line)),
+                None => (None, None),
+            },
+            None => (None, None),
         };
         if let Some(file) = file {
-            // Centre the first change, as Helix centres a preview on its range.
-            let top = file.hunks.first().map_or(0, |h| {
-                (h.after.start as usize).saturating_sub(inner.height as usize / 3)
-            });
+            // Centre the thread, or the first change, as Helix centres a preview on its range.
+            let line = line.or(file.hunks.first().map(|h| h.after.start as usize));
+            let top = line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3));
             view::draw(
                 buf,
                 inner,
@@ -1058,22 +1886,27 @@ impl App {
                 &self.loader,
                 &self.theme,
                 None,
+                &Threads::default(),
             );
         }
     }
 
     /// (selection, primary selection, cursor, primary cursor), as Helix picks them per mode.
     fn selection_styles(&self) -> view::SelectionStyles {
+        let mode = match (&self.comment_box, self.mode) {
+            (Some(b), _) if b.insert => "insert",
+            (_, Mode::Select) => "select",
+            _ => "normal",
+        };
+        self.selection_styles_in(mode)
+    }
+
+    fn selection_styles_in(&self, mode: &str) -> view::SelectionStyles {
         let t = &self.theme;
         let sel = t.get("ui.selection");
         let sel_primary = t.try_get("ui.selection.primary").unwrap_or(sel);
         let base_cursor = t.try_get_exact("ui.cursor").unwrap_or(sel);
         let base_primary = t.try_get("ui.cursor.primary").unwrap_or(base_cursor);
-        let mode = if self.mode == Mode::Select {
-            "select"
-        } else {
-            "normal"
-        };
         let cursor = t
             .try_get_exact(&format!("ui.cursor.{mode}"))
             .unwrap_or(base_cursor);
@@ -1094,12 +1927,19 @@ impl App {
             ),
             Cur::Context(p) => (p.as_str(), "context".to_string()),
         };
-        let mode = if self.mode == Mode::Select {
-            " SEL "
-        } else {
-            " NOR "
+        let mode = match (&self.comment_box, self.mode) {
+            (Some(b), _) if b.insert => " INS ",
+            (_, Mode::Select) => " SEL ",
+            _ => " NOR ",
         };
-        let left = format!("{mode} {}", clean(path));
+        let mut left = format!("{mode} {}", clean(path));
+        if let Some(b) = &self.comment_box {
+            left += &format!(" · {}", clean(&b.place.title()));
+        }
+        let which = match self.unsent {
+            0 => which,
+            n => format!("{n} unsent  {which}"),
+        };
         buf.set_stringn(area.x, area.y, &left, area.width as usize, base);
 
         let text = file.text.slice(..);
@@ -1194,7 +2034,13 @@ impl App {
                     menu = m;
                 }
             }
-            (menu.name, menu.help())
+            let rows = menu
+                .help()
+                .into_iter()
+                .filter(|(_, _, name)| name.is_none_or(|n| self.applies(n)))
+                .map(|(k, d, _)| (k, d))
+                .collect();
+            (menu.name, rows)
         } else {
             return;
         };

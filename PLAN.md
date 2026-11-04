@@ -507,6 +507,13 @@ the dashboard.
   selections, review-level comments, editing and deleting; inline collapsible threads; the
   unsubmitted count; snapshots; `space s` submit with a verdict; `glos mcp` with `get_review`,
   `request_review` and `wait_for_review`, so a submit reaches the agent; the CLI with `--json`.
+  *Status (2026-11-04):* built: the comment box (`space c`, `space C`, `space r`, `space m`) with
+  drafts saved per keystroke and `:editor`; threads inline, collapsed to one line, `ret` or a click
+  opening them; `]d`/`[d` and the thread pickers (`space d`, `space D`); the unsent count and the
+  quit reminder; `space s` and `:submit` with snapshots; `:` completion; the key help panel showing
+  only what applies; `glos mcp` (sessions registered by process id and agent name); `glos list`,
+  `show` and `submit` with `--json`. An agent's review request shows in an open glos within half
+  a second. Resolve and the rest of the agent tools stay in M3.
 - **Checkpoint.** Use glos for real reviews instead of tuicr before building M3–M5, and adjust the
   rest of the plan from what that shows. Include a fidelity pass: use glos and Helix side by side
   on the same files, and note every difference in how they feel.

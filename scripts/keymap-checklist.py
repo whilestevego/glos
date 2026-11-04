@@ -41,7 +41,9 @@ def parse_glos(src):
     view_defs() expanded."""
     def defs_of(fn):
         start = src.index(f"fn {fn}()")
-        return src[start:src.index("\n}\n", start)]
+        body = src[start:src.index("\n}\n", start)]
+        # rustfmt splits a menu's arguments over lines; join them back.
+        return re.sub(r'((?:sticky_)?menu)\(\s*("[^"]+"),\s*("[^"]+"),\s*', r'\1(\2, \3, ', body)
 
     def keys(spec):
         return ["|"] if spec == "|" else spec.split("|")
@@ -66,7 +68,7 @@ def parse_glos(src):
 # Keys PLAN.md gives to review actions, and when they arrive.
 PLANNED = {
     "space c": "comment on the selection (M2)", "space C": "review-level comment (M2)",
-    "space r": "reply to the thread (M3)", "space m": "edit your latest comment (M2)",
+    "space r": "reply to the thread (M2)", "space m": "edit your latest comment (M2)",
     "space x": "resolve or reopen the thread (M3)", "space s": "submit with a verdict (M2)",
     "space v": "switch view (M4)", "space o": "switch scope (M4)",
     "space d": "thread picker, this file (M2)", "space D": "thread picker, whole review (M2)",

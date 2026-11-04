@@ -261,6 +261,28 @@ PLAN.md:
 - **Commands ported from helix-term** live in one MPL-2.0 file, `src/ui/commands.rs`, tested in
   Helix's selection notation. Where a test and helix-core disagreed, helix-core won.
 
+## M2 (2026-11-04)
+
+- **Delivery is a claim in the store:** each round records when an agent took it and which one
+  (schema v2). `wait_for_review` takes the oldest round nobody has, in one transaction, so a
+  round reaches exactly one waiting agent, and a round submitted while none waits is kept until
+  one asks.
+- **Agents see only what's sent:** `get_review` and deliveries show submitted comments and agents'
+  own; unsent comments and drafts never leave glos.
+- **Editing a sent comment** marks it edited and makes it unsent again, so the next round carries
+  it. A sent comment can't be deleted, only edited.
+- **The comment box is a `File`** like any other, so helix-core's motions, the keymap and search
+  work in it unchanged. It's docked under the file view rather than floating at the selection,
+  so the commented lines stay visible above it.
+- **Threads are helix-core line annotations,** so scrolling and clicks count their rows exactly as
+  they're drawn.
+- **`space s` is a menu** (`a` approve, `r` request changes, `c` comment), so the verdicts appear in
+  the key help panel, which hides the ones that don't apply.
+- **Ids** are the first 12 hex digits of a v4 UUID: short enough for agents to quote back. Content
+  is hashed as a git blob (gix), so no hashing crate is needed.
+- **`glos mcp` serves the review of its starting folder:** the open review whose folder holds it,
+  the deepest one. In a git repo with no review yet, `request_review` makes one.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
