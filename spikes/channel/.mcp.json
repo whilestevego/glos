@@ -1,0 +1,1 @@
+{ "mcpServers": { "glos-spike": { "command": "./target/debug/channel" } } }
