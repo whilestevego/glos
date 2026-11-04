@@ -1669,3 +1669,27 @@ fn comments_on_one_commit_stay_on_it() {
         t.screen()
     );
 }
+
+#[test]
+fn change_motions_work_in_every_view() {
+    let old = lines(30);
+    let new = old
+        .replace("line 5\n", "line five\n")
+        .replace("line 20\n", "line twenty\nline 20.5\n");
+    // The same lines in every view, as the file view (helix-core's motions) finds them.
+    let walk = |view: &str| {
+        let mut t = T::files(&old, &new);
+        t.keys(&format!("space v {view} g g"));
+        let mut seen = vec![];
+        for keys in ["] g", "] g", "] g", "[ g", "] G", "[ G"] {
+            t.keys(keys);
+            seen.push(t.app.cursor_new_line());
+        }
+        seen
+    };
+    let file = walk("f");
+    assert_eq!(file[0], 4, "{file:?}");
+    assert_ne!(file[0], file[1], "two changes: {file:?}");
+    assert_eq!(walk("u"), file, "unified");
+    assert_eq!(walk("s"), file, "side by side");
+}

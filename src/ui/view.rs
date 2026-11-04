@@ -206,9 +206,28 @@ impl File {
     ) -> File {
         let text = Rope::from(text);
         let sel = Selection::point(0).ensure_invariants(text.slice(..));
+        // Each run of added and removed lines is a change, in the view's own lines, so `]g`
+        // and `[g` go through them as in the file view.
+        let mut hunks: Vec<Hunk> = vec![];
+        for (i, r) in rows.iter().enumerate() {
+            if !matches!(r, Row::Added(_) | Row::Removed(_)) {
+                continue;
+            }
+            let i = i as u32;
+            match hunks.last_mut() {
+                Some(h) if h.after.end == i => {
+                    h.after.end = i + 1;
+                    h.before.end = i + 1;
+                }
+                _ => hunks.push(Hunk {
+                    before: i..i + 1,
+                    after: i..i + 1,
+                }),
+            }
+        }
         File {
             text,
-            hunks: vec![],
+            hunks,
             sel,
             top: 0,
             left: 0,
