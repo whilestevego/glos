@@ -460,6 +460,21 @@ Picked for being widely used and maintained. Versions are fixed when the project
 | Errors and logs | `anyhow`, `thiserror`, `tracing`, `tracing-subscriber` (to the log file) |
 | Tests | `insta` (snapshots of rendered screens and JSON), `tempfile` |
 
+## Testing
+
+Tests are written with each feature, covering ordinary use as well as the cases likely to go
+wrong. Each commit includes its tests, and `cargo fmt`, `cargo clippy` (no warnings) and
+`cargo test` pass before every commit.
+
+- **Commands** are tested in Helix's selection notation (`#[h|]#ello`). Where a test and
+  helix-core disagree, helix-core wins: glos copies Helix, it doesn't reinterpret it.
+- **The app** is tested by feeding it keys and mouse events (`App` runs without a terminal), then
+  checking the selection, the view, the status and the screen.
+- **Screens** that must look like Helix are `insta` snapshots, with separate checks of their
+  colours, which text snapshots don't see.
+- **Sources** are tested on real git repos and folders built in a temporary directory.
+- **Re-anchoring** (M3) gets the most tests of all.
+
 ## Milestones
 
 The MVP is M0 through M5: reading and commenting, threads in both directions, all three views and
