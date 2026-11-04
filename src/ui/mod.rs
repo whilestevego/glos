@@ -326,7 +326,7 @@ const SETTLE: Duration = Duration::from_secs(3);
 struct Watch {
     _debouncer: notify_debouncer_full::Debouncer<
         notify::RecommendedWatcher,
-        notify_debouncer_full::RecommendedCache,
+        notify_debouncer_full::NoCache,
     >,
     rx: std::sync::mpsc::Receiver<()>,
 }
@@ -336,7 +336,9 @@ fn watch(root: &std::path::Path) -> Result<Watch> {
     let (ignored, _) = ignore::gitignore::Gitignore::new(root.join(".gitignore"));
     let root_owned = root.to_path_buf();
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = notify_debouncer_full::new_debouncer(
+    // No file-id cache: it walks every path under the root at start (target/ included, ~1 s
+    // on this repo) only to pair up renames, and glos reads the review again on any change.
+    let mut debouncer = notify_debouncer_full::new_debouncer_opt(
         Duration::from_millis(250),
         None,
         move |res: notify_debouncer_full::DebounceEventResult| {
@@ -352,6 +354,8 @@ fn watch(root: &std::path::Path) -> Result<Watch> {
                 let _ = tx.send(());
             }
         },
+        notify_debouncer_full::NoCache,
+        notify::Config::default(),
     )?;
     debouncer.watch(root, notify::RecursiveMode::Recursive)?;
     Ok(Watch {
@@ -447,6 +451,13 @@ impl App {
         app.load(0);
         app.reload();
         app.reanchor(true);
+        // The file tree starts open, showing the review's files; keys go to the file.
+        if config.editor.file_tree {
+            let mut t = tree::Tree::new(app.tree_entries());
+            t.select(app.main_path());
+            t.focused = false;
+            app.tree = Some(t);
+        }
         app.data_version = app.data_version();
         if app.review.requested_at.is_some() {
             app.status = Some((app.request_message(), false));

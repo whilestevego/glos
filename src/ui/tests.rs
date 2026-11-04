@@ -21,8 +21,12 @@ struct T {
 const OLD: &str = "fn main() {\n    println!(\"hi\");\n}\n\nfn gone() {}\n";
 const NEW: &str = "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n";
 
+/// The defaults, but without the file tree, so screens and clicks are about the file view;
+/// `the_file_tree_starts_open` tests the default.
 fn config() -> Config {
-    Config::default()
+    let mut c = Config::default();
+    c.editor.file_tree = false;
+    c
 }
 
 impl T {
@@ -1692,4 +1696,27 @@ fn change_motions_work_in_every_view() {
     assert_ne!(file[0], file[1], "two changes: {file:?}");
     assert_eq!(walk("u"), file, "unified");
     assert_eq!(walk("s"), file, "side by side");
+}
+
+#[test]
+fn the_file_tree_starts_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (o, n) = (dir.path().join("old.rs"), dir.path().join("main.rs"));
+    std::fs::write(&o, OLD).unwrap();
+    std::fs::write(&n, NEW).unwrap();
+    let mut t = T::new(
+        Source::diff(&o, &n).unwrap(),
+        dir,
+        72,
+        14,
+        &Config::default(),
+    );
+    assert!(t.shows("Changed files"), "{}", t.screen());
+    assert!(!t.app.tree.as_ref().unwrap().focused, "keys go to the file");
+    // So `j` moves the cursor in the file, not in the tree.
+    let line = t.app.cursor_new_line();
+    t.keys("j");
+    assert_eq!(t.app.cursor_new_line(), line + 1);
+    t.keys("space e q");
+    assert!(t.app.tree.is_none());
 }
