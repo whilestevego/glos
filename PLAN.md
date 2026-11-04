@@ -535,5 +535,8 @@ largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be
 - **Re-anchoring rules:** how far to search for moved text before calling a thread outdated.
 - **Branch renames and detached HEAD:** how a review follows a renamed branch, and what a review
   made in detached HEAD is keyed by.
+- **The default theme:** Helix's `default` is low contrast, and collapsed thread markers (drawn in
+  its `info` colour) are hard to read in it. Choose a higher-contrast built-in theme as glos's
+  default, and check thread rows, the comment box and the gutter marks in it.
 - **A folder with no second copy:** a non-git folder has no old side. glos could snapshot it when
   the review starts and diff against that; decide when someone needs it.
