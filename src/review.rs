@@ -139,6 +139,9 @@ impl Review {
 
     /// A review by its id, or by the start of it, as git takes short commit ids.
     pub fn get(conn: &Connection, id: &str) -> Result<Option<Review>> {
+        if id.is_empty() {
+            bail!("no review id given");
+        }
         let mut found = conn
             .prepare(&format!(
                 "SELECT {REVIEW_COLS} FROM reviews WHERE substr(id, 1, length(?1)) = ?1"
@@ -160,15 +163,6 @@ impl Review {
             ))?
             .query_map([], review_row)?
             .collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// The open review whose folder holds `dir`: the deepest folder, then the newest review.
-    /// This is how an MCP server or the CLI finds the review it serves.
-    pub fn for_folder(conn: &Connection, dir: &Path) -> Result<Option<Review>> {
-        Ok(Self::list(conn, false)?
-            .into_iter()
-            .filter(|r| dir.starts_with(&r.folder))
-            .max_by(|a, b| (a.folder.len(), &a.updated_at).cmp(&(b.folder.len(), &b.updated_at))))
     }
 
     pub fn reload(&self, conn: &Connection) -> Result<Review> {
@@ -1231,7 +1225,6 @@ mod tests {
         assert_eq!(status(&f.conn, &f.review), "closed");
         assert!(Review::list(&f.conn, false).unwrap().is_empty());
         assert_eq!(Review::list(&f.conn, true).unwrap().len(), 1);
-        assert!(Review::for_folder(&f.conn, f.dir.path()).unwrap().is_none());
         // Reviewing the same files again opens the same review.
         let again = Review::open(&f.conn, &f.review.source().unwrap()).unwrap();
         assert_eq!(
@@ -1397,11 +1390,6 @@ mod tests {
         // The folder holding the files is the review's folder.
         let dir = f.dir.path().canonicalize().unwrap();
         assert_eq!(Path::new(&f.review.folder), dir);
-        assert_eq!(
-            Review::for_folder(&f.conn, &dir.join("sub")).unwrap(),
-            Some(f.review.clone())
-        );
-        assert_eq!(Review::for_folder(&f.conn, Path::new("/")).unwrap(), None);
         assert_eq!(Review::list(&f.conn, false).unwrap().len(), 1);
     }
 
@@ -1411,7 +1399,8 @@ mod tests {
         let short = &f.review.id[..4];
         assert_eq!(Review::get(&f.conn, short).unwrap(), Some(f.review.clone()));
         assert_eq!(Review::get(&f.conn, "zzzz").unwrap(), None);
-        // A second review sharing no prefix with the first is told apart; "" matches both.
+        // A second review is told apart; an empty id names none, even with one review.
+        assert!(Review::get(&f.conn, "").is_err());
         let (o, n) = (f.dir.path().join("x"), f.dir.path().join("y"));
         std::fs::write(&o, "1").unwrap();
         std::fs::write(&n, "2").unwrap();
@@ -1420,27 +1409,7 @@ mod tests {
             Review::get(&f.conn, "")
                 .unwrap_err()
                 .to_string()
-                .contains("2 reviews")
-        );
-    }
-
-    #[test]
-    fn the_deepest_folder_wins() {
-        let f = fx();
-        let sub = f.dir.path().join("sub");
-        std::fs::create_dir_all(sub.join("o")).unwrap();
-        std::fs::create_dir_all(sub.join("n")).unwrap();
-        std::fs::write(sub.join("n/x"), "x").unwrap();
-        let inner = Review::open(
-            &f.conn,
-            &Source::diff(&sub.join("o"), &sub.join("n")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(inner.kind, "folders");
-        let deep = sub.canonicalize().unwrap().join("n/deeper");
-        assert_eq!(
-            Review::for_folder(&f.conn, &deep).unwrap().map(|r| r.id),
-            Some(inner.id)
+                .contains("no review id")
         );
     }
 

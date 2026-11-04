@@ -365,11 +365,13 @@ not.
 
 ## Agents: the MCP server
 
-`glos mcp` speaks MCP over stdio (crate `rmcp`). Tools:
+`glos mcp` speaks MCP over stdio (crate `rmcp`). glos never works out what to review: the agent
+names it with `open_review` and passes the review id it gets to every other tool. Tools:
 
 | Tool | What it does |
 |---|---|
-| `get_review` | A summary of the current review: verdict, scope, files, and the open threads with what's new since the agent's last call. Full threads on request, by id, so the agent's context isn't flooded |
+| `open_review` | Name what to review, exactly: a git branch (the worktree folder that has it checked out, the branch, and its base) or two files or folders, by absolute paths. Answers with the review's id, made if there's none yet. The user isn't told |
+| `get_review` | A summary of the review: verdict, scope, files, and the open threads with what's new since the agent's last call. Full threads on request, by id, so the agent's context isn't flooded |
 | `reply` | Reply on a thread |
 | `resolve` | Resolve a thread with a note; `reopen` reverses it |
 | `annotate` | Leave an agent note on a line or range before you review |
@@ -378,7 +380,7 @@ not.
 | `wait_for_review` | How a submitted review reaches the agent: waits a few minutes for you to submit, then answers with the review, or "still waiting" so the agent calls again, staying under the host's tool timeout |
 
 **Delivering a review.** After `request_review`, the agent calls `wait_for_review`. When you
-submit, the MCP server serving that review's folder sees the submit in the database and answers
+submit, the MCP server waiting on that review's id sees the submit in the database and answers
 the waiting call. The answer holds the verdict and every new or edited comment with its file,
 lines and thread id, and tells the agent to answer each one with `reply`/`resolve`, then call
 `request_review` again (or finish, on an approval). This works in any MCP host, with no flags or
@@ -396,11 +398,9 @@ when either is missing. glos supports them once they're no longer experimental; 
 
 **Which session gets it:** an MCP server over stdio isn't told the host's session id, so each
 server is identified by its own process id and named after the `clientInfo` its MCP client sends.
-Each review is tied to a folder (the worktree, or the folder holding the files), and each server
-registers the folder it was started in; a submit goes to the servers registered for that folder.
-If several serve the same folder, the most recently attached one gets it. Before delivering,
-servers whose process is gone are removed. With none attached, the review waits and is delivered
-when one attaches.
+A submit goes to the first `wait_for_review` on that review's id; with none waiting, it waits and
+is delivered to the next one. Each server also registers the folder it was started in, which the
+dashboard uses to show which agents are around a review; it never decides what's reviewed.
 
 **Setting it up:** `claude mcp add glos -- glos mcp` registers glos with Claude Code; `glos doctor`
 checks that it worked.
@@ -415,14 +415,15 @@ subcommand is never ambiguous:
 | `glos` | Open the review for the current repo (branch vs base) |
 | `glos diff <old> <new>` | Review two files or two folders, like `git diff --no-index`; or `glos diff <rev> [<rev>]`, like `git diff` |
 | `glos list [--all]` | Reviews on this machine: open ones by default, closed and archived with `--all` |
-| `glos show [<review>]` | A review's threads and comments |
-| `glos reply`, `resolve`, `reopen`, `annotate`, `submit`, `close` | The same actions as in the UI and MCP |
+| `glos open-review git <folder> <branch> <base>`, `glos open-review diff <old> <new>` | `open_review` for agents without MCP: prints the review's id |
+| `glos show --review <id>` | A review's threads and comments |
+| `glos reply`, `resolve`, `reopen`, `annotate`, `submit`, `close` | The same actions as in the UI and MCP, each with `--review <id>`: none guesses the review from the folder |
 | `glos dashboard` | Open the dashboard |
-| `glos open` | Open glos the way `request_review` does (see Launching) |
+| `glos open --review <id>` | Open glos the way `request_review` does (see Launching) |
 | `glos mcp` | Run the MCP server over stdio |
 | `glos gc` | Delete old archived reviews and unused snapshot content |
 | `glos doctor` | Like `hx --health`: database, config, theme, languages, terminal colour support, MCP setup |
-| `glos close [<review>]` | Close a review you're done with |
+| `glos close --review <id>` | Close a review you're done with |
 | `glos --review <id>` | Open a review by its id, wherever it is |
 | `glos completions <shell>` | Shell completions (`clap_complete`); `glos man` prints the man page (`clap_mangen`) |
 

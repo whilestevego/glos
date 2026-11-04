@@ -62,10 +62,21 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// A review's rounds, threads and comments: this folder's, or the one with this id.
-    Show { review: Option<String> },
+    /// Name what to review, as an agent without MCP would: the review of exactly that, made if
+    /// there's none yet. Prints its id, which every other command takes as `--review`.
+    OpenReview {
+        #[command(subcommand)]
+        target: TargetArg,
+    },
+    /// A review's rounds, threads and comments.
+    Show {
+        #[command(flatten)]
+        review: ReviewArg,
+    },
     /// Reply on a thread, as an agent without MCP would.
     Reply {
+        #[command(flatten)]
+        review: ReviewArg,
         thread: String,
         body: String,
         #[command(flatten)]
@@ -73,6 +84,8 @@ enum Command {
     },
     /// Resolve a thread, with a note saying what was done.
     Resolve {
+        #[command(flatten)]
+        review: ReviewArg,
         thread: String,
         note: String,
         #[command(flatten)]
@@ -80,6 +93,8 @@ enum Command {
     },
     /// Reopen a resolved or outdated thread.
     Reopen {
+        #[command(flatten)]
+        review: ReviewArg,
         thread: String,
         note: Option<String>,
         #[command(flatten)]
@@ -87,19 +102,27 @@ enum Command {
     },
     /// Leave a note on lines of a file (`12` or `12-14`) before review.
     Annotate {
+        #[command(flatten)]
+        review: ReviewArg,
         path: String,
         lines: String,
         body: String,
         #[command(flatten)]
         author: Author,
     },
-    /// Close a review you're done with: this folder's, or the one with this id.
-    Close { review: Option<String> },
+    /// Close a review you're done with.
+    Close {
+        #[command(flatten)]
+        review: ReviewArg,
+    },
     /// Every open review on this machine; `ret` opens one.
     Dashboard,
-    /// Open glos on this folder's review the way an agent's request does: with `open-command`
-    /// from config.toml, unless glos is already open on it.
-    Open,
+    /// Open glos on a review the way an agent's request does: with `open-command` from
+    /// config.toml, unless glos is already open on it.
+    Open {
+        #[command(flatten)]
+        review: ReviewArg,
+    },
     /// Delete archived reviews older than `--days`, and file content nothing uses any more.
     Gc {
         #[arg(long, default_value_t = 30)]
@@ -114,9 +137,33 @@ enum Command {
     Submit {
         #[arg(value_parser = parse_verdict)]
         verdict: review::Verdict,
-        /// The review's id; this folder's review if not given.
-        #[arg(long)]
-        review: Option<String>,
+        #[command(flatten)]
+        review: ReviewArg,
+    },
+}
+
+/// Which review a command acts on: always named, never guessed from the folder.
+#[derive(clap::Args)]
+struct ReviewArg {
+    /// The review's id, or the start of it (`glos list` shows them; `glos open-review` makes
+    /// one).
+    #[arg(long = "review", value_name = "ID")]
+    id: String,
+}
+
+/// What `glos open-review` reviews.
+#[derive(Subcommand)]
+enum TargetArg {
+    /// A git branch against its base, in the worktree that has it checked out.
+    Git {
+        folder: std::path::PathBuf,
+        branch: String,
+        base: String,
+    },
+    /// Two files, or two folders.
+    Diff {
+        old: std::path::PathBuf,
+        new: std::path::PathBuf,
     },
 }
 
@@ -212,16 +259,16 @@ fn run() -> Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Close { review }) => {
-            cli::close(&conn, review.as_deref(), &cwd, cli.json, out)?;
+            cli::close(&conn, &review.id, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Gc { days }) => {
             cli::gc(&conn, *days, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         }
-        Some(Command::Open) => {
+        Some(Command::Open { review }) => {
             let command = config::load().0.open_command;
-            let opened = cli::open(&conn, &cwd, command.as_deref(), &db, out)?;
+            let opened = cli::open(&conn, &review.id, command.as_deref(), &db, out)?;
             return Ok(if opened {
                 ExitCode::SUCCESS
             } else {
@@ -233,17 +280,40 @@ fn run() -> Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Show { review }) => {
-            cli::show(&conn, review.as_deref(), &cwd, cli.json, out)?;
+            cli::show(&conn, &review.id, cli.json, out)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::OpenReview { target }) => {
+            // Paths given on the command line are the shell's: relative to where it runs.
+            let abs = |p: &std::path::Path| -> Result<String> {
+                Ok(std::path::absolute(p)?.to_string_lossy().into_owned())
+            };
+            let target = match target {
+                TargetArg::Git {
+                    folder,
+                    branch,
+                    base,
+                } => mcp::Target::Git {
+                    folder: abs(folder)?,
+                    branch: branch.clone(),
+                    base: base.clone(),
+                },
+                TargetArg::Diff { old, new } => mcp::Target::Diff {
+                    old: abs(old)?,
+                    new: abs(new)?,
+                },
+            };
+            cli::open_review(conn, &cwd, target, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(
-            Command::Reply { author, .. }
-            | Command::Resolve { author, .. }
-            | Command::Reopen { author, .. }
-            | Command::Annotate { author, .. },
+            Command::Reply { author, review, .. }
+            | Command::Resolve { author, review, .. }
+            | Command::Reopen { author, review, .. }
+            | Command::Annotate { author, review, .. },
         ) => {
             use cli::AgentAction as A;
-            let name = author.name.clone();
+            let (name, id) = (author.name.clone(), review.id.clone());
             let action = match cli.command.unwrap() {
                 Command::Reply { thread, body, .. } => A::Reply { thread, body },
                 Command::Resolve { thread, note, .. } => A::Resolve { thread, note },
@@ -256,11 +326,11 @@ fn run() -> Result<ExitCode> {
                 } => A::Annotate { path, lines, body },
                 _ => unreachable!(),
             };
-            cli::agent(conn, &cwd, &name, action, cli.json, out)?;
+            cli::agent(conn, &cwd, &id, &name, action, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Submit { verdict, review }) => {
-            cli::submit(&conn, review.as_deref(), &cwd, *verdict, cli.json, out)?;
+            cli::submit(&conn, &review.id, *verdict, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         }
         _ => {}
