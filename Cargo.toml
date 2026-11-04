@@ -6,10 +6,20 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }
-etcetera = "0.11.0"
+crossterm = "0.29.0"
+etcetera = "0.10"
 gix = "0.90.0"
+globset = "0.4.21"
+helix-core = { git = "https://github.com/helix-editor/helix", tag = "25.07.1", version = "25.7.1" }
+helix-stdx = { git = "https://github.com/helix-editor/helix", tag = "25.07.1", version = "25.7.1" }
 ignore = "0.4.34"
+ratatui = "0.30.2"
+ropey = "1.6.1"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
+toml = "0.8"
+tree-house = { version = "=0.3.0", default-features = false }
+tree-house-bindings = { version = "0.2.4", features = ["tree-sitter-language"] }
+tree-sitter-language = "0.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -17,3 +27,6 @@ tempfile = "3.27.0"
 # gix is very slow unoptimised (a 1.2 s scan takes 24 s); optimise dependencies in dev builds.
 [profile.dev.package."*"]
 opt-level = 2
+
+[build-dependencies]
+cc = "1.11.0"
