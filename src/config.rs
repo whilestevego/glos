@@ -29,19 +29,27 @@ pub struct SoftWrap {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { theme: "default".into(), editor: Editor::default() }
+        Config {
+            theme: "default".into(),
+            editor: Editor::default(),
+        }
     }
 }
 
 impl Default for Editor {
     fn default() -> Self {
-        Editor { mouse: true, soft_wrap: SoftWrap::default() }
+        Editor {
+            mouse: true,
+            soft_wrap: SoftWrap::default(),
+        }
     }
 }
 
 pub fn dir() -> Result<PathBuf> {
     use etcetera::BaseStrategy;
-    Ok(etcetera::base_strategy::Xdg::new()?.config_dir().join("glos"))
+    Ok(etcetera::base_strategy::Xdg::new()?
+        .config_dir()
+        .join("glos"))
 }
 
 pub fn path() -> Result<PathBuf> {
@@ -50,7 +58,9 @@ pub fn path() -> Result<PathBuf> {
 
 /// The config, or the defaults and what was wrong with the file. A missing file isn't an error.
 pub fn load() -> (Config, Option<String>) {
-    let Ok(path) = path() else { return (Config::default(), None) };
+    let Ok(path) = path() else {
+        return (Config::default(), None);
+    };
     match std::fs::read_to_string(&path) {
         Err(_) => (Config::default(), None),
         Ok(text) => match parse(&text) {
@@ -74,7 +84,13 @@ mod tests {
         let c = parse("theme = \"catppuccin_mocha\"\n[editor]\nmouse = false\n").unwrap();
         assert_eq!(c.theme, "catppuccin_mocha");
         assert!(!c.editor.mouse);
-        assert!(parse("[editor.soft-wrap]\nenable = true\n").unwrap().editor.soft_wrap.enable);
+        assert!(
+            parse("[editor.soft-wrap]\nenable = true\n")
+                .unwrap()
+                .editor
+                .soft_wrap
+                .enable
+        );
         // Typos are errors, as in Helix, so they don't pass silently.
         assert!(parse("[editor]\nmose = false\n").is_err());
     }

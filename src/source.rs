@@ -68,14 +68,30 @@ impl Change {
     /// `.gitattributes` and is checked by the git source.)
     pub fn looks_generated(&self) -> bool {
         const LOCKFILES: &[&str] = &[
-            "Cargo.lock", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
-            "pnpm-lock.yaml", "bun.lockb", "bun.lock", "Gemfile.lock", "poetry.lock", "uv.lock",
-            "Pipfile.lock", "composer.lock", "go.sum", "flake.lock", "mix.lock", "pubspec.lock",
-            "Package.resolved", "Podfile.lock",
+            "Cargo.lock",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "bun.lockb",
+            "bun.lock",
+            "Gemfile.lock",
+            "poetry.lock",
+            "uv.lock",
+            "Pipfile.lock",
+            "composer.lock",
+            "go.sum",
+            "flake.lock",
+            "mix.lock",
+            "pubspec.lock",
+            "Package.resolved",
+            "Podfile.lock",
         ];
         let name = self.path.rsplit('/').next().unwrap_or(&self.path);
         LOCKFILES.contains(&name)
-            || [".min.js", ".min.css", ".min.mjs", ".map"].iter().any(|s| name.ends_with(s))
+            || [".min.js", ".min.css", ".min.mjs", ".map"]
+                .iter()
+                .any(|s| name.ends_with(s))
     }
 }
 
@@ -84,6 +100,8 @@ pub fn is_binary(content: &[u8]) -> bool {
     content[..content.len().min(8000)].contains(&0)
 }
 
+// The store keys reviews and records rounds with these from M2.
+#[allow(dead_code)]
 pub struct Git {
     pub repo: gix::ThreadSafeRepository,
     /// The shared git dir (the same for every worktree of a repo), canonical.
@@ -115,13 +133,23 @@ impl Source {
                 let meta = std::fs::symlink_metadata(path)
                     .with_context(|| format!("reading {}", path.display()))?;
                 if meta.is_symlink() {
-                    Some(std::fs::read_link(path)?.into_os_string().into_encoded_bytes())
+                    Some(
+                        std::fs::read_link(path)?
+                            .into_os_string()
+                            .into_encoded_bytes(),
+                    )
                 } else {
-                    Some(std::fs::read(path).with_context(|| format!("reading {}", path.display()))?)
+                    Some(
+                        std::fs::read(path)
+                            .with_context(|| format!("reading {}", path.display()))?,
+                    )
                 }
             }
             Content::Blob(id) => {
-                let git = self.git.as_ref().ok_or_else(|| anyhow!("blob without a git source"))?;
+                let git = self
+                    .git
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("blob without a git source"))?;
                 Some(git.repo.to_thread_local().find_object(*id)?.detach().data)
             }
         })
@@ -147,7 +175,11 @@ impl Source {
     }
 
     fn files(old: &Path, new: &Path) -> Result<Source> {
-        let name = new.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = new
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let old_bytes = std::fs::read(old)?;
         let new_bytes = std::fs::read(new)?;
         let change = Change {
@@ -198,7 +230,10 @@ impl Source {
         // Renames: a deleted and an added file with identical content.
         let mut by_content: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
         for path in &deleted {
-            by_content.entry(read_side(&old.join(path))?).or_default().push(path.clone());
+            by_content
+                .entry(read_side(&old.join(path))?)
+                .or_default()
+                .push(path.clone());
         }
         for path in added {
             let content = read_side(&new.join(&path))?;
@@ -207,7 +242,9 @@ impl Source {
                 deleted.retain(|d| d != from);
             }
             changes.push(Change {
-                old: from.as_ref().map_or(Content::None, |f| Content::File(old.join(f))),
+                old: from
+                    .as_ref()
+                    .map_or(Content::None, |f| Content::File(old.join(f))),
                 old_mode: from.as_ref().map(|f| old_files[f]),
                 same_content: from.is_some(),
                 old_path: from,
@@ -228,15 +265,26 @@ impl Source {
             });
         }
         changes.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(Source { changes, root: new.to_owned(), git: None, generated: vec![] })
+        Ok(Source {
+            changes,
+            root: new.to_owned(),
+            git: None,
+            generated: vec![],
+        })
     }
 
     /// `glos` in a repo: the branch since it left the base, uncommitted and untracked files
     /// included. `base` overrides the default (origin's default branch, else main or master).
     pub fn git(path: &Path, base: Option<&str>) -> Result<Source> {
         let repo = gix::discover(path).context("not in a git repository")?;
-        let worktree = repo.workdir().context("a bare repository has no worktree")?.canonicalize()?;
-        let head = repo.head_commit().context("the repository has no commits")?.id;
+        let worktree = repo
+            .workdir()
+            .context("a bare repository has no worktree")?
+            .canonicalize()?;
+        let head = repo
+            .head_commit()
+            .context("the repository has no commits")?
+            .id;
         let branch = repo.head_name()?.map(|n| n.shorten().to_string());
         let (base, base_id) = find_base(&repo, base)?;
         let merge_base = repo
@@ -258,15 +306,24 @@ impl Source {
         for item in status.into_iter(Vec::<gix::bstr::BString>::new())? {
             match item? {
                 Item::TreeIndex(gix::diff::index::Change::Rewrite {
-                    source_location, location, ..
+                    source_location,
+                    location,
+                    ..
                 }) => {
-                    paths.insert(location.to_str_lossy().into(), Some(source_location.to_str_lossy().into()));
+                    paths.insert(
+                        location.to_str_lossy().into(),
+                        Some(source_location.to_str_lossy().into()),
+                    );
                 }
                 Item::TreeIndex(change) => {
                     let p: String = change.location().to_str_lossy().into();
                     paths.entry(p.clone()).or_insert(Some(p));
                 }
-                Item::IndexWorktree(index_worktree::Item::Rewrite { source, dirwalk_entry, .. }) => {
+                Item::IndexWorktree(index_worktree::Item::Rewrite {
+                    source,
+                    dirwalk_entry,
+                    ..
+                }) => {
                     // Moved on disk without `git mv`: carry the old side over.
                     let src: String = source.rela_path().to_str_lossy().into();
                     let old = paths.remove(&src).flatten().unwrap_or(src);
@@ -274,7 +331,9 @@ impl Source {
                 }
                 Item::IndexWorktree(index_worktree::Item::DirectoryContents { entry, .. }) => {
                     if entry.status == gix::dir::entry::Status::Untracked {
-                        paths.entry(entry.rela_path.to_str_lossy().into()).or_insert(None);
+                        paths
+                            .entry(entry.rela_path.to_str_lossy().into())
+                            .or_insert(None);
                     }
                 }
                 Item::IndexWorktree(index_worktree::Item::Modification { rela_path, .. }) => {
@@ -311,8 +370,20 @@ impl Source {
             if same_content && old_path.as_deref() == Some(&path) && old_mode == new_mode {
                 continue; // changed and then changed back
             }
-            let path = if new == Content::None { old_path.clone().unwrap() } else { path };
-            changes.push(Change { path, old_path, old, new, old_mode, new_mode, same_content });
+            let path = if new == Content::None {
+                old_path.clone().unwrap()
+            } else {
+                path
+            };
+            changes.push(Change {
+                path,
+                old_path,
+                old,
+                new,
+                old_mode,
+                new_mode,
+                same_content,
+            });
         }
 
         drop(base_tree);
@@ -340,10 +411,10 @@ fn find_base(repo: &gix::Repository, given: Option<&str>) -> Result<(String, gix
         Some(r) => candidates.push(r.into()),
         None => {
             // origin/HEAD points at origin's default branch.
-            if let Ok(Some(r)) = repo.try_find_reference("refs/remotes/origin/HEAD") {
-                if let Some(name) = r.target().try_name() {
-                    candidates.push(name.shorten().to_string());
-                }
+            if let Ok(Some(r)) = repo.try_find_reference("refs/remotes/origin/HEAD")
+                && let Some(name) = r.target().try_name()
+            {
+                candidates.push(name.shorten().to_string());
             }
             candidates.extend(["main", "master", "origin/main", "origin/master"].map(String::from));
         }
@@ -359,7 +430,11 @@ fn find_base(repo: &gix::Repository, given: Option<&str>) -> Result<(String, gix
 /// The id git would give `path`'s content, to tell an unchanged file from a changed one cheaply.
 fn blob_id(repo: &gix::Repository, path: &Path) -> Result<Option<gix::ObjectId>> {
     let content = read_side(path)?;
-    Ok(Some(gix::objs::compute_hash(repo.object_hash(), gix::object::Kind::Blob, &content)?))
+    Ok(Some(gix::objs::compute_hash(
+        repo.object_hash(),
+        gix::object::Kind::Blob,
+        &content,
+    )?))
 }
 
 fn linguist_generated(repo: &gix::Repository, changes: &[Change]) -> Result<Vec<String>> {
@@ -410,7 +485,9 @@ fn disk_mode(path: &Path) -> Result<Mode> {
 /// A side's bytes: the file's content, or a symlink's target.
 fn read_side(path: &Path) -> Result<Vec<u8>> {
     if std::fs::symlink_metadata(path)?.is_symlink() {
-        Ok(std::fs::read_link(path)?.into_os_string().into_encoded_bytes())
+        Ok(std::fs::read_link(path)?
+            .into_os_string()
+            .into_encoded_bytes())
     } else {
         Ok(std::fs::read(path)?)
     }
@@ -427,11 +504,17 @@ fn walk(root: &Path) -> Result<BTreeMap<String, Mode>> {
         .build();
     for entry in walker {
         let entry = entry?;
-        let Some(ft) = entry.file_type() else { continue };
+        let Some(ft) = entry.file_type() else {
+            continue;
+        };
         if ft.is_dir() {
             continue;
         }
-        let rel = entry.path().strip_prefix(root)?.to_string_lossy().replace('\\', "/");
+        let rel = entry
+            .path()
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
         files.insert(rel, disk_mode(entry.path())?);
     }
     Ok(files)
@@ -519,12 +602,23 @@ mod tests {
 
     fn git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
             .args(args)
             .current_dir(dir)
             .output()
             .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]
@@ -583,10 +677,17 @@ mod tests {
         assert_eq!(g.branch.as_deref(), Some("feature"));
         assert_eq!(g.base, "main");
         let a = &s.changes[2];
-        assert_eq!(s.read(&a.old).unwrap().unwrap(), "a\n".repeat(20).as_bytes());
+        assert_eq!(
+            s.read(&a.old).unwrap().unwrap(),
+            "a\n".repeat(20).as_bytes()
+        );
         assert_eq!(s.read(&a.new).unwrap().unwrap(), b"a committed\n");
-        let collapsed: Vec<_> =
-            s.changes.iter().filter(|c| s.collapsed(c)).map(|c| c.path.as_str()).collect();
+        let collapsed: Vec<_> = s
+            .changes
+            .iter()
+            .filter(|c| s.collapsed(c))
+            .map(|c| c.path.as_str())
+            .collect();
         assert_eq!(collapsed, ["Cargo.lock", "gen/out.rs"]);
     }
 

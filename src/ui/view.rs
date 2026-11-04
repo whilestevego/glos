@@ -47,19 +47,27 @@ impl File {
         match change.kind() {
             Kind::Added => notices.push("new file".to_string()),
             Kind::Deleted => notices.push("deleted file; showing what was removed".to_string()),
-            Kind::Renamed => notices.push(format!("renamed from {}", change.old_path.as_deref().unwrap_or("?"))),
+            Kind::Renamed => notices.push(format!(
+                "renamed from {}",
+                change.old_path.as_deref().unwrap_or("?")
+            )),
             Kind::ModeChanged | Kind::Modified => {}
         }
-        if let (Some(a), Some(b)) = (change.old_mode, change.new_mode) {
-            if a != b {
-                notices.push(format!("mode changed: {} → {}", mode_name(a), mode_name(b)));
-            }
+        if let (Some(a), Some(b)) = (change.old_mode, change.new_mode)
+            && a != b
+        {
+            notices.push(format!("mode changed: {} → {}", mode_name(a), mode_name(b)));
         }
-        if change.new_mode == Some(FileMode::Symlink) || change.old_mode == Some(FileMode::Symlink) {
+        if change.new_mode == Some(FileMode::Symlink) || change.old_mode == Some(FileMode::Symlink)
+        {
             notices.push("symlink; showing its target".to_string());
         }
         // A deleted file shows what was there.
-        let shown = if change.new == Content::None { &old } else { &new };
+        let shown = if change.new == Content::None {
+            &old
+        } else {
+            &new
+        };
         let binary = source::is_binary(&old) || source::is_binary(shown);
         if binary {
             notices.push("binary file; not shown".to_string());
@@ -71,9 +79,19 @@ impl File {
         let hunks = if binary || change.new == Content::None {
             vec![]
         } else {
-            diff::hunks(&String::from_utf8_lossy(&old), &String::from_utf8_lossy(&new))
+            diff::hunks(
+                &String::from_utf8_lossy(&old),
+                &String::from_utf8_lossy(&new),
+            )
         };
-        let mut file = File::new(&source.root.join(&change.path), shown, binary, hunks, notices, loader);
+        let mut file = File::new(
+            &source.root.join(&change.path),
+            shown,
+            binary,
+            hunks,
+            notices,
+            loader,
+        );
         file.collapsed = collapsed;
         // Open on the first change, as a reviewer wants.
         if let Some(h) = file.hunks.first() {
@@ -106,7 +124,11 @@ impl File {
         notices: Vec<String>,
         loader: &Loader,
     ) -> File {
-        let text = if binary { Rope::new() } else { Rope::from(String::from_utf8_lossy(bytes).as_ref()) };
+        let text = if binary {
+            Rope::new()
+        } else {
+            Rope::from(String::from_utf8_lossy(bytes).as_ref())
+        };
         let lang = loader.language_for(path, text.slice(..));
         let syntax = lang.and_then(|l| loader.parse(text.slice(..), l));
         File {
@@ -168,7 +190,13 @@ pub fn draw(
         if y >= area.bottom() {
             return;
         }
-        buf.set_stringn(area.x + 1, y, clean(notice), area.width.saturating_sub(1) as usize, theme.get("ui.virtual"));
+        buf.set_stringn(
+            area.x + 1,
+            y,
+            clean(notice),
+            area.width.saturating_sub(1) as usize,
+            theme.get("ui.virtual"),
+        );
         y += 1;
     }
     if file.collapsed || file.binary {
@@ -179,24 +207,44 @@ pub fn draw(
     let top = top.min(text.len_lines().saturating_sub(1));
     let last = (top + height).min(text.len_lines());
     let spans = match &file.syntax {
-        Some(s) => loader.highlights(s, text, text.line_to_byte(top)..text.line_to_byte(last), theme),
+        Some(s) => loader.highlights(
+            s,
+            text,
+            text.line_to_byte(top)..text.line_to_byte(last),
+            theme,
+        ),
         None => vec![],
     };
     let mut span = 0;
 
-    let gutter = if main.is_some() { file.gutter_width() as u16 } else { 0 };
+    let gutter = if main.is_some() {
+        file.gutter_width() as u16
+    } else {
+        0
+    };
     let digits = text.len_lines().to_string().len().max(3);
-    let cursor_lines: Vec<usize> = file.sel.iter().map(|r| text.char_to_line(r.cursor(text))).collect();
+    let cursor_lines: Vec<usize> = file
+        .sel
+        .iter()
+        .map(|r| text.char_to_line(r.cursor(text)))
+        .collect();
     let primary = file.sel.primary_index();
     let ranges: Vec<_> = match main {
-        Some(_) => file.sel.iter().map(|r| (r.from(), r.to(), r.cursor(text))).collect(),
+        Some(_) => file
+            .sel
+            .iter()
+            .map(|r| (r.from(), r.to(), r.cursor(text)))
+            .collect(),
         None => vec![],
     };
     let text_style = theme.get("ui.text");
     let wrap_style = theme.get("ui.virtual.wrap");
     let (sel_style, sel_primary, cursor, cursor_primary) = main.unwrap_or_default();
-    let (added, deleted, modified) =
-        (theme.get("diff.plus.gutter"), theme.get("diff.minus.gutter"), theme.get("diff.delta.gutter"));
+    let (added, deleted, modified) = (
+        theme.get("diff.plus.gutter"),
+        theme.get("diff.minus.gutter"),
+        theme.get("diff.delta.gutter"),
+    );
 
     let x0 = area.x + gutter;
     let width = area.width.saturating_sub(gutter);
@@ -216,28 +264,36 @@ pub fn draw(
                 break;
             }
         }
-        let sign = file.hunks.get(hunk_i).filter(|h| h.after.start <= l).map(|h| {
-            if h.before.is_empty() {
-                ("▍", added, true)
-            } else if h.after.is_empty() {
-                ("▔", deleted, false) // a removal shows on the first row only
-            } else {
-                ("▍", modified, true)
-            }
-        });
+        let sign = file
+            .hunks
+            .get(hunk_i)
+            .filter(|h| h.after.start <= l)
+            .map(|h| {
+                if h.before.is_empty() {
+                    ("▍", added, true)
+                } else if h.after.is_empty() {
+                    ("▔", deleted, false) // a removal shows on the first row only
+                } else {
+                    ("▍", modified, true)
+                }
+            });
         let gutter_row = |buf: &mut Buffer, row: usize, y: u16| {
             if main.is_none() {
                 return;
             }
             if row == 0 {
                 let selected = cursor_lines.contains(&line);
-                let nr_style = theme.get(if selected { "ui.linenr.selected" } else { "ui.linenr" });
+                let nr_style = theme.get(if selected {
+                    "ui.linenr.selected"
+                } else {
+                    "ui.linenr"
+                });
                 buf.set_string(area.x + 2, y, format!("{:>digits$}", line + 1), nr_style);
             }
-            if let Some((sign, style, every_row)) = sign {
-                if row == 0 || every_row {
-                    buf.set_string(x0 - 1, y, sign, style);
-                }
+            if let Some((sign, style, every_row)) = sign
+                && (row == 0 || every_row)
+            {
+                buf.set_string(x0 - 1, y, sign, style);
             }
         };
         gutter_row(buf, 0, y);
@@ -263,7 +319,12 @@ pub fn draw(
             if g.is_virtual() {
                 // The wrap indicator.
                 if col >= left && col + w <= left + width as usize {
-                    buf.set_string(x0 + (col - left) as u16, yy, g.raw.to_string(), text_style.patch(wrap_style));
+                    buf.set_string(
+                        x0 + (col - left) as u16,
+                        yy,
+                        g.raw.to_string(),
+                        text_style.patch(wrap_style),
+                    );
                 }
                 continue;
             }
@@ -311,7 +372,9 @@ pub fn draw(
         if end_char == text.len_chars() && ranges.iter().any(|r| r.2 == end_char) {
             let row_y = y + rows as u16 - 1;
             if end_col >= left && end_col < left + width as usize && row_y < bottom {
-                buf[(x0 + (end_col - left) as u16, row_y)].set_symbol(" ").set_style(cursor_primary);
+                buf[(x0 + (end_col - left) as u16, row_y)]
+                    .set_symbol(" ")
+                    .set_style(cursor_primary);
             }
         }
         y += rows as u16;
@@ -325,7 +388,11 @@ pub fn visual_col(text: RopeSlice, pos: usize, tab_width: usize) -> usize {
     let mut col = 0;
     for g in text.slice(start..pos).graphemes() {
         let g: Cow<str> = g.into();
-        col += if g == "\t" { tab_width - col % tab_width } else { clean(&g).width().max(1) };
+        col += if g == "\t" {
+            tab_width - col % tab_width
+        } else {
+            clean(&g).width().max(1)
+        };
     }
     col
 }

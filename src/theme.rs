@@ -84,7 +84,10 @@ fn user_theme(name: &str) -> Option<String> {
 
 /// The user's theme of that name wins over the embedded one, as in Helix.
 fn resolve(name: &str, depth: usize) -> Result<Table> {
-    anyhow::ensure!(depth < 10, "theme {name}: `inherits` goes round in a circle");
+    anyhow::ensure!(
+        depth < 10,
+        "theme {name}: `inherits` goes round in a circle"
+    );
     let text = match user_theme(name) {
         Some(t) => t,
         None => THEMES
@@ -109,7 +112,10 @@ fn merge_themes(parent: Table, child: Table) -> Table {
         2,
     );
     let mut theme = merge(Value::Table(parent), Value::Table(child), 1);
-    theme.as_table_mut().unwrap().insert("palette".into(), palette);
+    theme
+        .as_table_mut()
+        .unwrap()
+        .insert("palette".into(), palette);
     match theme {
         Value::Table(t) => t,
         _ => unreachable!(),
@@ -209,7 +215,12 @@ fn parse_style(v: &Value, palette: &HashMap<String, Color>) -> Style {
             style = style.add_modifier(Modifier::UNDERLINED);
         }
     }
-    for m in t.get("modifiers").and_then(Value::as_array).into_iter().flatten() {
+    for m in t
+        .get("modifiers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let m = match m.as_str() {
             Some("bold") => Modifier::BOLD,
             Some("dim") => Modifier::DIM,
@@ -231,16 +242,30 @@ fn parse_style(v: &Value, palette: &HashMap<String, Color>) -> Style {
 fn adapt(style: Style, colors: ColorSupport) -> Style {
     let map = |c: Option<Color>| match (c, colors) {
         (_, ColorSupport::None) => None,
-        (Some(Color::Rgb(r, g, b)), ColorSupport::Indexed) => Some(Color::Indexed(nearest_256(r, g, b))),
+        (Some(Color::Rgb(r, g, b)), ColorSupport::Indexed) => {
+            Some(Color::Indexed(nearest_256(r, g, b)))
+        }
         (c, _) => c,
     };
-    Style { fg: map(style.fg), bg: map(style.bg), underline_color: map(style.underline_color), ..style }
+    Style {
+        fg: map(style.fg),
+        bg: map(style.bg),
+        underline_color: map(style.underline_color),
+        ..style
+    }
 }
 
 /// The nearest xterm-256 colour: the 6×6×6 cube or the 24-step grey ramp.
 pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
     const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let level = |v: u8| STEPS.iter().enumerate().min_by_key(|(_, s)| (**s as i32 - v as i32).abs()).unwrap().0;
+    let level = |v: u8| {
+        STEPS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, s)| (**s as i32 - v as i32).abs())
+            .unwrap()
+            .0
+    };
     let (ri, gi, bi) = (level(r), level(g), level(b));
     let cube = (STEPS[ri], STEPS[gi], STEPS[bi]);
     let avg = (r as u32 + g as u32 + b as u32) / 3;
@@ -273,10 +298,17 @@ mod tests {
     #[test]
     fn scope_fallback_and_colour_support() {
         let t = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        assert_eq!(t.try_get("ui.linenr.selected.nonexistent"), t.try_get("ui.linenr.selected"));
+        assert_eq!(
+            t.try_get("ui.linenr.selected.nonexistent"),
+            t.try_get("ui.linenr.selected")
+        );
         assert!(t.try_get_exact("keyword.control.nonexistent").is_none());
         let none = Theme::load("default", ColorSupport::None).unwrap();
-        assert!(none.scopes().iter().all(|s| none.get(s).fg.is_none() && none.get(s).bg.is_none()));
+        assert!(
+            none.scopes()
+                .iter()
+                .all(|s| none.get(s).fg.is_none() && none.get(s).bg.is_none())
+        );
         let idx = Theme::load("catppuccin_mocha", ColorSupport::Indexed).unwrap();
         assert!(matches!(idx.get("keyword").fg, Some(Color::Indexed(_))));
     }

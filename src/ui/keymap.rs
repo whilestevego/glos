@@ -39,7 +39,9 @@ pub enum AppAction {
     /// `y`: the selections to glos's own register.
     Yank,
     /// `space y` / `space Y`: all selections, or only the primary, to the system clipboard.
-    YankToClipboard { main_only: bool },
+    YankToClipboard {
+        main_only: bool,
+    },
     /// `s`, `S`, `K`, `A-K`: a regex prompt that acts on the selections.
     RegexPrompt(super::commands::RegexAction),
     JumpForward,
@@ -174,7 +176,8 @@ pub struct Key {
 
 impl From<KeyEvent> for Key {
     fn from(e: KeyEvent) -> Key {
-        let mut mods = e.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let mut mods =
+            e.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
         // Shift is already in the character (`G`, `%`), as Helix normalises it.
         if matches!(e.code, KeyCode::Char(_)) {
             mods.remove(KeyModifiers::SHIFT);
@@ -320,13 +323,23 @@ fn build(name: &'static str, sticky: bool, defs: Vec<Def>) -> Menu {
             Def::Cmd(ks, c) => {
                 let command = command(c).unwrap_or_else(|| panic!("no command {c}"));
                 // `|` separates aliases, so the `|` key itself is written alone.
-                let aliases: Vec<&str> = if ks == "|" { vec!["|"] } else { ks.split('|').collect() };
+                let aliases: Vec<&str> = if ks == "|" {
+                    vec!["|"]
+                } else {
+                    ks.split('|').collect()
+                };
                 for k in aliases {
-                    keys.push((Key::parse(k).unwrap_or_else(|| panic!("bad key {k}")), Node::Cmd(command)));
+                    keys.push((
+                        Key::parse(k).unwrap_or_else(|| panic!("bad key {k}")),
+                        Node::Cmd(command),
+                    ));
                 }
             }
             Def::Menu(k, name, sticky, defs) => {
-                keys.push((Key::parse(k).unwrap(), Node::Menu(build(name, sticky, defs))));
+                keys.push((
+                    Key::parse(k).unwrap(),
+                    Node::Menu(build(name, sticky, defs)),
+                ));
             }
         }
     }
@@ -354,42 +367,58 @@ fn normal_defs() -> Vec<Def> {
         cmd("E", "move_next_long_word_end"),
         cmd("v", "select_mode"),
         cmd("G", "goto_line"),
-        menu("g", "Goto", vec![
-            cmd("g", "goto_file_start"),
-            cmd("e", "goto_last_line"),
-            cmd("h", "goto_line_start"),
-            cmd("l", "goto_line_end"),
-            cmd("s", "goto_first_nonwhitespace"),
-            cmd("t", "goto_window_top"),
-            cmd("c", "goto_window_center"),
-            cmd("b", "goto_window_bottom"),
-            cmd("n", "goto_next_buffer"),
-            cmd("p", "goto_previous_buffer"),
-            cmd("k", "move_line_up"),
-            cmd("j", "move_line_down"),
-            cmd("|", "goto_column"),
-        ]),
+        menu(
+            "g",
+            "Goto",
+            vec![
+                cmd("g", "goto_file_start"),
+                cmd("e", "goto_last_line"),
+                cmd("h", "goto_line_start"),
+                cmd("l", "goto_line_end"),
+                cmd("s", "goto_first_nonwhitespace"),
+                cmd("t", "goto_window_top"),
+                cmd("c", "goto_window_center"),
+                cmd("b", "goto_window_bottom"),
+                cmd("n", "goto_next_buffer"),
+                cmd("p", "goto_previous_buffer"),
+                cmd("k", "move_line_up"),
+                cmd("j", "move_line_down"),
+                cmd("|", "goto_column"),
+            ],
+        ),
         cmd(":", "command_mode"),
         cmd(";", "collapse_selection"),
         cmd("A-;", "flip_selections"),
         cmd("%", "select_all"),
         cmd("x", "extend_line_below"),
         cmd("X", "extend_to_line_bounds"),
-        menu("m", "Match", vec![
-            cmd("m", "match_brackets"),
-            cmd("a", "select_textobject_around"),
-            cmd("i", "select_textobject_inner"),
-        ]),
-        menu("[", "Left bracket", vec![
-            cmd("g", "goto_prev_change"),
-            cmd("G", "goto_first_change"),
-            cmd("p", "goto_prev_paragraph"),
-        ]),
-        menu("]", "Right bracket", vec![
-            cmd("g", "goto_next_change"),
-            cmd("G", "goto_last_change"),
-            cmd("p", "goto_next_paragraph"),
-        ]),
+        menu(
+            "m",
+            "Match",
+            vec![
+                cmd("m", "match_brackets"),
+                cmd("a", "select_textobject_around"),
+                cmd("i", "select_textobject_inner"),
+            ],
+        ),
+        menu(
+            "[",
+            "Left bracket",
+            vec![
+                cmd("g", "goto_prev_change"),
+                cmd("G", "goto_first_change"),
+                cmd("p", "goto_prev_paragraph"),
+            ],
+        ),
+        menu(
+            "]",
+            "Right bracket",
+            vec![
+                cmd("g", "goto_next_change"),
+                cmd("G", "goto_last_change"),
+                cmd("p", "goto_next_paragraph"),
+            ],
+        ),
         cmd("C", "copy_selection_on_next_line"),
         cmd("A-C", "copy_selection_on_prev_line"),
         cmd("s", "select_regex"),
@@ -424,12 +453,16 @@ fn normal_defs() -> Vec<Def> {
         // glos: expand or collapse a generated file.
         cmd("ret", "toggle_collapse"),
         cmd("y", "yank"),
-        menu("space", "Space", vec![
-            cmd("f", "file_picker"),
-            cmd("g", "changed_file_picker"),
-            cmd("y", "yank_to_clipboard"),
-            cmd("Y", "yank_main_selection_to_clipboard"),
-        ]),
+        menu(
+            "space",
+            "Space",
+            vec![
+                cmd("f", "file_picker"),
+                cmd("g", "changed_file_picker"),
+                cmd("y", "yank_to_clipboard"),
+                cmd("Y", "yank_main_selection_to_clipboard"),
+            ],
+        ),
         cmd("C-b|pageup", "page_up"),
         cmd("C-f|pagedown", "page_down"),
         cmd("C-u", "page_cursor_half_up"),
@@ -470,7 +503,10 @@ impl Keymaps {
         select.retain(|d| !matches!(d, Def::Cmd("v" | "esc", _)));
         select.push(cmd("v", "normal_mode"));
         select.push(cmd("esc", "exit_select_mode"));
-        Keymaps { normal: build("Normal mode", false, normal_defs()), select: build("Select mode", false, select) }
+        Keymaps {
+            normal: build("Normal mode", false, normal_defs()),
+            select: build("Select mode", false, select),
+        }
     }
 }
 
@@ -480,7 +516,9 @@ mod tests {
 
     #[test]
     fn keys_round_trip() {
-        for k in ["h", "G", "C-d", "A-;", "space", "ret", "esc", "pageup", "%", "minus"] {
+        for k in [
+            "h", "G", "C-d", "A-;", "space", "ret", "esc", "pageup", "%", "minus",
+        ] {
             assert_eq!(Key::parse(k).unwrap().to_string(), k);
         }
         let shifted = Key::from(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
@@ -492,8 +530,12 @@ mod tests {
         let k = Keymaps::default();
         let help = k.normal.help();
         assert!(help.contains(&("h, left".to_string(), "Move left")));
-        let Some(Node::Menu(g)) = k.normal.get(Key::parse("g").unwrap()) else { panic!() };
+        let Some(Node::Menu(g)) = k.normal.get(Key::parse("g").unwrap()) else {
+            panic!()
+        };
         assert_eq!(g.name, "Goto");
-        assert!(matches!(k.select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode"));
+        assert!(
+            matches!(k.select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode")
+        );
     }
 }

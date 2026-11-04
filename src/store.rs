@@ -122,8 +122,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    let mut conn =
-        Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
@@ -151,7 +150,8 @@ fn migrate(conn: &mut Connection, path: &Path, migrations: &[&str]) -> Result<()
     // One transaction for all pending steps, so a failed migration leaves the old schema intact.
     let tx = conn.transaction()?;
     for (i, sql) in migrations.iter().enumerate().skip(version) {
-        tx.execute_batch(sql).with_context(|| format!("migrating to v{}", i + 1))?;
+        tx.execute_batch(sql)
+            .with_context(|| format!("migrating to v{}", i + 1))?;
     }
     tx.pragma_update(None, "user_version", migrations.len() as u32)?;
     tx.commit()?;
@@ -163,7 +163,8 @@ mod tests {
     use super::*;
 
     fn version(conn: &Connection) -> usize {
-        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0)).unwrap() as usize
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap() as usize
     }
 
     #[test]
@@ -186,12 +187,19 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         migrate(&mut conn, &path, &["CREATE TABLE a (x)"]).unwrap();
         conn.execute("INSERT INTO a VALUES (1)", []).unwrap();
-        migrate(&mut conn, &path, &["CREATE TABLE a (x)", "CREATE TABLE b (y)"]).unwrap();
+        migrate(
+            &mut conn,
+            &path,
+            &["CREATE TABLE a (x)", "CREATE TABLE b (y)"],
+        )
+        .unwrap();
         assert_eq!(version(&conn), 2);
 
         let backup = Connection::open(dir.path().join("glos.db.bak-v1")).unwrap();
         assert_eq!(version(&backup), 1);
-        let n: i64 = backup.query_row("SELECT count(*) FROM a", [], |r| r.get(0)).unwrap();
+        let n: i64 = backup
+            .query_row("SELECT count(*) FROM a", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
 
         let err = migrate(&mut conn, &path, &["CREATE TABLE a (x)"]).unwrap_err();
@@ -204,10 +212,21 @@ mod tests {
         let path = dir.path().join("glos.db");
         let mut conn = Connection::open(&path).unwrap();
         migrate(&mut conn, &path, &["CREATE TABLE a (x)"]).unwrap();
-        assert!(migrate(&mut conn, &path, &["CREATE TABLE a (x)", "CREATE TABLE b (y); nonsense"]).is_err());
+        assert!(
+            migrate(
+                &mut conn,
+                &path,
+                &["CREATE TABLE a (x)", "CREATE TABLE b (y); nonsense"]
+            )
+            .is_err()
+        );
         assert_eq!(version(&conn), 1);
         let has_b: i64 = conn
-            .query_row("SELECT count(*) FROM sqlite_master WHERE name = 'b'", [], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'b'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(has_b, 0);
     }
