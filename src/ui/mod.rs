@@ -110,35 +110,7 @@ pub fn run(source: Source, config: &Config) -> Result<()> {
             Theme::load("default", ColorSupport::detect())?
         }
     };
-    let loader = Loader::new(&theme)?;
-    let mut app = App {
-        files: (0..source.changes.len()).map(|_| None).collect(),
-        context: HashMap::new(),
-        source,
-        cur: Cur::Change(0),
-        mode: Mode::Normal,
-        theme,
-        loader,
-        keymaps: Keymaps::default(),
-        pending: vec![],
-        count: None,
-        next_key: None,
-        prompt: None,
-        picker: None,
-        last_search: None,
-        yanked: vec![],
-        wrap: config.editor.soft_wrap.enable,
-        jumps: vec![],
-        jump: 0,
-        last_motion: None,
-        recording: None,
-        macro_keys: vec![],
-        replaying: false,
-        status: None,
-        screen: Rect::default(),
-        view: Rect::default(),
-        quit: false,
-    };
+    let mut app = App::new(source, config, theme)?;
     // Raw mode and the alternate screen; the terminal is restored on a panic too.
     let mut terminal = ratatui::init();
     if config.editor.mouse {
@@ -153,15 +125,52 @@ pub fn run(source: Source, config: &Config) -> Result<()> {
 }
 
 impl App {
+    fn new(source: Source, config: &Config, theme: Theme) -> Result<App> {
+        let loader = Loader::new(&theme)?;
+        let mut app = App {
+            files: (0..source.changes.len()).map(|_| None).collect(),
+            context: HashMap::new(),
+            source,
+            cur: Cur::Change(0),
+            mode: Mode::Normal,
+            theme,
+            loader,
+            keymaps: Keymaps::default(),
+            pending: vec![],
+            count: None,
+            next_key: None,
+            prompt: None,
+            picker: None,
+            last_search: None,
+            yanked: vec![],
+            wrap: config.editor.soft_wrap.enable,
+            jumps: vec![],
+            jump: 0,
+            last_motion: None,
+            recording: None,
+            macro_keys: vec![],
+            replaying: false,
+            status: None,
+            screen: Rect::default(),
+            view: Rect::default(),
+            quit: false,
+        };
+        app.load(0);
+        Ok(app)
+    }
+
+    /// One frame: the picker's preview is loaded first.
+    fn draw(&mut self, f: &mut Frame) {
+        self.load_preview();
+        self.render(f);
+    }
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         let size = terminal.size()?;
         self.screen = Rect::new(0, 0, size.width, size.height);
         self.view = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
-        self.load(0);
         let mut first = true;
         while !self.quit {
-            self.load_preview();
-            terminal.draw(|f| self.render(f))?;
+            terminal.draw(|f| self.draw(f))?;
             if std::mem::take(&mut first) {
                 tracing::info!("first screen after {:?}", crate::STARTED.elapsed());
             }
@@ -966,4 +975,67 @@ fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Screen snapshots of the parts that must look like Helix: the view with its gutter and
+    //! statusline, the key help panel, the picker and the prompt.
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn app(dir: &std::path::Path) -> App {
+        let (old, new) = (dir.join("old.rs"), dir.join("main.rs"));
+        std::fs::write(&old, "fn main() {\n    println!(\"hi\");\n}\n\nfn gone() {}\n").unwrap();
+        std::fs::write(&new, "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n").unwrap();
+        let source = Source::diff(&old, &new).unwrap();
+        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+        App::new(source, &Config::default(), theme).unwrap()
+    }
+
+    /// Types Helix-notation keys (`g`, `space`, `C-d`…), then draws and returns the screen.
+    fn screen(app: &mut App, keys: &str) -> String {
+        let mut term = Terminal::new(TestBackend::new(72, 14)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        for k in keys.split_whitespace() {
+            app.key(Key::parse(k).unwrap_or_else(|| panic!("key {k}")));
+        }
+        term.draw(|f| app.draw(f)).unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn file_view() {
+        let d = tempfile::tempdir().unwrap();
+        insta::assert_snapshot!(screen(&mut app(d.path()), ""));
+    }
+
+    #[test]
+    fn key_help_panel() {
+        let d = tempfile::tempdir().unwrap();
+        insta::assert_snapshot!(screen(&mut app(d.path()), "g"));
+    }
+
+    #[test]
+    fn select_mode_and_count() {
+        let d = tempfile::tempdir().unwrap();
+        insta::assert_snapshot!(screen(&mut app(d.path()), "v 2 w"));
+    }
+
+    #[test]
+    fn changed_file_picker() {
+        let d = tempfile::tempdir().unwrap();
+        let mut term_app = app(d.path());
+        insta::assert_snapshot!(screen(&mut term_app, "space g"));
+    }
+
+    #[test]
+    fn search_prompt() {
+        let d = tempfile::tempdir().unwrap();
+        insta::assert_snapshot!(screen(&mut app(d.path()), "/ l e t"));
+    }
 }

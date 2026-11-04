@@ -1,0 +1,18 @@
+---
+source: src/ui/mod.rs
+expression: "screen(&mut app(d.path()), \"g\")"
+---
+    1  fn main() {           ┌Goto─────────────────────────────────────┐
+    2 ▍    println!("hello");│ g  Goto line number <n> else file start │
+    3 ▍    let x = 1;        │ e  Goto last line                       │
+    4  }                     │ h  Goto line start                      │
+    5 ▔                      │ l  Goto line end                        │
+                             │ s  Goto first non-blank in line         │
+                             │ t  Goto window top                      │
+                             │ c  Goto window center                   │
+                             │ b  Goto window bottom                   │
+                             │ n  Goto next changed file               │
+                             │ p  Goto previous changed file           │
+                             └─────────────────────────────────────────┘
+ NOR  main.rs                                     1/1 files  1 sel  2:1
+                                                                      g

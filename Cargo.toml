@@ -30,6 +30,7 @@ tree-sitter-language = "0.1"
 unicode-width = "0.2.3"
 
 [dev-dependencies]
+insta = "1.49.0"
 tempfile = "3.27.0"
 
 # gix is very slow unoptimised (a 1.2 s scan takes 24 s); optimise dependencies in dev builds.

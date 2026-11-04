@@ -1,0 +1,18 @@
+---
+source: src/ui/mod.rs
+expression: "screen(&mut app(d.path()), \"/ l e t\")"
+---
+    1  fn main() {
+    2 ▍    println!("hello");
+    3 ▍    let x = 1;
+    4  }
+    5 ▔
+
+
+
+
+
+
+
+ NOR  main.rs                                     1/1 files  1 sel  3:7
+search:let
