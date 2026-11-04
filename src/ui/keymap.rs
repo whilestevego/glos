@@ -66,6 +66,12 @@ pub enum AppAction {
     NextThread(bool),
     /// `]D` / `[D`: `true` goes to the last.
     EdgeThread(bool),
+    /// `]u` / `[u`: the next or previous thread with an agent's reply you haven't read.
+    NextUnread(bool),
+    /// `space x`: resolve the thread under the cursor, or reopen it.
+    ToggleResolved,
+    /// `space n`: the line an agent suggested.
+    GotoSuggestion,
 }
 
 pub struct Command {
@@ -192,6 +198,10 @@ commands! {
     goto_prev_diag, "Goto previous thread", App(AppAction::NextThread(false));
     goto_last_diag, "Goto last thread", App(AppAction::EdgeThread(true));
     goto_first_diag, "Goto first thread", App(AppAction::EdgeThread(false));
+    goto_next_unread, "Goto next unread reply", App(AppAction::NextUnread(true));
+    goto_prev_unread, "Goto previous unread reply", App(AppAction::NextUnread(false));
+    toggle_resolved, "Resolve or reopen the thread under the cursor", App(AppAction::ToggleResolved);
+    goto_suggestion, "Goto the line the agent suggested", App(AppAction::GotoSuggestion);
 }
 
 pub fn command(name: &str) -> Option<&'static Command> {
@@ -439,6 +449,7 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("d", "goto_prev_diag"),
                 cmd("D", "goto_first_diag"),
+                cmd("u", "goto_prev_unread"),
                 cmd("g", "goto_prev_change"),
                 cmd("G", "goto_first_change"),
                 cmd("p", "goto_prev_paragraph"),
@@ -450,6 +461,7 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("d", "goto_next_diag"),
                 cmd("D", "goto_last_diag"),
+                cmd("u", "goto_next_unread"),
                 cmd("g", "goto_next_change"),
                 cmd("G", "goto_last_change"),
                 cmd("p", "goto_next_paragraph"),
@@ -504,6 +516,8 @@ fn normal_defs() -> Vec<Def> {
                 cmd("C", "review_comment"),
                 cmd("r", "reply"),
                 cmd("m", "edit_comment"),
+                cmd("x", "toggle_resolved"),
+                cmd("n", "goto_suggestion"),
                 menu(
                     "s",
                     "Submit",

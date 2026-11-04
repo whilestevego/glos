@@ -219,6 +219,52 @@ pub struct App {
     run_editor: bool,
     /// The store's `data_version` when last read: it changes when another process writes.
     data_version: i64,
+    /// Watches the files for changes (none in tests, which call `files_changed`).
+    watch: Option<Watch>,
+    /// When files last changed, until they settle.
+    changed_at: Option<std::time::Instant>,
+}
+
+/// After this long without file changes, threads whose code is gone are marked outdated.
+const SETTLE: Duration = Duration::from_secs(3);
+
+/// File events from `notify`, debounced; anything under `.git` or ignored by the root
+/// `.gitignore` doesn't count.
+struct Watch {
+    _debouncer: notify_debouncer_full::Debouncer<
+        notify::RecommendedWatcher,
+        notify_debouncer_full::RecommendedCache,
+    >,
+    rx: std::sync::mpsc::Receiver<()>,
+}
+
+fn watch(root: &std::path::Path) -> Result<Watch> {
+    // ponytail: only the root .gitignore; nested ones would need the ignore crate's walker.
+    let (ignored, _) = ignore::gitignore::Gitignore::new(root.join(".gitignore"));
+    let root_owned = root.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = notify_debouncer_full::new_debouncer(
+        Duration::from_millis(250),
+        None,
+        move |res: notify_debouncer_full::DebounceEventResult| {
+            let Ok(events) = res else { return };
+            let counts = |p: &std::path::Path| {
+                let rel = p.strip_prefix(&root_owned).unwrap_or(p);
+                !rel.components().any(|c| c.as_os_str() == ".git")
+                    && !ignored
+                        .matched_path_or_any_parents(rel, p.is_dir())
+                        .is_ignore()
+            };
+            if events.iter().any(|e| e.paths.iter().any(|p| counts(p))) {
+                let _ = tx.send(());
+            }
+        },
+    )?;
+    debouncer.watch(root, notify::RecursiveMode::Recursive)?;
+    Ok(Watch {
+        _debouncer: debouncer,
+        rx,
+    })
 }
 
 pub fn run(source: Source, config: &Config, conn: Connection) -> Result<()> {
@@ -230,8 +276,13 @@ pub fn run(source: Source, config: &Config, conn: Connection) -> Result<()> {
         }
     };
     let mut app = App::new(source, config, theme, conn)?;
+    match watch(&app.source.root) {
+        Ok(w) => app.watch = Some(w),
+        Err(e) => tracing::warn!("not watching files: {e:#}"),
+    }
     // Raw mode and the alternate screen; the terminal is restored on a panic too.
     let mut terminal = ratatui::init();
+    crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange)?;
     if config.editor.mouse {
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     }
@@ -239,6 +290,7 @@ pub fn run(source: Source, config: &Config, conn: Connection) -> Result<()> {
     if config.editor.mouse {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     }
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
     ratatui::restore();
     result
 }
@@ -285,9 +337,12 @@ impl App {
             reminded: false,
             run_editor: false,
             data_version: 0,
+            watch: None,
+            changed_at: None,
         };
         app.load(0);
         app.reload();
+        app.reanchor(true);
         app.data_version = app.data_version();
         if app.review.requested_at.is_some() {
             app.status = Some((app.request_message(), false));
@@ -322,11 +377,202 @@ impl App {
             return;
         }
         self.data_version = v;
-        let before = self.review.requested_at.clone();
+        let before = self.review.clone();
+        let unread = |app: &App| app.threads.iter().filter(|t| t.unread()).count();
+        let unread_before = unread(self);
         self.reload();
-        if self.review.requested_at.is_some() && self.review.requested_at != before {
+        if self.review.requested_at.is_some() && self.review.requested_at != before.requested_at {
             self.status = Some((self.request_message(), false));
+        } else if let Some(s) = &self.review.suggestion
+            && before.suggestion.as_ref().map(|b| &b.at) != Some(&s.at)
+        {
+            let note = match s.note.lines().next().filter(|n| !n.is_empty()) {
+                Some(n) => format!(": {n}"),
+                None => String::new(),
+            };
+            self.status = Some((
+                format!(
+                    "{} suggests {}:{}{note} · space n goes there",
+                    s.by, s.path, s.line
+                ),
+                false,
+            ));
+        } else if unread(self) > unread_before {
+            self.status = Some(("New reply from the agent · ]u goes to it".into(), false));
         }
+    }
+
+    /// Opens or closes a thread; opening it reads its replies.
+    fn toggle_thread(&mut self, i: usize) {
+        let t = self.threads[i].clone();
+        if !self.expanded.remove(&t.id) {
+            self.expanded.insert(t.id.clone());
+            self.mark_seen(&t);
+        }
+    }
+
+    fn mark_seen(&mut self, t: &Thread) {
+        if t.unread() {
+            if let Err(e) = review::mark_seen(&self.conn, &t.id) {
+                self.status = Some((format!("{e:#}"), true));
+            }
+            self.reload();
+        }
+    }
+
+    /// `]u` / `[u`: threads with unread agents' replies, in the order of the review's files.
+    /// Review-level ones come first; opening one reads it.
+    fn goto_unread(&mut self, forward: bool) {
+        let order = |path: &str| {
+            self.source
+                .changes
+                .iter()
+                .position(|c| c.path == path)
+                .unwrap_or(usize::MAX - 1)
+        };
+        let key = |t: &Thread| match &t.anchor {
+            Some(a) => (order(&a.path), a.start as usize - 1),
+            None => (0, 0),
+        };
+        let here = {
+            let f = self.main_file();
+            let text = f.text.slice(..);
+            (
+                order(self.main_path()),
+                text.char_to_line(f.sel.primary().cursor(text)),
+            )
+        };
+        let mut unread: Vec<(bool, (usize, usize), String)> = self
+            .threads
+            .iter()
+            .filter(|t| t.unread())
+            .map(|t| (t.anchor.is_some(), key(t), t.id.clone()))
+            .collect();
+        unread.sort();
+        let next = if forward {
+            unread.iter().find(|(lines, k, _)| !lines || *k > here)
+        } else {
+            unread
+                .iter()
+                .rev()
+                .find(|(lines, k, _)| *lines && *k < here)
+        };
+        match next.map(|n| n.2.clone()) {
+            Some(id) => self.open(Target::Thread(id)),
+            None => self.status = Some(("No more unread replies".into(), false)),
+        }
+    }
+
+    /// The source read again, the way glos found it at the start.
+    fn rebuild_source(&self) -> Result<Source> {
+        match (&self.source.git, &self.source.paths) {
+            (Some(g), _) => Source::git(&g.worktree, Some(&g.base)),
+            (None, Some((old, new))) => Source::diff(old, new),
+            (None, None) => anyhow::bail!("nothing to read again"),
+        }
+    }
+
+    /// Files changed on disk: the review's changes are found again, and every loaded file is
+    /// read again with its cursor, selections and scroll mapped onto the same code, as Helix
+    /// does when a file changes under it. Threads follow their lines.
+    fn files_changed(&mut self) {
+        self.changed_at = Some(std::time::Instant::now());
+        let source = match self.rebuild_source() {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = Some((format!("Couldn't read the changes again: {e:#}"), true));
+                return;
+            }
+        };
+        let path_of = |app: &App, cur: &Cur| match cur {
+            Cur::Change(i) => app.source.changes[*i].path.clone(),
+            Cur::Context(p) => p.clone(),
+        };
+        let cur_path = path_of(self, &self.cur);
+        let jumps: Vec<(String, Selection)> = self
+            .jumps
+            .iter()
+            .map(|(c, s)| (path_of(self, c), s.clone()))
+            .collect();
+        let mut loaded: HashMap<String, File> = HashMap::new();
+        for (c, f) in self
+            .source
+            .changes
+            .iter()
+            .zip(std::mem::take(&mut self.files))
+        {
+            if let Some(f) = f {
+                loaded.insert(c.path.clone(), f);
+            }
+        }
+        self.source = source;
+        self.files = self
+            .source
+            .changes
+            .iter()
+            .map(|c| {
+                let old = loaded.remove(&c.path)?;
+                Some(view::keep_view(
+                    old,
+                    File::change(c, &self.source, &self.loader),
+                ))
+            })
+            .collect();
+        // Files that are no longer changed stay open for context, where they were.
+        for (p, old) in loaded {
+            if p == cur_path || self.jumps.iter().any(|(c, _)| path_of(self, c) == p) {
+                self.context.insert(p, old);
+            }
+        }
+        let paths: Vec<String> = self.context.keys().cloned().collect();
+        for p in paths {
+            let old = self.context.remove(&p).unwrap();
+            let new = File::context(&p, &self.source, &self.loader);
+            self.context.insert(p, view::keep_view(old, new));
+        }
+        let cur_for = |app: &App, p: &str| match app.source.changes.iter().position(|c| c.path == p)
+        {
+            Some(i) => Cur::Change(i),
+            None => Cur::Context(p.to_string()),
+        };
+        self.cur = cur_for(self, &cur_path);
+        match &self.cur {
+            Cur::Change(i) => self.load(*i),
+            Cur::Context(p) => {
+                let p = p.clone();
+                self.load_context(&p);
+            }
+        }
+        self.jumps = jumps
+            .into_iter()
+            .map(|(p, s)| (cur_for(self, &p), s))
+            .collect();
+        for (c, _) in &self.jumps.clone() {
+            match c {
+                Cur::Change(i) => self.load(*i),
+                Cur::Context(p) => self.load_context(p),
+            }
+        }
+        self.reanchor(false);
+    }
+
+    /// Places every thread again against the files on disk. Threads whose code is gone are
+    /// marked outdated only once `settled`: the files have been quiet for a while.
+    fn reanchor(&mut self, settled: bool) {
+        let paths: std::collections::BTreeSet<String> = self
+            .threads
+            .iter()
+            .filter_map(|t| t.anchor.as_ref().map(|a| a.path.clone()))
+            .collect();
+        for p in paths {
+            let text = std::fs::read(self.source.root.join(&p))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            if let Err(e) = review::reanchor(&self.conn, &self.review.id, &p, &text, settled) {
+                self.status = Some((format!("{e:#}"), true));
+            }
+        }
+        self.reload();
     }
 
     fn request_message(&self) -> String {
@@ -365,11 +611,24 @@ impl App {
                         }
                     }
                     Event::Mouse(m) => self.mouse(m),
+                    // Coming back to glos: look at the files again.
+                    Event::FocusGained => self.files_changed(),
                     _ => {} // resizes and anything else just redraw
                 }
             }
             if std::mem::take(&mut self.run_editor) {
                 self.external_editor(terminal, mouse)?;
+            }
+            if self
+                .watch
+                .as_ref()
+                .is_some_and(|w| w.rx.try_iter().count() > 0)
+            {
+                self.files_changed();
+            }
+            if self.changed_at.is_some_and(|t| t.elapsed() >= SETTLE) {
+                self.changed_at = None;
+                self.reanchor(true);
             }
             self.refresh();
         }
@@ -559,6 +818,7 @@ impl App {
                 let Some(t) = self.threads.iter().find(|t| t.id == id).cloned() else {
                     return;
                 };
+                self.mark_seen(&t);
                 match &t.anchor {
                     Some(a) => {
                         self.open(Target::Path(a.path.clone()));
@@ -776,6 +1036,9 @@ impl App {
 
     /// `space s`: every unsent comment goes to the agent as one round, with a verdict.
     fn submit(&mut self, verdict: Verdict) {
+        // The round ends: threads whose code is gone are outdated now.
+        self.changed_at = None;
+        self.reanchor(true);
         let files: Vec<(String, Vec<u8>)> = self
             .source
             .changes
@@ -1195,6 +1458,9 @@ impl App {
                     | A::ThreadPicker { .. }
                     | A::NextThread(_)
                     | A::EdgeThread(_)
+                    | A::NextUnread(_)
+                    | A::ToggleResolved
+                    | A::GotoSuggestion
             )
         {
             self.status = Some((
@@ -1227,6 +1493,33 @@ impl App {
             A::ThreadPicker { all } => self.picker = Some(self.thread_picker(all)),
             A::NextThread(forward) => self.goto_thread(forward, false),
             A::EdgeThread(last) => self.goto_thread(last, true),
+            A::NextUnread(forward) => self.goto_unread(forward),
+            A::ToggleResolved => match self.thread_here() {
+                Some(i) => {
+                    let t = &self.threads[i];
+                    let (status, msg) = if t.status == "open" {
+                        ("resolved", "Thread resolved")
+                    } else {
+                        ("open", "Thread reopened")
+                    };
+                    let id = t.id.clone();
+                    match review::set_status(&self.conn, &id, status, YOU, "") {
+                        Ok(()) => self.status = Some((msg.into(), false)),
+                        Err(e) => self.status = Some((format!("{e:#}"), true)),
+                    }
+                    self.reload();
+                }
+                None => self.status = Some(("No thread here".into(), true)),
+            },
+            A::GotoSuggestion => match self.review.suggestion.clone() {
+                Some(s) => {
+                    self.open(Target::Path(s.path.clone()));
+                    let line = s.line as usize - 1;
+                    self.select_lines(line, line);
+                    self.scroll_to_cursor(true);
+                }
+                None => self.status = Some(("No agent has suggested a line".into(), false)),
+            },
             AppAction::SelectMode => self.mode = Mode::Select,
             AppAction::NormalMode => self.mode = Mode::Normal,
             AppAction::CommandMode => self.prompt = Some(Prompt::new(PromptKind::Command)),
@@ -1252,6 +1545,10 @@ impl App {
             }
             AppAction::NextFile | AppAction::PrevFile => {
                 let n = self.files.len();
+                if n == 0 {
+                    self.status = Some(("No changed files left".into(), false));
+                    return None;
+                }
                 let step = self.count.map_or(1, NonZeroUsize::get) % n;
                 let i = match self.cur {
                     Cur::Change(i) if action == AppAction::NextFile => (i + step) % n,
@@ -1267,10 +1564,7 @@ impl App {
             AppAction::ToggleCollapse => {
                 // On a thread, ret opens or closes it.
                 if let Some(i) = self.thread_here() {
-                    let id = self.threads[i].id.clone();
-                    if !self.expanded.remove(&id) {
-                        self.expanded.insert(id);
-                    }
+                    self.toggle_thread(i);
                     return None;
                 }
                 let file = self.main_file_mut();
@@ -1459,10 +1753,7 @@ impl App {
         if m.kind == MouseEventKind::Down(MouseButton::Left)
             && let Some(&(_, i)) = self.thread_hits.iter().find(|(y, _)| *y == m.row)
         {
-            let id = self.threads[i].id.clone();
-            if !self.expanded.remove(&id) {
-                self.expanded.insert(id);
-            }
+            self.toggle_thread(i);
             return;
         }
         match m.kind {
@@ -1939,6 +2230,11 @@ impl App {
         let which = match self.unsent {
             0 => which,
             n => format!("{n} unsent  {which}"),
+        };
+        let unread = self.threads.iter().filter(|t| t.unread()).count();
+        let which = match unread {
+            0 => which,
+            n => format!("{n} unread  {which}"),
         };
         buf.set_stringn(area.x, area.y, &left, area.width as usize, base);
 

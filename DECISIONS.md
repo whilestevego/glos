@@ -283,6 +283,26 @@ PLAN.md:
 - **`glos mcp` serves the review of its starting folder:** the open review whose folder holds it,
   the deepest one. In a git repo with no review yet, `request_review` makes one.
 
+## M3 (2026-11-04)
+
+- **Re-anchoring** maps the anchor through the line diff when the diff doesn't reach into the
+  anchored lines (they only moved); otherwise it searches for the exact anchored text, nearest to
+  where it should be, with the context lines breaking ties. A successful placement stores the
+  file's new content as the thread's base, so the next change maps from there.
+- **Outdated waits for quiet:** a thread whose text is gone is "pending" until the files have
+  been quiet for 3 seconds, or you submit. Resolved threads whose code went stay resolved;
+  outdated ones stay outdated until reopened.
+- **Your view through a reload** uses helix-core's `compare_ropes`, the same mapping Helix uses
+  when a file changes on disk. A file that's no longer changed stays on screen as context.
+- **Agent actions share one implementation** (`mcp::Agent`) between the MCP tools and the CLI,
+  so the checks match: agents can only touch threads they can see, paths can't leave the
+  review's folder, and resolving needs a note. Over MCP a refusal is the tool's answer; the CLI
+  exits 1.
+- **Unread** is per thread: agents' comments after you last opened it. Opening a thread (`ret`, a
+  click, `]u`, the picker) reads it.
+- **One suggestion per review,** the latest, kept on the review row: a suggestion is a pointer,
+  not history.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.

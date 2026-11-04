@@ -211,6 +211,9 @@ pub fn layout(
         };
         let unsent = t.comments.iter().filter(|c| c.unsent()).count();
         let mut tags = vec![];
+        if t.unread() {
+            tags.push("unread".to_string());
+        }
         if t.comments.len() > 1 {
             tags.push(format!("{} comments", t.comments.len()));
         }
@@ -224,13 +227,22 @@ pub fn layout(
         if !expanded.contains(&t.id) {
             let first = t.comments.first();
             let line = first.map_or("", |c| c.body.lines().next().unwrap_or(""));
-            let author = first.map_or("", |c| c.author.as_str());
+            let author = first.map_or(String::new(), who);
             row(format!("▸ {author}: {line}{tags}"), style);
             continue;
         }
         row(format!("▾ thread {}{tags}", t.id), style);
+        // An outdated thread's code is gone: show it as it was.
+        if t.status == "outdated"
+            && let Some(text) = &t.anchor_text
+        {
+            row("  the code it was on:".into(), theme.get("ui.virtual"));
+            for l in text.lines().take(5) {
+                row(format!("  │ {l}"), theme.get("ui.virtual"));
+            }
+        }
         for c in &t.comments {
-            let mut head = format!("  {}", c.author);
+            let mut head = format!("  {}", who(c));
             if c.unsent() {
                 head += " · unsent";
             }
@@ -244,6 +256,15 @@ pub fn layout(
         }
     }
     out
+}
+
+/// A comment's author, with agents' notes made before review marked as such.
+fn who(c: &crate::review::Comment) -> String {
+    if c.kind == "annotation" {
+        format!("{} (note)", c.author)
+    } else {
+        c.author.clone()
+    }
 }
 
 /// Thread rows as helix-core line annotations, so scrolling and the mouse count them as the
@@ -394,6 +415,7 @@ mod tests {
             status: "open".into(),
             created_round: 1,
             anchor_text: None,
+            last_seen_at: None,
             comments: bodies
                 .iter()
                 .map(|(author, body)| crate::review::Comment {
@@ -433,8 +455,11 @@ mod tests {
         assert_eq!(
             rows(&HashSet::new()),
             [
-                (2, "▸ you: why this? · 2 comments · unsent".to_string()),
-                (2, "▸ claude: a note".to_string())
+                (
+                    2,
+                    "▸ you: why this? · unread · 2 comments · unsent".to_string()
+                ),
+                (2, "▸ claude: a note · unread".to_string())
             ]
         );
         let open = HashSet::from(["t1".to_string()]);
@@ -442,13 +467,13 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "▾ thread t1 · 2 comments · unsent",
+                "▾ thread t1 · unread · 2 comments · unsent",
                 "  you · unsent",
                 "    why this?",
                 "    more",
                 "  claude",
                 "    because",
-                "▸ claude: a note"
+                "▸ claude: a note · unread"
             ]
         );
         let l = layout(&threads, "a.rs", &HashSet::new(), &theme);

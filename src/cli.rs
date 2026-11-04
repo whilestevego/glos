@@ -156,6 +156,62 @@ pub fn submit(
     Ok(())
 }
 
+/// What `glos reply`, `resolve`, `reopen` and `annotate` do: an agent's action, through the
+/// same checks as the MCP server's tools.
+pub enum AgentAction {
+    Reply {
+        thread: String,
+        body: String,
+    },
+    Resolve {
+        thread: String,
+        note: String,
+    },
+    Reopen {
+        thread: String,
+        note: String,
+    },
+    Annotate {
+        path: String,
+        lines: String,
+        body: String,
+    },
+}
+
+/// Runs an agent action for the review of `cwd`. A refusal is an error, so the exit code is 1.
+pub fn agent(
+    conn: Connection,
+    cwd: &Path,
+    author: &str,
+    action: AgentAction,
+    json: bool,
+    out: &mut impl Write,
+) -> Result<()> {
+    let mut a = crate::mcp::Agent::new(conn, cwd.to_path_buf());
+    let outcome = match action {
+        AgentAction::Reply { thread, body } => a.reply(author, &thread, &body)?,
+        AgentAction::Resolve { thread, note } => a.set_status(author, &thread, false, &note)?,
+        AgentAction::Reopen { thread, note } => a.set_status(author, &thread, true, &note)?,
+        AgentAction::Annotate { path, lines, body } => {
+            let (start, end) = match lines.split_once('-') {
+                Some((s, e)) => (s.parse(), e.parse().map(Some)),
+                None => (lines.parse(), Ok(None)),
+            };
+            let (Ok(start), Ok(end)) = (start, end) else {
+                anyhow::bail!("lines are `12` or `12-14`, not `{lines}`");
+            };
+            a.annotate(author, &path, start, end, &body)?
+        }
+    };
+    let message = outcome.map_err(anyhow::Error::msg)?;
+    if json {
+        writeln!(out, "{}", json!({ "version": VERSION, "message": message }))?;
+    } else {
+        writeln!(out, "{message}")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +278,66 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_str(&run(|o| show(&conn, None, dir.path(), true, o))).unwrap();
         assert!(doc["review"].is_null());
+    }
+
+    #[test]
+    fn agent_actions_from_the_cli() {
+        let (_d, conn, r, cwd) = setup();
+        let db = conn.path().unwrap().to_string();
+        let c = || crate::store::open(Path::new(&db)).unwrap();
+        let run_agent = |action| {
+            let mut out = vec![];
+            agent(c(), &cwd, "script", action, false, &mut out)
+                .map(|_| String::from_utf8(out).unwrap())
+        };
+        let note = run_agent(AgentAction::Annotate {
+            path: "a.rs".into(),
+            lines: "1".into(),
+            body: "new file".into(),
+        })
+        .unwrap();
+        assert!(note.starts_with("Note left on a.rs:1"), "{note}");
+        let t = review::threads(&conn, &r.id).unwrap()[0].id.clone();
+        assert_eq!(
+            run_agent(AgentAction::Reply {
+                thread: t.clone(),
+                body: "more".into()
+            })
+            .unwrap(),
+            format!("Replied on thread {t}.\n")
+        );
+        // A refusal is an error, for the exit code.
+        let err = run_agent(AgentAction::Resolve {
+            thread: t.clone(),
+            note: "".into(),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("needs a note"));
+        run_agent(AgentAction::Resolve {
+            thread: t.clone(),
+            note: "done".into(),
+        })
+        .unwrap();
+        run_agent(AgentAction::Reopen {
+            thread: t.clone(),
+            note: "".into(),
+        })
+        .unwrap();
+        let bad = run_agent(AgentAction::Annotate {
+            path: "a.rs".into(),
+            lines: "x-2".into(),
+            body: "b".into(),
+        });
+        assert!(bad.unwrap_err().to_string().contains("12-14"));
+        let th = &review::threads(&conn, &r.id).unwrap()[0];
+        assert_eq!(th.status, "open");
+        assert_eq!(
+            th.comments
+                .iter()
+                .map(|c| c.author.as_str())
+                .collect::<Vec<_>>(),
+            ["script"; 3]
+        );
     }
 
     #[test]

@@ -1076,3 +1076,246 @@ fn a_request_from_another_process_shows_without_moving_the_view() {
     );
     assert_eq!((t.sel(), t.top()), (sel, top));
 }
+
+// ---- Two-way: agents, live files, re-anchoring ----
+
+impl T {
+    /// Another process on the same store, as an agent's MCP server is.
+    fn agent(&self) -> rusqlite::Connection {
+        crate::store::open(&self._dir.path().join("glos.db")).unwrap()
+    }
+
+    /// Writes the new side of a two-file review, as an agent editing it would.
+    fn edit(&mut self, text: &str) -> &mut Self {
+        std::fs::write(self._dir.path().join("main.rs"), text).unwrap();
+        self.app.files_changed();
+        self.draw();
+        self
+    }
+
+    fn thread_lines(&self) -> Vec<(u32, u32, String)> {
+        self.app
+            .threads
+            .iter()
+            .filter_map(|t| {
+                t.anchor
+                    .as_ref()
+                    .map(|a| (a.start, a.end, t.status.clone()))
+            })
+            .collect()
+    }
+}
+
+/// A review with one submitted comment on line 2 of `NEW`, and the thread's id.
+fn sent(t: &mut T) -> String {
+    t.keys("space c")
+        .typed("why hello?")
+        .keys("esc ret space s r");
+    t.app.threads[0].id.clone()
+}
+
+#[test]
+fn agent_replies_appear_unread_and_read_when_opened() {
+    let mut t = T::files(OLD, NEW);
+    let id = sent(&mut t);
+    review::reply(&t.agent(), &id, "claude", "it reads better").unwrap();
+    t.app.refresh();
+    t.draw();
+    assert_eq!(t.said(), "New reply from the agent · ]u goes to it");
+    assert!(t.shows("1 unread"), "{}", t.screen());
+    assert!(t.shows("· unread · 2 comments"), "{}", t.screen());
+    // Opening the thread reads it.
+    t.keys("ret");
+    assert!(t.shows("    it reads better"));
+    assert!(t.app.threads.iter().all(|th| !th.unread()));
+    assert!(!t.shows("1 unread"), "{}", t.screen());
+    let stored = review::threads(&t.agent(), &t.app.review.id).unwrap();
+    assert!(!stored[0].unread(), "read is kept in the store");
+}
+
+#[test]
+fn next_unread_goes_across_files() {
+    let mut t = T::folders(|o, n| {
+        for f in ["a.rs", "b.rs"] {
+            std::fs::write(o.join(f), "1\n").unwrap();
+            std::fs::write(n.join(f), "1\n2\n3\n").unwrap();
+        }
+    });
+    let agent = t.agent();
+    let file = "1\n2\n3\n";
+    let at = |p: &str, l| Anchor {
+        path: p.into(),
+        start: l,
+        end: l,
+    };
+    review::annotate(
+        &agent,
+        &t.app.review.id,
+        &at("b.rs", 3),
+        file,
+        "claude",
+        "unsure",
+    )
+    .unwrap();
+    review::annotate(
+        &agent,
+        &t.app.review.id,
+        &at("a.rs", 2),
+        file,
+        "claude",
+        "why",
+    )
+    .unwrap();
+    t.app.refresh();
+    t.keys("g g");
+    assert_eq!(t.path(), "a.rs");
+    t.keys("] u");
+    assert_eq!(
+        (t.path().as_str(), t.sel().contains("#[2\n|]#")),
+        ("a.rs", true)
+    );
+    assert!(
+        t.shows("claude (note)"),
+        "an agent's note is marked:\n{}",
+        t.screen()
+    );
+    t.keys("] u");
+    assert_eq!(t.path(), "b.rs");
+    assert!(t.sel().contains("#[3\n|]#"));
+    t.keys("] u");
+    assert_eq!(t.said(), "No more unread replies");
+    assert!(t.app.threads.iter().all(|th| !th.unread()));
+    assert!(!t.shows("1 unread"), "{}", t.screen());
+}
+
+#[test]
+fn resolve_and_reopen() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("x").keys("esc ret");
+    t.keys("space x");
+    assert_eq!(t.said(), "Thread resolved");
+    assert_eq!(t.app.threads[0].status, "resolved");
+    assert!(t.shows("· resolved"));
+    t.keys("space x");
+    assert_eq!(t.said(), "Thread reopened");
+    assert_eq!(t.app.threads[0].status, "open");
+    t.keys("g g space x");
+    assert_eq!(t.said(), "No thread here");
+}
+
+#[test]
+fn suggestions_show_and_space_n_goes_there() {
+    let mut t = T::files("", &lines(40));
+    t.keys("g g");
+    let (sel, top) = (t.sel(), t.top());
+    t.app
+        .review
+        .suggest(&t.agent(), "claude", "main.rs", 30, "the loop")
+        .unwrap();
+    t.app.refresh();
+    assert_eq!(
+        t.said(),
+        "claude suggests main.rs:30: the loop · space n goes there"
+    );
+    assert_eq!((t.sel(), t.top()), (sel, top), "the view didn't move");
+    t.keys("space n");
+    assert!(t.sel().contains("#[line 30\n|]#"));
+    // Back where you were with C-o.
+    t.keys("C-o");
+    assert_eq!(t.top(), top);
+}
+
+#[test]
+fn files_changing_keep_your_place_and_move_threads() {
+    let mut t = T::files("", &lines(30));
+    t.keys(":")
+        .typed("20")
+        .keys("ret space c")
+        .typed("this one")
+        .keys("esc ret");
+    t.keys("5 l");
+    let before = t.sel();
+    assert!(before.contains("line #[2|]#0"), "{before}");
+    let top = t.top();
+    // The agent adds two lines at the top.
+    t.edit(&format!("new 1\nnew 2\n{}", lines(30)));
+    assert!(
+        t.sel().contains("line #[2|]#0"),
+        "the cursor stays on the same code"
+    );
+    assert_eq!(t.top(), top + 2, "and so does the view");
+    assert_eq!(t.thread_lines(), [(22, 22, "open".into())]);
+    assert!(t.shows("new 1") || t.top() > 0);
+}
+
+#[test]
+fn threads_go_outdated_only_once_files_settle() {
+    let mut t = T::files("", &lines(10));
+    t.keys(":")
+        .typed("5")
+        .keys("ret space c")
+        .typed("hmm")
+        .keys("esc ret");
+    t.edit(&lines(10).replace("line 5\n", "line five\n"));
+    // Mid-edit: still open where it was.
+    assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
+    // Settled: outdated, and opening it shows the code it was on.
+    t.app.reanchor(true);
+    t.draw();
+    assert_eq!(t.thread_lines(), [(5, 5, "outdated".into())]);
+    t.keys(":").typed("5").keys("ret ret");
+    assert!(
+        t.shows("the code it was on:") && t.shows("│ line 5"),
+        "{}",
+        t.screen()
+    );
+    // Reopened and the text back, it's placed again.
+    t.edit(&lines(10));
+    t.keys("space x");
+    assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
+}
+
+#[test]
+fn files_appear_and_stop_being_changed() {
+    let mut t = T::folders(|o, n| {
+        std::fs::write(o.join("a.rs"), "1\n").unwrap();
+        std::fs::write(n.join("a.rs"), "1\n2\n").unwrap();
+    });
+    let new = t._dir.path().join("new");
+    std::fs::write(new.join("b.rs"), "fresh\n").unwrap();
+    t.app.files_changed();
+    t.draw();
+    assert_eq!(t.app.source.changes.len(), 2);
+    assert_eq!(t.path(), "a.rs");
+    assert!(t.shows("1/2 files"));
+    // a.rs changed back: it stays on screen, for context.
+    std::fs::write(new.join("a.rs"), "1\n").unwrap();
+    t.app.files_changed();
+    t.draw();
+    assert_eq!(t.path(), "context:a.rs");
+    t.keys("g n");
+    assert_eq!(t.path(), "b.rs");
+    // Everything changed back: nothing left to step through.
+    std::fs::remove_file(new.join("b.rs")).unwrap();
+    t.app.files_changed();
+    t.keys("g n");
+    assert_eq!(t.said(), "No changed files left");
+}
+
+#[test]
+fn threads_follow_changes_made_while_glos_was_closed() {
+    let mut t = T::files("", &lines(10));
+    t.keys(":")
+        .typed("3")
+        .keys("ret space c")
+        .typed("x")
+        .keys("esc ret");
+    let dir = t._dir.path().to_path_buf();
+    std::fs::write(dir.join("main.rs"), format!("top\n{}", lines(10))).unwrap();
+    // A new glos on the same store places the thread again at start.
+    let source = Source::diff(&dir.join("old.rs"), &dir.join("main.rs")).unwrap();
+    let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+    let app = App::new(source, &config(), theme, t.agent()).unwrap();
+    let a = app.threads[0].anchor.clone().unwrap();
+    assert_eq!((a.start, a.end), (4, 4));
+}

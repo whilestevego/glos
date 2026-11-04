@@ -126,6 +126,14 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE reviews ADD COLUMN request_note TEXT;
     ALTER TABLE reviews ADD COLUMN request_files TEXT;
     "#,
+    // v3: an agent's suggestion of a line for you to look at (one per review, the latest).
+    r#"
+    ALTER TABLE reviews ADD COLUMN suggested_at TEXT;
+    ALTER TABLE reviews ADD COLUMN suggested_by TEXT;
+    ALTER TABLE reviews ADD COLUMN suggested_path TEXT;
+    ALTER TABLE reviews ADD COLUMN suggested_line INTEGER;
+    ALTER TABLE reviews ADD COLUMN suggested_note TEXT;
+    "#,
 ];
 
 /// Opens (creating if needed) the database at `path` and brings its schema up to date.

@@ -520,6 +520,13 @@ the dashboard.
 - **M3, two-way.** The rest of the MCP tools (reply, resolve, annotate, suggest), live refresh
   through `notify` and the database without moving your view, unread replies, re-anchoring and
   outdated threads.
+  *Status (2026-11-04):* built: the MCP tools `reply`, `resolve`, `reopen`, `annotate` and
+  `suggest` (and `glos reply`, `resolve`, `reopen`, `annotate` with `--as`); agents' replies and
+  notes appear live, marked unread, with `]u`/`[u` and an unread count; `space x` resolves or
+  reopens; `space n` goes to a suggestion; files are watched (`notify`, `.git` and the root
+  `.gitignore` left out) and read again on change or focus, keeping cursor and scroll on the same
+  code through Helix's `compare_ropes`; threads re-anchor on every change and become outdated
+  only after 3 quiet seconds or at a submit, shown with the code they were on.
 - **M4, views and scopes.** Unified and side by side; since last review, per commit, files filter;
   file tree.
 - **M5, dashboard and launching.** Multi-review dashboard; closing and archiving reviews, `glos gc`;
@@ -532,7 +539,9 @@ largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be
 
 ## Open questions
 
-- **Re-anchoring rules:** how far to search for moved text before calling a thread outdated.
+- **Re-anchoring rules:** how far to search for moved text before calling a thread outdated
+  (M3 searches the whole file, nearest first), and whether a small edit inside the anchored
+  lines (a typo fixed) should keep the thread rather than outdate it (M3 matches exact text only).
 - **Branch renames and detached HEAD:** how a review follows a renamed branch, and what a review
   made in detached HEAD is keyed by.
 - **The default theme:** Helix's `default` is low contrast, and collapsed thread markers (drawn in
