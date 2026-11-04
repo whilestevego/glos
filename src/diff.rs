@@ -19,8 +19,26 @@ mod tests {
     #[test]
     fn kinds_of_hunk() {
         let h = hunks("a\nb\nc\nd\n", "a\nB\nc\nnew\nd\n");
-        assert_eq!(h, [Hunk { before: 1..2, after: 1..2 }, Hunk { before: 3..3, after: 3..4 }]);
+        assert_eq!(
+            h,
+            [
+                Hunk {
+                    before: 1..2,
+                    after: 1..2
+                },
+                Hunk {
+                    before: 3..3,
+                    after: 3..4
+                }
+            ]
+        );
         let removal = hunks("a\nb\nc\n", "a\nc\n");
-        assert_eq!(removal, [Hunk { before: 1..2, after: 1..1 }]);
+        assert_eq!(
+            removal,
+            [Hunk {
+                before: 1..2,
+                after: 1..1
+            }]
+        );
     }
 }

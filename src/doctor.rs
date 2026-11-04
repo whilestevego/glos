@@ -13,7 +13,9 @@ pub fn run(db: &Path, log: Option<&Path>) {
 
     match crate::store::open(db) {
         Ok(conn) => {
-            let v: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap_or(0);
+            let v: u32 = conn
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap_or(0);
             println!("Database: {} (schema v{v})", db.display());
         }
         Err(e) => println!("Database: {} — error: {e:#}", db.display()),
@@ -37,7 +39,10 @@ pub fn run(db: &Path, log: Option<&Path>) {
             Theme::load("default", colors).expect("the default theme is embedded")
         }
     };
-    println!("Log: {}", log.map_or("unavailable".into(), |p| p.display().to_string()));
+    println!(
+        "Log: {}",
+        log.map_or("unavailable".into(), |p| p.display().to_string())
+    );
     println!("Clipboard: {}", clipboard::provider());
     let term = std::env::var("TERM").unwrap_or_default();
     let support = match colors {
@@ -51,11 +56,22 @@ pub fn run(db: &Path, log: Option<&Path>) {
     match Loader::new(&theme) {
         Ok(loader) => {
             let langs = loader.health();
-            let broken: Vec<_> = langs.iter().filter(|(_, ok)| !ok).map(|(n, _)| *n).collect();
-            let ok: Vec<_> = langs.iter().filter(|(_, ok)| *ok).map(|(n, _)| *n).collect();
+            let broken: Vec<_> = langs
+                .iter()
+                .filter(|(_, ok)| !ok)
+                .map(|(n, _)| *n)
+                .collect();
+            let ok: Vec<_> = langs
+                .iter()
+                .filter(|(_, ok)| *ok)
+                .map(|(n, _)| *n)
+                .collect();
             println!("Languages ({}): {}", ok.len(), ok.join(", "));
             if !broken.is_empty() {
-                println!("Languages with a broken highlight query: {}", broken.join(", "));
+                println!(
+                    "Languages with a broken highlight query: {}",
+                    broken.join(", ")
+                );
             }
         }
         Err(e) => println!("Languages: error: {e:#}"),

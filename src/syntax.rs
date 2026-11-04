@@ -5,7 +5,9 @@
 //! regexes); grammars come from `embedded::GRAMMARS` instead of shared libraries on disk. Each
 //! language's queries compile the first time it's used: compiling all of them takes ~260 ms.
 
-use std::{borrow::Cow, collections::HashMap, ops::Range, path::Path, sync::OnceLock, time::Duration};
+use std::{
+    borrow::Cow, collections::HashMap, ops::Range, path::Path, sync::OnceLock, time::Duration,
+};
 
 use anyhow::Result;
 use helix_core::syntax::config::{Configuration, FileType, LanguageConfiguration};
@@ -69,9 +71,19 @@ impl Loader {
             let name = config.grammar.as_deref().unwrap_or(&config.language_id);
             // Only the languages whose queries are vendored: others sharing a compiled grammar
             // (jsx, starlark…) would parse but highlight nothing.
-            let has_query = embedded::QUERIES.iter().any(|(l, f, _)| *l == config.language_id && *f == "highlights.scm");
-            let grammar = embedded::GRAMMARS.iter().find(|(g, _)| *g == name).map(|(_, f)| *f).filter(|_| has_query);
-            loader.langs.push(LangData { config, grammar, compiled: OnceLock::new() });
+            let has_query = embedded::QUERIES
+                .iter()
+                .any(|(l, f, _)| *l == config.language_id && *f == "highlights.scm");
+            let grammar = embedded::GRAMMARS
+                .iter()
+                .find(|(g, _)| *g == name)
+                .map(|(_, f)| *f)
+                .filter(|_| has_query);
+            loader.langs.push(LangData {
+                config,
+                grammar,
+                compiled: OnceLock::new(),
+            });
         }
         loader.globs = globs.build()?;
         Ok(loader)
@@ -79,7 +91,8 @@ impl Loader {
 
     /// The language for a file, by path (globs, then extension) and then by shebang.
     pub fn language_for(&self, path: &Path, text: RopeSlice) -> Option<Language> {
-        self.language_for_path(path).or_else(|| self.language_for_shebang(text))
+        self.language_for_path(path)
+            .or_else(|| self.language_for_shebang(text))
     }
 
     fn language_for_path(&self, path: &Path) -> Option<Language> {
@@ -106,7 +119,10 @@ impl Loader {
     }
 
     fn language_for_name(&self, name: &str) -> Option<Language> {
-        let i = self.langs.iter().position(|l| l.config.language_id == name)?;
+        let i = self
+            .langs
+            .iter()
+            .position(|l| l.config.language_id == name)?;
         Some(Language::new(i as u32))
     }
 
@@ -117,7 +133,12 @@ impl Loader {
             .iter()
             .enumerate()
             .filter(|(_, l)| l.grammar.is_some())
-            .map(|(i, l)| (l.config.language_id.as_str(), self.get_config(Language::new(i as u32)).is_some()))
+            .map(|(i, l)| {
+                (
+                    l.config.language_id.as_str(),
+                    self.get_config(Language::new(i as u32)).is_some(),
+                )
+            })
             .collect()
     }
 
@@ -128,7 +149,8 @@ impl Loader {
 
     /// The language's tab width (`indent.tab-width`), 4 if it sets none, as Helix.
     pub fn tab_width(&self, lang: Option<Language>) -> usize {
-        lang.and_then(|l| self.langs[l.idx()].config.indent.as_ref()).map_or(4, |i| i.tab_width)
+        lang.and_then(|l| self.langs[l.idx()].config.indent.as_ref())
+            .map_or(4, |i| i.tab_width)
     }
 
     pub fn parse(&self, text: RopeSlice, lang: Language) -> Option<Syntax> {
@@ -154,7 +176,11 @@ impl Loader {
                 break;
             }
             let (event, active) = hl.advance();
-            let base = if event == HighlightEvent::Refresh { Style::default() } else { style };
+            let base = if event == HighlightEvent::Refresh {
+                Style::default()
+            } else {
+                style
+            };
             style = active.fold(base, |s, h: Highlight| s.patch(theme.highlight(h.idx())));
             out.push((pos as usize, style));
         }
@@ -174,7 +200,11 @@ impl LanguageLoader for Loader {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, l)| {
-                            let m = l.config.injection_regex.as_ref()?.find(text.regex_input())?;
+                            let m = l
+                                .config
+                                .injection_regex
+                                .as_ref()?
+                                .find(text.regex_input())?;
                             Some((m.end() - m.start(), i))
                         })
                         .max_by_key(|(len, _)| *len)
@@ -199,7 +229,7 @@ impl LanguageLoader for Loader {
                 let f = data.grammar?;
                 // SAFETY: each GRAMMARS entry is a tree-sitter language function compiled in
                 // by build.rs, which is what LanguageFn wraps.
-                let f = unsafe { tree_sitter_language::LanguageFn::from_raw(std::mem::transmute(f)) };
+                let f = unsafe { tree_sitter_language::LanguageFn::from_raw(f) };
                 let grammar = Grammar::try_from(f).ok()?;
                 let name = &data.config.language_id;
                 let config = LanguageConfig::new(
@@ -236,7 +266,10 @@ fn configure(config: &LanguageConfig, scopes: &[String]) {
         let mut best_len = 0;
         for (i, scope) in scopes.iter().enumerate() {
             let s: Vec<_> = scope.split('.').collect();
-            if s.len() <= parts.len() && s.iter().zip(&parts).all(|(a, b)| a == b) && s.len() > best_len {
+            if s.len() <= parts.len()
+                && s.iter().zip(&parts).all(|(a, b)| a == b)
+                && s.len() > best_len
+            {
                 best = Some(i);
                 best_len = s.len();
             }
@@ -260,13 +293,23 @@ mod tests {
     fn finds_languages() {
         let (l, _) = loader();
         let empty = Rope::new();
-        let name = |p: &str| l.language_for(Path::new(p), empty.slice(..)).map(|x| l.name(x).to_string());
+        let name = |p: &str| {
+            l.language_for(Path::new(p), empty.slice(..))
+                .map(|x| l.name(x).to_string())
+        };
         assert_eq!(name("/r/src/main.rs").as_deref(), Some("rust"));
         assert_eq!(name("/r/a.tsx").as_deref(), Some("tsx"));
         assert_eq!(name("/r/Cargo.lock").as_deref(), Some("toml"));
         let script = Rope::from("#!/usr/bin/env python3\nprint(1)\n");
-        assert_eq!(l.language_for(Path::new("/r/run"), script.slice(..)).map(|x| l.name(x)), Some("python"));
-        assert_eq!(l.tab_width(name("/r/a.go").and_then(|n| l.language_for_name(&n))), 4);
+        assert_eq!(
+            l.language_for(Path::new("/r/run"), script.slice(..))
+                .map(|x| l.name(x)),
+            Some("python")
+        );
+        assert_eq!(
+            l.tab_width(name("/r/a.go").and_then(|n| l.language_for_name(&n))),
+            4
+        );
     }
 
     #[test]
@@ -278,7 +321,10 @@ mod tests {
         let syntax = l.parse(text.slice(..), ts).unwrap();
         let spans = l.highlights(&syntax, text.slice(..), 0..text.len_bytes(), &theme);
         let keyword = theme.get("keyword");
-        assert!(spans.iter().any(|(at, s)| *at == 0 && s.fg == keyword.fg), "{spans:?}");
+        assert!(
+            spans.iter().any(|(at, s)| *at == 0 && s.fg == keyword.fg),
+            "{spans:?}"
+        );
 
         // Markdown injects rust into a fenced block.
         let md = Rope::from("# T\n\n```rust\nfn main() {}\n```\n");

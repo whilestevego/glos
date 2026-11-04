@@ -46,11 +46,14 @@ enum Command {
 
 /// XDG folders on macOS too, as Helix does.
 fn default_db() -> Result<PathBuf> {
-    Ok(etcetera::base_strategy::Xdg::new()?.data_dir().join("glos/glos.db"))
+    Ok(etcetera::base_strategy::Xdg::new()?
+        .data_dir()
+        .join("glos/glos.db"))
 }
 
 /// When glos started, for the first-screen time in the log (target: under 100 ms).
-pub static STARTED: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
+pub static STARTED: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
 
 fn main() -> ExitCode {
     std::sync::LazyLock::force(&STARTED);
@@ -66,9 +69,15 @@ fn main() -> ExitCode {
 /// Logs never go to the terminal: in the UI they'd corrupt the screen, and in `glos mcp`
 /// stdout carries the protocol. They go to `$XDG_STATE_HOME/glos/glos.log`.
 fn init_log(verbose: u8) -> Result<PathBuf> {
-    let path = etcetera::base_strategy::Xdg::new()?.state_dir().unwrap_or_default().join("glos/glos.log");
+    let path = etcetera::base_strategy::Xdg::new()?
+        .state_dir()
+        .unwrap_or_default()
+        .join("glos/glos.log");
     std::fs::create_dir_all(path.parent().unwrap())?;
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
     let level = match verbose {
         0 => tracing::Level::WARN,
         1 => tracing::Level::INFO,

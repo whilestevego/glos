@@ -11,9 +11,15 @@
 use std::num::NonZeroUsize;
 
 use helix_core::{
-    Range, Rope, Selection, doc_formatter::TextFormat, graphemes, line_ending::line_end_char_index,
-    match_brackets, movement, movement::{Direction, Movement}, search,
-    text_annotations::TextAnnotations, textobject::{self, TextObject},
+    Range, Rope, Selection,
+    doc_formatter::TextFormat,
+    graphemes,
+    line_ending::line_end_char_index,
+    match_brackets, movement,
+    movement::{Direction, Movement},
+    search,
+    text_annotations::TextAnnotations,
+    textobject::{self, TextObject},
 };
 use helix_stdx::rope::RopeSliceExt;
 
@@ -49,7 +55,11 @@ impl Ctx<'_> {
     }
 
     fn movement(&self) -> Movement {
-        if self.extend { Movement::Extend } else { Movement::Move }
+        if self.extend {
+            Movement::Extend
+        } else {
+            Movement::Move
+        }
     }
 
     fn transform(&mut self, f: impl FnMut(Range) -> Range) {
@@ -72,11 +82,18 @@ impl Ctx<'_> {
 }
 
 type MoveFn = fn(
-    helix_core::RopeSlice, Range, Direction, usize, Movement, &TextFormat, &mut TextAnnotations,
+    helix_core::RopeSlice,
+    Range,
+    Direction,
+    usize,
+    Movement,
+    &TextFormat,
+    &mut TextAnnotations,
 ) -> Range;
 
 fn move_impl(cx: &mut Ctx, f: MoveFn, dir: Direction) {
-    let (text, count, behaviour, fmt) = (cx.text.slice(..), cx.count(), cx.movement(), cx.fmt.clone());
+    let (text, count, behaviour, fmt) =
+        (cx.text.slice(..), cx.count(), cx.movement(), cx.fmt.clone());
     let mut annotations = TextAnnotations::default();
     cx.transform(|r| f(text, r, dir, count, behaviour, &fmt, &mut annotations));
 }
@@ -98,7 +115,11 @@ fn word_impl(cx: &mut Ctx, f: fn(helix_core::RopeSlice, Range, usize) -> Range) 
     let (text, count, extend) = (cx.text.slice(..), cx.count(), cx.extend);
     cx.transform(|r| {
         let word = f(text, r, count);
-        if extend { r.put_cursor(text, word.cursor(text), true) } else { word }
+        if extend {
+            r.put_cursor(text, word.cursor(text), true)
+        } else {
+            word
+        }
     });
 }
 
@@ -131,7 +152,8 @@ pub fn goto_line_end(cx: &mut Ctx) {
     cx.transform(|r| {
         let line = r.cursor_line(text);
         let start = text.line_to_char(line);
-        let pos = graphemes::prev_grapheme_boundary(text, line_end_char_index(&text, line)).max(start);
+        let pos =
+            graphemes::prev_grapheme_boundary(text, line_end_char_index(&text, line)).max(start);
         r.put_cursor(text, pos, extend)
     });
 }
@@ -183,7 +205,10 @@ enum Align {
 fn goto_window(cx: &mut Ctx, align: Align) {
     let count = cx.count() - 1;
     let scrolloff = cx.scrolloff();
-    let last_visual = cx.height.saturating_sub(1).min(cx.text.len_lines().saturating_sub(cx.top + 1));
+    let last_visual = cx
+        .height
+        .saturating_sub(1)
+        .min(cx.text.len_lines().saturating_sub(cx.top + 1));
     let line = match align {
         Align::Top => cx.top + scrolloff + count,
         Align::Center => cx.top + last_visual / 2,
@@ -218,7 +243,17 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
     if sync_cursor {
         let (text, behaviour, fmt) = (cx.text.slice(..), cx.movement(), cx.fmt.clone());
         let mut annotations = TextAnnotations::default();
-        cx.transform(|r| movement::move_vertically_visual(text, r, dir, offset, behaviour, &fmt, &mut annotations));
+        cx.transform(|r| {
+            movement::move_vertically_visual(
+                text,
+                r,
+                dir,
+                offset,
+                behaviour,
+                &fmt,
+                &mut annotations,
+            )
+        });
         return;
     }
     // Otherwise only the primary cursor moves, to the edge of the scrolloff zone if it fell
@@ -231,7 +266,14 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
     let cursor = range.cursor(text);
     let head = match dir {
         Direction::Forward => {
-            let (head, off) = helix_core::char_idx_at_visual_offset(text, anchor, scrolloff as isize, 0, &cx.fmt, &annotations);
+            let (head, off) = helix_core::char_idx_at_visual_offset(
+                text,
+                anchor,
+                scrolloff as isize,
+                0,
+                &cx.fmt,
+                &annotations,
+            );
             let head = head + (off != 0) as usize;
             if head <= cursor {
                 return;
@@ -240,7 +282,8 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
         }
         Direction::Backward => {
             let row = cx.height.saturating_sub(scrolloff + 1) as isize;
-            let (head, _) = helix_core::char_idx_at_visual_offset(text, anchor, row, 0, &cx.fmt, &annotations);
+            let (head, _) =
+                helix_core::char_idx_at_visual_offset(text, anchor, row, 0, &cx.fmt, &annotations);
             if head >= cursor {
                 return;
             }
@@ -248,12 +291,19 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
         }
     };
     let anchor = if cx.extend { range.anchor } else { head };
-    cx.sel = cx.sel.clone().replace(cx.sel.primary_index(), Range::new(anchor, head));
+    cx.sel = cx
+        .sel
+        .clone()
+        .replace(cx.sel.primary_index(), Range::new(anchor, head));
 }
 
 /// The mouse wheel: the view moves, and the cursor only as far as it must to stay in view.
 pub fn scroll_lines(cx: &mut Ctx, lines: usize, down: bool) {
-    let dir = if down { Direction::Forward } else { Direction::Backward };
+    let dir = if down {
+        Direction::Forward
+    } else {
+        Direction::Backward
+    };
     scroll(cx, lines, dir, false)
 }
 
@@ -277,8 +327,15 @@ pub fn extend_line_below(cx: &mut Ctx) {
         let start = text.line_to_char(start_line);
         let end = text.line_to_char((end_line + 1).min(text.len_lines()));
         // Extend to the next line if the current one is already selected.
-        let extra = if r.from() == start && r.to() == end { count } else { count - 1 };
-        Range::new(start, text.line_to_char((end_line + 1 + extra).min(text.len_lines())))
+        let extra = if r.from() == start && r.to() == end {
+            count
+        } else {
+            count - 1
+        };
+        Range::new(
+            start,
+            text.line_to_char((end_line + 1 + extra).min(text.len_lines())),
+        )
     });
 }
 
@@ -316,15 +373,21 @@ pub fn keep_primary_selection(cx: &mut Ctx) {
 pub fn match_brackets(cx: &mut Ctx) {
     let (text, extend) = (cx.text.slice(..), cx.extend);
     // ponytail: plaintext matching; Helix uses the syntax tree when there is one.
-    cx.transform(|r| match match_brackets::find_matching_bracket_plaintext(text, r.cursor(text)) {
-        Some(pos) => r.put_cursor(text, pos, extend),
-        None => r,
-    });
+    cx.transform(
+        |r| match match_brackets::find_matching_bracket_plaintext(text, r.cursor(text)) {
+            Some(pos) => r.put_cursor(text, pos, extend),
+            None => r,
+        },
+    );
 }
 
 /// `mi<ch>` / `ma<ch>`. The tree-sitter objects (f, t, a, c, T, e) are not supported yet.
 pub fn select_textobject(cx: &mut Ctx, around: bool, ch: char) {
-    let objtype = if around { TextObject::Around } else { TextObject::Inside };
+    let objtype = if around {
+        TextObject::Around
+    } else {
+        TextObject::Inside
+    };
     let (text, count, hunks) = (cx.text.slice(..), cx.count(), cx.hunks);
     cx.transform(|r| match ch {
         'w' => textobject::textobject_word(text, r, objtype, count, false),
@@ -333,9 +396,15 @@ pub fn select_textobject(cx: &mut Ctx, around: bool, ch: char) {
         'm' => textobject::textobject_pair_surround_closest(None, text, r, objtype, count),
         'g' => {
             let line = r.cursor_line(text) as u32;
-            match hunks.iter().find(|h| h.after.start <= line && line < h.after.end.max(h.after.start + 1)) {
-                Some(h) => Range::new(text.line_to_char(h.after.start as usize), text.line_to_char(h.after.end as usize))
-                    .with_direction(r.direction()),
+            match hunks
+                .iter()
+                .find(|h| h.after.start <= line && line < h.after.end.max(h.after.start + 1))
+            {
+                Some(h) => Range::new(
+                    text.line_to_char(h.after.start as usize),
+                    text.line_to_char(h.after.end as usize),
+                )
+                .with_direction(r.direction()),
                 None => r,
             }
         }
@@ -359,19 +428,31 @@ fn find_char_impl(cx: &mut Ctx, ch: char, forward: bool, inclusive: bool) {
     let (text, count, extend) = (cx.text.slice(..), cx.count(), cx.extend);
     cx.transform(|r| {
         // Helix works in chars here, not graphemes.
-        let start = if r.anchor < r.head { r.head - 1 } else { r.head };
+        let start = if r.anchor < r.head {
+            r.head - 1
+        } else {
+            r.head
+        };
         let found = if forward {
             let pos = (start + 1).min(text.len_chars());
             if inclusive {
                 search::find_nth_next(text, ch, pos, count)
             } else {
-                let n = if text.get_char(pos) == Some(ch) { count + 1 } else { count };
+                let n = if text.get_char(pos) == Some(ch) {
+                    count + 1
+                } else {
+                    count
+                };
                 search::find_nth_next(text, ch, pos, n).map(|p| p.saturating_sub(1))
             }
         } else if inclusive {
             search::find_nth_prev(text, ch, start, count)
         } else {
-            let n = if text.get_char(start.saturating_sub(1)) == Some(ch) { count + 1 } else { count };
+            let n = if text.get_char(start.saturating_sub(1)) == Some(ch) {
+                count + 1
+            } else {
+                count
+            };
             search::find_nth_prev(text, ch, start, n).map(|p| (p + 1).min(text.len_chars()))
         };
         match found {
@@ -416,7 +497,11 @@ fn prev_hunk(hunks: &[Hunk], line: u32) -> Option<usize> {
 
 fn hunk_range(h: &Hunk, text: helix_core::RopeSlice) -> Range {
     let anchor = text.line_to_char(h.after.start as usize);
-    let head = if h.after.is_empty() { anchor + 1 } else { text.line_to_char(h.after.end as usize) };
+    let head = if h.after.is_empty() {
+        anchor + 1
+    } else {
+        text.line_to_char(h.after.end as usize)
+    };
     Range::new(anchor, head)
 }
 
@@ -435,7 +520,11 @@ fn goto_change(cx: &mut Ctx, dir: Direction) {
         let Some(idx) = idx else { return r };
         let new = hunk_range(&hunks[idx], text);
         if extend {
-            let head = if new.head < r.anchor { new.anchor } else { new.head };
+            let head = if new.head < r.anchor {
+                new.anchor
+            } else {
+                new.head
+            };
             Range::new(r.anchor, head)
         } else {
             new.with_direction(dir)
@@ -479,7 +568,8 @@ pub fn goto_column(cx: &mut Ctx) {
     cx.transform(|r| {
         let line = r.cursor_line(text);
         let start = text.line_to_char(line);
-        let pos = graphemes::nth_next_grapheme_boundary(text, start, count - 1).min(line_end_char_index(&text, line));
+        let pos = graphemes::nth_next_grapheme_boundary(text, start, count - 1)
+            .min(line_end_char_index(&text, line));
         r.put_cursor(text, pos, extend)
     });
 }
@@ -507,9 +597,15 @@ fn copy_selection_on_line(cx: &mut Ctx, dir: Direction) {
     for range in sel.iter() {
         let is_primary = *range == sel.primary();
         // The range is always head exclusive.
-        let (head, anchor) =
-            if range.anchor < range.head { (range.head - 1, range.anchor) } else { (range.head, range.anchor.saturating_sub(1)) };
-        let (head_pos, anchor_pos) = (visual_coords_at_pos(text, head, tab), visual_coords_at_pos(text, anchor, tab));
+        let (head, anchor) = if range.anchor < range.head {
+            (range.head - 1, range.anchor)
+        } else {
+            (range.head, range.anchor.saturating_sub(1))
+        };
+        let (head_pos, anchor_pos) = (
+            visual_coords_at_pos(text, head, tab),
+            visual_coords_at_pos(text, anchor, tab),
+        );
         let height = head_pos.row.max(anchor_pos.row) - head_pos.row.min(anchor_pos.row) + 1;
         if is_primary {
             primary_index = ranges.len();
@@ -520,7 +616,10 @@ fn copy_selection_on_line(cx: &mut Ctx, dir: Direction) {
             let offset = (i + 1) * height;
             let (anchor_row, head_row) = match dir {
                 Direction::Forward => (anchor_pos.row + offset, head_pos.row + offset),
-                Direction::Backward => (anchor_pos.row.saturating_sub(offset), head_pos.row.saturating_sub(offset)),
+                Direction::Backward => (
+                    anchor_pos.row.saturating_sub(offset),
+                    head_pos.row.saturating_sub(offset),
+                ),
             };
             if anchor_row >= text.len_lines() || head_row >= text.len_lines() {
                 break;
@@ -530,7 +629,9 @@ fn copy_selection_on_line(cx: &mut Ctx, dir: Direction) {
                 pos_at_visual_coords(text, Position::new(head_row, head_pos.col), tab),
             );
             // Skip lines that are too short.
-            if visual_coords_at_pos(text, a, tab).col == anchor_pos.col && visual_coords_at_pos(text, h, tab).col == head_pos.col {
+            if visual_coords_at_pos(text, a, tab).col == anchor_pos.col
+                && visual_coords_at_pos(text, h, tab).col == head_pos.col
+            {
                 if is_primary {
                     primary_index = ranges.len();
                 }
@@ -561,8 +662,10 @@ pub fn trim_selections(cx: &mut Ctx) {
             if r.is_empty() || r.slice(text).chars().all(char::is_whitespace) {
                 return None;
             }
-            let start = movement::skip_while(text, r.from(), |c| c.is_whitespace()).unwrap_or(r.from());
-            let end = movement::backwards_skip_while(text, r.to(), |c| c.is_whitespace()).unwrap_or(r.to());
+            let start =
+                movement::skip_while(text, r.from(), |c| c.is_whitespace()).unwrap_or(r.from());
+            let end = movement::backwards_skip_while(text, r.to(), |c| c.is_whitespace())
+                .unwrap_or(r.to());
             Some(Range::new(start, end).with_direction(r.direction()))
         })
         .collect();
@@ -571,7 +674,10 @@ pub fn trim_selections(cx: &mut Ctx) {
         keep_primary_selection(cx);
     } else {
         let primary = cx.sel.primary();
-        let idx = ranges.iter().position(|r| r.overlaps(&primary)).unwrap_or(ranges.len() - 1);
+        let idx = ranges
+            .iter()
+            .position(|r| r.overlaps(&primary))
+            .unwrap_or(ranges.len() - 1);
         cx.sel = Selection::new(ranges.into(), idx);
     }
 }
@@ -657,7 +763,9 @@ pub fn regex_selections(cx: &mut Ctx, action: RegexAction, regex: &helix_stdx::r
     use helix_core::selection;
     let text = cx.text.slice(..);
     let result = match action {
-        RegexAction::Select => selection::select_on_matches(text, &cx.sel, regex).ok_or("nothing selected"),
+        RegexAction::Select => {
+            selection::select_on_matches(text, &cx.sel, regex).ok_or("nothing selected")
+        }
         RegexAction::Split => Ok(selection::split_on_matches(text, &cx.sel, regex)),
         RegexAction::Keep | RegexAction::Remove => {
             selection::keep_or_remove_matches(text, &cx.sel, regex, action == RegexAction::Remove)
@@ -681,7 +789,12 @@ fn align_view(cx: &mut Ctx, align: Align) {
         Align::Bottom => last,
     };
     let (anchor, _) = helix_core::char_idx_at_visual_offset(
-        text, cursor, -(relative as isize), 0, &cx.fmt, &TextAnnotations::default(),
+        text,
+        cursor,
+        -(relative as isize),
+        0,
+        &cx.fmt,
+        &TextAnnotations::default(),
     );
     cx.top = text.char_to_line(anchor);
     cx.keep_top = true;
@@ -692,7 +805,11 @@ pub fn align_view_middle(cx: &mut Ctx) {
         return;
     }
     let text = cx.text.slice(..);
-    let col = super::view::visual_col(text, cx.sel.primary().cursor(text), cx.fmt.tab_width as usize);
+    let col = super::view::visual_col(
+        text,
+        cx.sel.primary().cursor(text),
+        cx.fmt.tab_width as usize,
+    );
     cx.left = col.saturating_sub(cx.fmt.viewport_width as usize / 2);
     cx.keep_top = true;
 }
@@ -720,7 +837,11 @@ pub fn scroll_down(cx: &mut Ctx) {
 pub fn search_regex(query: &str) -> Option<helix_stdx::rope::Regex> {
     let case_insensitive = !query.chars().any(char::is_uppercase);
     helix_stdx::rope::RegexBuilder::new()
-        .syntax(helix_stdx::rope::Config::new().case_insensitive(case_insensitive).multi_line(true))
+        .syntax(
+            helix_stdx::rope::Config::new()
+                .case_insensitive(case_insensitive)
+                .multi_line(true),
+        )
         .build(query)
         .ok()
 }
@@ -733,7 +854,10 @@ pub fn search(cx: &mut Ctx, regex: &helix_stdx::rope::Regex, forward: bool, show
     let start = if forward {
         text.char_to_byte(graphemes::ensure_grapheme_boundary_next(text, primary.to()))
     } else {
-        text.char_to_byte(graphemes::ensure_grapheme_boundary_prev(text, primary.from()))
+        text.char_to_byte(graphemes::ensure_grapheme_boundary_prev(
+            text,
+            primary.from(),
+        ))
     };
     let mut mat = if forward {
         regex.find(text.regex_input_at_bytes(start..))
@@ -769,7 +893,9 @@ pub fn search(cx: &mut Ctx, regex: &helix_stdx::rope::Regex, forward: bool, show
 
 /// `n` / `N`: the last search again, `count` times.
 pub fn search_next(cx: &mut Ctx, query: &str, forward: bool) {
-    let Some(regex) = search_regex(query) else { return };
+    let Some(regex) = search_regex(query) else {
+        return;
+    };
     for _ in 0..cx.count() {
         search(cx, &regex, forward, true);
     }
@@ -781,17 +907,30 @@ pub fn search_selection(cx: &mut Ctx, detect_word_boundaries: bool) -> String {
     use helix_core::chars::char_is_word;
     let text = cx.text.slice(..);
     let at_start = |i: usize| {
-        i < text.len_chars() && char_is_word(text.char(i)) && (i == 0 || !char_is_word(text.char(i - 1)))
+        i < text.len_chars()
+            && char_is_word(text.char(i))
+            && (i == 0 || !char_is_word(text.char(i - 1)))
     };
     let at_end = |i: usize| {
-        i > 0 && i < text.len_chars() && char_is_word(text.char(i - 1)) && !char_is_word(text.char(i))
+        i > 0
+            && i < text.len_chars()
+            && char_is_word(text.char(i - 1))
+            && !char_is_word(text.char(i))
     };
     let mut parts: Vec<String> = cx
         .sel
         .iter()
         .map(|r| {
-            let pre = if detect_word_boundaries && at_start(r.from()) { "\\b" } else { "" };
-            let post = if detect_word_boundaries && at_end(r.to()) { "\\b" } else { "" };
+            let pre = if detect_word_boundaries && at_start(r.from()) {
+                "\\b"
+            } else {
+                ""
+            };
+            let post = if detect_word_boundaries && at_end(r.to()) {
+                "\\b"
+            } else {
+                ""
+            };
             format!("{pre}{}{post}", regex::escape(&r.fragment(text)))
         })
         .collect();
@@ -846,40 +985,76 @@ mod tests {
 
     #[test]
     fn words() {
-        assert_eq!(run("#[h|]#ello world", &[&move_next_word_start]), "#[hello |]#world");
-        assert_eq!(run("#[h|]#ello world foo", &[&counted(2, move_next_word_start)]), "hello #[world |]#foo");
-        assert_eq!(run("#[h|]#ello world", &[&move_next_word_end]), "#[hello|]# world");
-        assert_eq!(run("hello wor#[l|]#d", &[&move_prev_word_start]), "hello #[|worl]#d");
-        assert_eq!(run("#[a|]#.b c", &[&move_next_long_word_start]), "#[a.b |]#c");
+        assert_eq!(
+            run("#[h|]#ello world", &[&move_next_word_start]),
+            "#[hello |]#world"
+        );
+        assert_eq!(
+            run("#[h|]#ello world foo", &[&counted(2, move_next_word_start)]),
+            "hello #[world |]#foo"
+        );
+        assert_eq!(
+            run("#[h|]#ello world", &[&move_next_word_end]),
+            "#[hello|]# world"
+        );
+        assert_eq!(
+            run("hello wor#[l|]#d", &[&move_prev_word_start]),
+            "hello #[|worl]#d"
+        );
+        assert_eq!(
+            run("#[a|]#.b c", &[&move_next_long_word_start]),
+            "#[a.b |]#c"
+        );
     }
 
     #[test]
     fn select_mode_extends() {
         let w: &dyn Fn(&mut Ctx) = &move_next_word_start;
-        assert_eq!(run_with("#[h|]#ello world foo", true, &[], &[w, w]), "#[hello world |]#foo");
+        assert_eq!(
+            run_with("#[h|]#ello world foo", true, &[], &[w, w]),
+            "#[hello world |]#foo"
+        );
         let l: &dyn Fn(&mut Ctx) = &move_char_right;
         assert_eq!(run_with("#[a|]#bc", true, &[], &[l, l]), "#[abc|]#");
     }
 
     #[test]
     fn chars_and_lines() {
-        assert_eq!(run("a#[b|]#c\ndef", &[&move_visual_line_down]), "abc\nd#[e|]#f");
+        assert_eq!(
+            run("a#[b|]#c\ndef", &[&move_visual_line_down]),
+            "abc\nd#[e|]#f"
+        );
         assert_eq!(run("a#[b|]#c", &[&move_char_left]), "#[a|]#bc");
         assert_eq!(run("  a#[b|]#c\n", &[&goto_line_start]), "#[ |]# abc\n");
-        assert_eq!(run("  a#[b|]#c\n", &[&goto_first_nonwhitespace]), "  #[a|]#bc\n");
+        assert_eq!(
+            run("  a#[b|]#c\n", &[&goto_first_nonwhitespace]),
+            "  #[a|]#bc\n"
+        );
         assert_eq!(run("#[a|]#bc\n", &[&goto_line_end]), "ab#[c|]#\n");
         assert_eq!(run("a\nb\n#[c|]#\n", &[&goto_file_start]), "#[a|]#\nb\nc\n");
         assert_eq!(run("#[a|]#\nb\nc\n", &[&goto_last_line]), "a\nb\n#[c|]#\n");
-        assert_eq!(run("#[a|]#\nb\nc\n", &[&counted(2, goto_line)]), "a\n#[b|]#\nc\n");
+        assert_eq!(
+            run("#[a|]#\nb\nc\n", &[&counted(2, goto_line)]),
+            "a\n#[b|]#\nc\n"
+        );
     }
 
     #[test]
     fn line_selection() {
         let t = "a#[b|]#c\ndef\nghi\n";
         assert_eq!(run(t, &[&extend_line_below]), "#[abc\n|]#def\nghi\n");
-        assert_eq!(run(t, &[&extend_line_below, &extend_line_below]), "#[abc\ndef\n|]#ghi\n");
-        assert_eq!(run(t, &[&counted(2, extend_line_below)]), "#[abc\ndef\n|]#ghi\n");
-        assert_eq!(run("a#[b|]#c\ndef\n", &[&extend_to_line_bounds]), "#[abc\n|]#def\n");
+        assert_eq!(
+            run(t, &[&extend_line_below, &extend_line_below]),
+            "#[abc\ndef\n|]#ghi\n"
+        );
+        assert_eq!(
+            run(t, &[&counted(2, extend_line_below)]),
+            "#[abc\ndef\n|]#ghi\n"
+        );
+        assert_eq!(
+            run("a#[b|]#c\ndef\n", &[&extend_to_line_bounds]),
+            "#[abc\n|]#def\n"
+        );
     }
 
     #[test]
@@ -887,56 +1062,135 @@ mod tests {
         assert_eq!(run("a#[b|]#c", &[&select_all]), "#[abc|]#");
         assert_eq!(run("#[abc|]#", &[&collapse_selection]), "ab#[c|]#");
         assert_eq!(run("#[abc|]#", &[&flip_selections]), "#[|abc]#");
-        assert_eq!(run("#[a|]#a\n#(b|)#b\n", &[&keep_primary_selection]), "#[a|]#a\nbb\n");
-        assert_eq!(run("#[a|]#a bb\n#(c|)#c dd\n", &[&move_next_word_start]), "#[aa |]#bb\n#(cc |)#dd\n");
+        assert_eq!(
+            run("#[a|]#a\n#(b|)#b\n", &[&keep_primary_selection]),
+            "#[a|]#a\nbb\n"
+        );
+        assert_eq!(
+            run("#[a|]#a bb\n#(c|)#c dd\n", &[&move_next_word_start]),
+            "#[aa |]#bb\n#(cc |)#dd\n"
+        );
         assert_eq!(run("f#[(|]#a, b)", &[&match_brackets]), "f(a, b#[)|]#");
     }
 
     #[test]
     fn textobjects() {
-        assert_eq!(run("foo(a, #[b|]#)", &[&|cx| select_textobject(cx, false, '(')]), "foo(#[a, b|]#)");
-        assert_eq!(run("foo(a, #[b|]#)", &[&|cx| select_textobject(cx, true, '(')]), "foo#[(a, b)|]#");
-        assert_eq!(run("one tw#[o|]# three", &[&|cx| select_textobject(cx, false, 'w')]), "one #[two|]# three");
-        let hunks = [Hunk { before: 1..1, after: 1..3 }];
         assert_eq!(
-            run_with("a\nb#[b|]#\nc\nd\n", false, &hunks, &[&|cx| select_textobject(cx, false, 'g')]),
+            run("foo(a, #[b|]#)", &[&|cx| select_textobject(cx, false, '(')]),
+            "foo(#[a, b|]#)"
+        );
+        assert_eq!(
+            run("foo(a, #[b|]#)", &[&|cx| select_textobject(cx, true, '(')]),
+            "foo#[(a, b)|]#"
+        );
+        assert_eq!(
+            run(
+                "one tw#[o|]# three",
+                &[&|cx| select_textobject(cx, false, 'w')]
+            ),
+            "one #[two|]# three"
+        );
+        let hunks = [Hunk {
+            before: 1..1,
+            after: 1..3,
+        }];
+        assert_eq!(
+            run_with(
+                "a\nb#[b|]#\nc\nd\n",
+                false,
+                &hunks,
+                &[&|cx| select_textobject(cx, false, 'g')]
+            ),
             "a\n#[bb\nc\n|]#d\n"
         );
     }
 
     #[test]
     fn find_char() {
-        assert_eq!(run("#[a|]#bcabc", &[&|cx| find_next_char(cx, 'c')]), "#[abc|]#abc");
-        assert_eq!(run("#[a|]#bcabc", &[&|cx| find_till_char(cx, 'c')]), "#[ab|]#cabc");
-        assert_eq!(run("abcab#[c|]#", &[&|cx| find_prev_char(cx, 'a')]), "abc#[|abc]#");
-        assert_eq!(run("abcab#[c|]#", &[&|cx| till_prev_char(cx, 'a')]), "abca#[|bc]#");
+        assert_eq!(
+            run("#[a|]#bcabc", &[&|cx| find_next_char(cx, 'c')]),
+            "#[abc|]#abc"
+        );
+        assert_eq!(
+            run("#[a|]#bcabc", &[&|cx| find_till_char(cx, 'c')]),
+            "#[ab|]#cabc"
+        );
+        assert_eq!(
+            run("abcab#[c|]#", &[&|cx| find_prev_char(cx, 'a')]),
+            "abc#[|abc]#"
+        );
+        assert_eq!(
+            run("abcab#[c|]#", &[&|cx| till_prev_char(cx, 'a')]),
+            "abca#[|bc]#"
+        );
     }
 
     #[test]
     fn changes() {
         // Hunks on lines 1–2 and 4 (a pure removal before line 5 is empty: 5..5).
-        let hunks = [Hunk { before: 1..1, after: 1..3 }, Hunk { before: 3..5, after: 4..4 }];
+        let hunks = [
+            Hunk {
+                before: 1..1,
+                after: 1..3,
+            },
+            Hunk {
+                before: 3..5,
+                after: 4..4,
+            },
+        ];
         let t = "#[a|]#\nb\nc\nd\ne\nf\n";
-        assert_eq!(run_with(t, false, &hunks, &[&goto_next_change]), "a\n#[b\nc\n|]#d\ne\nf\n");
+        assert_eq!(
+            run_with(t, false, &hunks, &[&goto_next_change]),
+            "a\n#[b\nc\n|]#d\ne\nf\n"
+        );
         assert_eq!(
             run_with(t, false, &hunks, &[&goto_next_change, &goto_next_change]),
             "a\nb\nc\nd\n#[e|]#\nf\n"
         );
-        assert_eq!(run_with("a\nb\nc\nd\ne\n#[f|]#\n", false, &hunks, &[&goto_prev_change]), "a\nb\nc\nd\n#[|e]#\nf\n");
-        assert_eq!(run_with(t, false, &hunks, &[&goto_last_change]), "a\nb\nc\nd\n#[e|]#\nf\n");
+        assert_eq!(
+            run_with(
+                "a\nb\nc\nd\ne\n#[f|]#\n",
+                false,
+                &hunks,
+                &[&goto_prev_change]
+            ),
+            "a\nb\nc\nd\n#[|e]#\nf\n"
+        );
+        assert_eq!(
+            run_with(t, false, &hunks, &[&goto_last_change]),
+            "a\nb\nc\nd\n#[e|]#\nf\n"
+        );
     }
 
     #[test]
     fn searching() {
         let re = search_regex("b").unwrap();
-        assert_eq!(run("#[a|]#b ab", &[&|cx| search(cx, &re, true, false)]), "a#[b|]# ab");
-        assert_eq!(run("a#[b|]# ab", &[&|cx| search(cx, &re, true, false)]), "ab a#[b|]#");
+        assert_eq!(
+            run("#[a|]#b ab", &[&|cx| search(cx, &re, true, false)]),
+            "a#[b|]# ab"
+        );
+        assert_eq!(
+            run("a#[b|]# ab", &[&|cx| search(cx, &re, true, false)]),
+            "ab a#[b|]#"
+        );
         // Wraps around, and smart case: lowercase matches either case.
-        assert_eq!(run("aB a#[b|]#", &[&|cx| search(cx, &re, true, false)]), "a#[B|]# ab");
-        assert_eq!(run("ab a#[b|]#", &[&|cx| search(cx, &re, false, false)]), "a#[b|]# ab");
+        assert_eq!(
+            run("aB a#[b|]#", &[&|cx| search(cx, &re, true, false)]),
+            "a#[B|]# ab"
+        );
+        assert_eq!(
+            run("ab a#[b|]#", &[&|cx| search(cx, &re, false, false)]),
+            "a#[b|]# ab"
+        );
         let upper = search_regex("B").unwrap();
-        assert_eq!(run("#[a|]#b aB", &[&|cx| search(cx, &upper, true, false)]), "ab a#[B|]#");
-        assert_eq!(run("#[a|]#b ab", &[&|cx| search_next(cx, "b", true)]), "a#[b|]# ab");
+        assert_eq!(
+            run("#[a|]#b aB", &[&|cx| search(cx, &upper, true, false)]),
+            "ab a#[B|]#"
+        );
+        assert_eq!(
+            run("#[a|]#b ab", &[&|cx| search_next(cx, "b", true)]),
+            "a#[b|]# ab"
+        );
     }
 
     #[test]
@@ -944,8 +1198,18 @@ mod tests {
         let (text, sel) = print("#[foo|]# foobar a.b");
         let rope = Rope::from(text);
         let mut cx = Ctx {
-            text: &rope, sel, count: None, extend: false, hunks: &[], top: 0, left: 0, height: 10,
-            fmt: TextFormat::default(), status: None, center: false, keep_top: false,
+            text: &rope,
+            sel,
+            count: None,
+            extend: false,
+            hunks: &[],
+            top: 0,
+            left: 0,
+            height: 10,
+            fmt: TextFormat::default(),
+            status: None,
+            center: false,
+            keep_top: false,
         };
         assert_eq!(search_selection(&mut cx, true), "\\bfoo\\b");
         assert_eq!(search_selection(&mut cx, false), "foo");
@@ -955,23 +1219,59 @@ mod tests {
 
     #[test]
     fn selection_manipulation() {
-        assert_eq!(run("#[a|]#b\ncd\n", &[&copy_selection_on_next_line]), "#(a|)#b\n#[c|]#d\n");
+        assert_eq!(
+            run("#[a|]#b\ncd\n", &[&copy_selection_on_next_line]),
+            "#(a|)#b\n#[c|]#d\n"
+        );
         assert_eq!(run("#[  ab  |]#", &[&trim_selections]), "  #[ab|]#  ");
-        assert_eq!(run("#[a|]# #(b|)#", &[&rotate_selections_forward]), "#(a|)# #[b|]#");
-        assert_eq!(run("#[a|]##(b|)#", &[&merge_consecutive_selections]), "#[ab|]#");
+        assert_eq!(
+            run("#[a|]# #(b|)#", &[&rotate_selections_forward]),
+            "#(a|)# #[b|]#"
+        );
+        assert_eq!(
+            run("#[a|]##(b|)#", &[&merge_consecutive_selections]),
+            "#[ab|]#"
+        );
         assert_eq!(run("#[|ab]#", &[&ensure_selections_forward]), "#[ab|]#");
-        assert_eq!(run("#[a|]# #(b|)#", &[&remove_primary_selection]), "a #[b|]#");
-        assert_eq!(run("#[ab\ncd|]#", &[&split_selection_on_newline]), "#[ab|]#\n#(cd|)#");
+        assert_eq!(
+            run("#[a|]# #(b|)#", &[&remove_primary_selection]),
+            "a #[b|]#"
+        );
+        assert_eq!(
+            run("#[ab\ncd|]#", &[&split_selection_on_newline]),
+            "#[ab|]#\n#(cd|)#"
+        );
         let re = helix_stdx::rope::Regex::new("b").unwrap();
-        assert_eq!(run("#[abab|]#", &[&|cx| regex_selections(cx, RegexAction::Select, &re)]), "a#[b|]#a#(b|)#");
-        assert_eq!(run("#[a|]# #(b|)#", &[&|cx| regex_selections(cx, RegexAction::Keep, &re)]), "a #[b|]#");
-        assert_eq!(run("#[a|]# #(b|)#", &[&|cx| regex_selections(cx, RegexAction::Remove, &re)]), "#[a|]# b");
+        assert_eq!(
+            run(
+                "#[abab|]#",
+                &[&|cx| regex_selections(cx, RegexAction::Select, &re)]
+            ),
+            "a#[b|]#a#(b|)#"
+        );
+        assert_eq!(
+            run(
+                "#[a|]# #(b|)#",
+                &[&|cx| regex_selections(cx, RegexAction::Keep, &re)]
+            ),
+            "a #[b|]#"
+        );
+        assert_eq!(
+            run(
+                "#[a|]# #(b|)#",
+                &[&|cx| regex_selections(cx, RegexAction::Remove, &re)]
+            ),
+            "#[a|]# b"
+        );
     }
 
     #[test]
     fn lines_columns_paragraphs() {
         assert_eq!(run("#[a|]#bc", &[&counted(3, goto_column)]), "ab#[c|]#");
-        assert_eq!(run("#[a|]#\nb\n\nc\n", &[&goto_next_paragraph]), "#[a\nb\n\n|]#c\n");
+        assert_eq!(
+            run("#[a|]#\nb\n\nc\n", &[&goto_next_paragraph]),
+            "#[a\nb\n\n|]#c\n"
+        );
         // The column is kept, so a shorter line puts the cursor on its end, as in Helix.
         assert_eq!(run("ab#[c|]#\nd\n", &[&move_line_down]), "abc\nd#[\n|]#");
     }

@@ -79,7 +79,8 @@ impl Picker {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, item)| {
-                    let s = pattern.score(Utf32Str::new(&item.text, &mut buf), &mut self.matcher)?;
+                    let s =
+                        pattern.score(Utf32Str::new(&item.text, &mut buf), &mut self.matcher)?;
                     Some((i as u32, s))
                 })
                 .collect();
@@ -90,7 +91,9 @@ impl Picker {
     }
 
     pub fn selected(&self) -> Option<&Target> {
-        self.matched.get(self.cursor).map(|i| &self.items[*i as usize].target)
+        self.matched
+            .get(self.cursor)
+            .map(|i| &self.items[*i as usize].target)
     }
 
     /// Helix's picker keys.
@@ -100,13 +103,20 @@ impl Picker {
         match key.code {
             KeyCode::Esc => return Outcome::Close,
             KeyCode::Char('c') if ctrl => return Outcome::Close,
-            KeyCode::Enter => return self.selected().cloned().map_or(Outcome::Close, Outcome::Open),
+            KeyCode::Enter => {
+                return self
+                    .selected()
+                    .cloned()
+                    .map_or(Outcome::Close, Outcome::Open);
+            }
             KeyCode::BackTab | KeyCode::Up => self.cursor = (self.cursor + n.max(1) - 1) % n.max(1),
             KeyCode::Char('p') if ctrl => self.cursor = (self.cursor + n.max(1) - 1) % n.max(1),
             KeyCode::Tab | KeyCode::Down => self.cursor = (self.cursor + 1) % n.max(1),
             KeyCode::Char('n') if ctrl => self.cursor = (self.cursor + 1) % n.max(1),
             KeyCode::PageDown => self.cursor = (self.cursor + page).min(n.saturating_sub(1)),
-            KeyCode::Char('d') if ctrl => self.cursor = (self.cursor + page).min(n.saturating_sub(1)),
+            KeyCode::Char('d') if ctrl => {
+                self.cursor = (self.cursor + page).min(n.saturating_sub(1))
+            }
             KeyCode::PageUp => self.cursor = self.cursor.saturating_sub(page),
             KeyCode::Char('u') if ctrl => self.cursor = self.cursor.saturating_sub(page),
             KeyCode::Home => self.cursor = 0,
@@ -127,12 +137,30 @@ impl Picker {
 
     /// Where the picker and its preview go: 90% of the screen above the bottom two rows.
     pub fn areas(screen: Rect) -> (Rect, Option<Rect>) {
-        let avail = Rect { height: screen.height.saturating_sub(2), ..screen };
+        let avail = Rect {
+            height: screen.height.saturating_sub(2),
+            ..screen
+        };
         let (w, h) = (avail.width * 90 / 100, avail.height * 90 / 100);
-        let area = Rect::new(avail.x + (avail.width - w) / 2, avail.y + (avail.height - h) / 2, w, h);
+        let area = Rect::new(
+            avail.x + (avail.width - w) / 2,
+            avail.y + (avail.height - h) / 2,
+            w,
+            h,
+        );
         if area.width > MIN_WIDTH_FOR_PREVIEW {
             let half = area.width / 2;
-            (Rect { width: half, ..area }, Some(Rect { x: area.x + half, width: area.width - half, ..area }))
+            (
+                Rect {
+                    width: half,
+                    ..area
+                },
+                Some(Rect {
+                    x: area.x + half,
+                    width: area.width - half,
+                    ..area
+                }),
+            )
         } else {
             (area, None)
         }
@@ -176,14 +204,25 @@ impl Picker {
 
         // The prompt, with the match count on the right.
         let count = format!("{}/{}", self.matched.len(), self.items.len());
-        let line = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), height: 1, ..inner };
+        let line = Rect {
+            x: inner.x + 1,
+            width: inner.width.saturating_sub(1),
+            height: 1,
+            ..inner
+        };
         let room = line.width.saturating_sub(count.len() as u16 + 1) as usize;
         buf.set_stringn(line.x, line.y, clean(&self.query), room, text_style);
         let cx = line.x + self.query.width().min(room) as u16;
         if cx < line.right() {
             buf[(cx, line.y)].set_style(text_style.add_modifier(Modifier::REVERSED));
         }
-        buf.set_stringn(line.right().saturating_sub(count.len() as u16 + 1), line.y, &count, count.len(), text_style);
+        buf.set_stringn(
+            line.right().saturating_sub(count.len() as u16 + 1),
+            line.y,
+            &count,
+            count.len(),
+            text_style,
+        );
         let sep = theme.get("ui.background.separator");
         for x in inner.left()..inner.right() {
             buf[(x, inner.y + 1)].set_symbol("─").set_style(sep);
@@ -192,7 +231,13 @@ impl Picker {
         let mut y = inner.y + 2;
         let rows = self.page(area);
         let offset = self.cursor - self.cursor % rows;
-        let visible: Vec<u32> = self.matched.iter().skip(offset).take(rows).copied().collect();
+        let visible: Vec<u32> = self
+            .matched
+            .iter()
+            .skip(offset)
+            .take(rows)
+            .copied()
+            .collect();
         // Column widths: the widest tag in each column among the visible rows.
         let ntags = self.columns.len().saturating_sub(1);
         let mut widths = vec![0usize; ntags];
@@ -209,7 +254,13 @@ impl Picker {
             let col_style = header.patch(theme.get("ui.picker.header.column"));
             let mut x = inner.x + 3;
             for (c, h) in self.columns.iter().enumerate() {
-                buf.set_stringn(x, y, *h, inner.right().saturating_sub(x) as usize, col_style);
+                buf.set_stringn(
+                    x,
+                    y,
+                    *h,
+                    inner.right().saturating_sub(x) as usize,
+                    col_style,
+                );
                 x += widths.get(c).copied().unwrap_or(0) as u16 + 1;
             }
             y += 1;
@@ -224,18 +275,32 @@ impl Picker {
             }
             let item = &self.items[*i as usize];
             let is_sel = offset + row == self.cursor;
-            let row_style = if is_sel { text_style.patch(selected) } else { text_style };
+            let row_style = if is_sel {
+                text_style.patch(selected)
+            } else {
+                text_style
+            };
             let right = inner.right();
             buf.set_stringn(inner.x, y, if is_sel { " > " } else { "   " }, 3, row_style);
             let mut x = inner.x + 3;
             for (c, (t, s)) in item.tags.iter().enumerate().take(ntags) {
-                buf.set_stringn(x, y, clean(t), right.saturating_sub(x) as usize, row_style.patch(*s));
+                buf.set_stringn(
+                    x,
+                    y,
+                    clean(t),
+                    right.saturating_sub(x) as usize,
+                    row_style.patch(*s),
+                );
                 x += widths[c] as u16 + 1;
             }
             // The filtered column, with matched characters highlighted as Helix does.
             indices.clear();
             if !self.query.is_empty() {
-                pattern.indices(Utf32Str::new(&item.text, &mut buf32), &mut self.matcher, &mut indices);
+                pattern.indices(
+                    Utf32Str::new(&item.text, &mut buf32),
+                    &mut self.matcher,
+                    &mut indices,
+                );
                 indices.sort_unstable();
             }
             let mut next = indices.iter().peekable();
@@ -248,7 +313,11 @@ impl Picker {
                     next.next();
                 }
                 let s: Cow<str> = clean(&ch.to_string()).into_owned().into();
-                let style = if hit { row_style.patch(highlight) } else { row_style };
+                let style = if hit {
+                    row_style.patch(highlight)
+                } else {
+                    row_style
+                };
                 buf[(x, y)].set_symbol(&s).set_style(style);
                 x += s.width().max(1) as u16;
             }
@@ -268,7 +337,11 @@ pub fn preview_frame(buf: &mut Buffer, area: Rect, theme: &Theme) -> Rect {
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(area);
     block.render(area, buf);
-    Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner }
+    Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(2),
+        ..inner
+    }
 }
 
 #[cfg(test)]
@@ -278,14 +351,24 @@ mod tests {
     fn picker(paths: &[&str]) -> Picker {
         let items = paths
             .iter()
-            .map(|p| Item { tags: vec![], text: p.to_string(), target: Target::Path(p.to_string()) })
+            .map(|p| Item {
+                tags: vec![],
+                text: p.to_string(),
+                target: Target::Path(p.to_string()),
+            })
             .collect();
         Picker::new(vec!["path"], items)
     }
 
     fn typed(p: &mut Picker, s: &str) {
         for c in s.chars() {
-            p.key(Key { code: KeyCode::Char(c), mods: KeyModifiers::NONE }, 10);
+            p.key(
+                Key {
+                    code: KeyCode::Char(c),
+                    mods: KeyModifiers::NONE,
+                },
+                10,
+            );
         }
     }
 
@@ -296,14 +379,59 @@ mod tests {
         typed(&mut p, "uimod");
         assert_eq!(p.matched.len(), 1);
         assert_eq!(p.selected(), Some(&Target::Path("src/ui/mod.rs".into())));
-        p.key(Key { code: KeyCode::Backspace, mods: KeyModifiers::NONE }, 10);
-        p.key(Key { code: KeyCode::Backspace, mods: KeyModifiers::NONE }, 10);
-        p.key(Key { code: KeyCode::Backspace, mods: KeyModifiers::NONE }, 10);
-        p.key(Key { code: KeyCode::Backspace, mods: KeyModifiers::NONE }, 10);
-        p.key(Key { code: KeyCode::Backspace, mods: KeyModifiers::NONE }, 10);
+        p.key(
+            Key {
+                code: KeyCode::Backspace,
+                mods: KeyModifiers::NONE,
+            },
+            10,
+        );
+        p.key(
+            Key {
+                code: KeyCode::Backspace,
+                mods: KeyModifiers::NONE,
+            },
+            10,
+        );
+        p.key(
+            Key {
+                code: KeyCode::Backspace,
+                mods: KeyModifiers::NONE,
+            },
+            10,
+        );
+        p.key(
+            Key {
+                code: KeyCode::Backspace,
+                mods: KeyModifiers::NONE,
+            },
+            10,
+        );
+        p.key(
+            Key {
+                code: KeyCode::Backspace,
+                mods: KeyModifiers::NONE,
+            },
+            10,
+        );
         assert_eq!(p.matched.len(), 3);
-        p.key(Key { code: KeyCode::Up, mods: KeyModifiers::NONE }, 10);
+        p.key(
+            Key {
+                code: KeyCode::Up,
+                mods: KeyModifiers::NONE,
+            },
+            10,
+        );
         assert_eq!(p.selected(), Some(&Target::Path("README.md".into())));
-        assert!(matches!(p.key(Key { code: KeyCode::Esc, mods: KeyModifiers::NONE }, 10), Outcome::Close));
+        assert!(matches!(
+            p.key(
+                Key {
+                    code: KeyCode::Esc,
+                    mods: KeyModifiers::NONE
+                },
+                10
+            ),
+            Outcome::Close
+        ));
     }
 }
