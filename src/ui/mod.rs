@@ -557,6 +557,10 @@ impl App {
     /// The source read again, the way glos found it at the start.
     fn rebuild_source(&self) -> Result<Source> {
         let base = match (&self.source.git, &self.source.paths) {
+            (Some(g), _) if self.source.revs.is_some() => {
+                let (o, n) = self.source.revs.clone().unwrap();
+                Source::revs(&g.worktree, &o, n.as_deref())?
+            }
             (Some(g), _) => Source::git(&g.worktree, Some(&g.base))?,
             (None, Some((old, new))) => Source::diff(old, new)?,
             (None, None) => anyhow::bail!("nothing to read again"),
@@ -693,6 +697,19 @@ impl App {
 
     /// The scope and filter, as the statusline and messages say them.
     fn scope_label(&self) -> String {
+        let mut s = match (&self.scope, &self.source.revs) {
+            (Scope::Base, Some((o, Some(n)))) => format!("{o} vs {n}"),
+            (Scope::Base, Some((o, None))) => format!("{o} vs your files"),
+            _ => String::new(),
+        };
+        if !s.is_empty() {
+            match &self.filter {
+                Some(Filter::Glob(g, _)) => s += &format!(", files {g}"),
+                Some(Filter::Threads) => s += ", files with open threads",
+                None => {}
+            }
+            return s;
+        }
         let mut s = match &self.scope {
             Scope::Base if self.source.git.is_some() => "Branch vs base".to_string(),
             Scope::Base => "Old vs new".to_string(),
@@ -1141,8 +1158,8 @@ impl App {
 
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
-        // A commit is history: threads are on the branch's code now.
-        if matches!(self.scope, Scope::Commit(_)) {
+        // A commit is history: threads are on the code on disk.
+        if self.source.history {
             return Threads::default();
         }
         let t = comments::layout(&self.threads, self.main_path(), &self.expanded, &self.theme);
@@ -1264,7 +1281,7 @@ impl App {
 
     /// The thread under the cursor in the file on screen: the innermost one holding its line.
     fn thread_here(&self) -> Option<usize> {
-        if matches!(self.scope, Scope::Commit(_)) {
+        if self.source.history {
             return None;
         }
         let f = self.main_file();
@@ -1288,8 +1305,11 @@ impl App {
         {
             return Err("Comments go on the new side, and this file was deleted");
         }
-        if matches!(self.scope, Scope::Commit(_)) {
-            return Err("A commit is history: comment in another scope (space o)");
+        if self.source.history {
+            return Err(
+                "The new side is a commit, not your files: comments are off here (space o b, or \
+                 glos diff <rev> to compare with your files)",
+            );
         }
         let f = self.main_file();
         if f.binary {
@@ -2822,7 +2842,7 @@ impl App {
             _ => " NOR ",
         };
         let mut left = format!("{mode} {}", clean(path));
-        if self.scope != Scope::Base || self.filter.is_some() {
+        if self.scope != Scope::Base || self.filter.is_some() || self.source.revs.is_some() {
             left += &format!(" · {}", clean(&self.scope_label()));
         }
         if self.view_kind != ViewKind::File {

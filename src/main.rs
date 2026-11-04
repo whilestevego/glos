@@ -46,8 +46,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Review two files or two folders, like `git diff --no-index`.
-    Diff { old: PathBuf, new: PathBuf },
+    /// Review two files or two folders, like `git diff --no-index`; or git revisions, like
+    /// `git diff`: one revision against your files, or two against each other (read-only).
+    /// A path that exists wins over a revision of the same name.
+    Diff { old: String, new: Option<String> },
     /// Check glos's setup, like `hx --health`.
     Doctor,
     /// Run the MCP server for an agent, over stdio (`claude mcp add glos -- glos mcp`).
@@ -216,7 +218,21 @@ fn run() -> Result<ExitCode> {
 
     let (config, config_error) = config::load();
     let source = match cli.command {
-        Some(Command::Diff { old, new }) => Source::diff(&old, &new)?,
+        Some(Command::Diff { old, new }) => {
+            let is_path = |p: &str| std::path::Path::new(p).exists();
+            match new {
+                Some(new) if is_path(&old) && is_path(&new) => {
+                    Source::diff(old.as_ref(), new.as_ref())?
+                }
+                None if is_path(&old) => {
+                    eprintln!(
+                        "glos: give two files or folders, or a git revision (glos diff HEAD~1)"
+                    );
+                    return Ok(ExitCode::from(2));
+                }
+                new => Source::revs(&cwd, &old, new.as_deref())?,
+            }
+        }
         Some(_) => unreachable!(),
         None => match Source::git(&std::env::current_dir()?, None) {
             Ok(s) => s,
@@ -230,6 +246,11 @@ fn run() -> Result<ExitCode> {
     };
     if source.changes.is_empty() {
         match &source.git {
+            Some(_) if source.revs.is_some() => {
+                let (o, n) = source.revs.as_ref().unwrap();
+                let n = n.as_deref().unwrap_or("your files");
+                println!("Nothing to review: no changes between {o} and {n}.");
+            }
             Some(g) => println!("Nothing to review: no changes since {}.", g.base),
             None => println!("Nothing to review: no differences."),
         }

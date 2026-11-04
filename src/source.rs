@@ -122,6 +122,11 @@ pub struct Source {
     pub git: Option<Git>,
     /// The two paths given to `glos diff`, canonical; `None` for git.
     pub paths: Option<(PathBuf, PathBuf)>,
+    /// `glos diff <rev> [<rev>]`: the revisions given, the second `None` for your files.
+    pub revs: Option<(String, Option<String>)>,
+    /// The new side is a commit, not the files on disk: threads, anchored to the files, don't
+    /// apply, and comments are off.
+    pub history: bool,
     /// Paths marked `linguist-generated` in `.gitattributes`.
     generated: Vec<String>,
 }
@@ -200,6 +205,8 @@ impl Source {
             root: new.parent().unwrap_or(Path::new(".")).to_owned(),
             git: None,
             paths: Some((old.canonicalize()?, new.canonicalize()?)),
+            revs: None,
+            history: false,
             generated: vec![],
         })
     }
@@ -274,6 +281,8 @@ impl Source {
             root: new.to_owned(),
             git: None,
             paths: Some((old.canonicalize()?, new.canonicalize()?)),
+            revs: None,
+            history: false,
             generated: vec![],
         })
     }
@@ -281,6 +290,40 @@ impl Source {
     /// `glos` in a repo: the branch since it left the base, uncommitted and untracked files
     /// included. `base` overrides the default (origin's default branch, else main or master).
     pub fn git(path: &Path, base: Option<&str>) -> Result<Source> {
+        Self::git_against(path, base, None)
+    }
+
+    /// `glos diff <old> [<new>]` with revisions: `old` against your files (uncommitted work
+    /// included), or against the revision `new`, which is read-only history.
+    pub fn revs(path: &Path, old: &str, new: Option<&str>) -> Result<Source> {
+        let Some(new) = new else {
+            return Self::git_against(path, None, Some(old));
+        };
+        let repo = gix::discover(path).context("revisions need a git repository")?;
+        let commit = |r: &str| -> Result<gix::ObjectId> {
+            Ok(repo
+                .rev_parse_single(r)
+                .with_context(|| format!("`{r}` is neither a file or folder nor a git revision"))?
+                .object()?
+                .peel_to_commit()?
+                .id)
+        };
+        let (o, n) = (commit(old)?, commit(new)?);
+        // A base of the old revision: the per-commit scope then walks the commits between.
+        let mut s = Self::git_against(path, None, Some(old))?;
+        let old_tree = repo.find_commit(o)?.tree()?;
+        let new_tree = repo.find_commit(n)?.tree()?;
+        s.changes = tree_changes(&repo, Some(&old_tree), &new_tree)?;
+        s.generated = linguist_generated(&repo, &s.changes)?;
+        if let Some(g) = &mut s.git {
+            g.head = n;
+        }
+        s.revs = Some((old.to_string(), Some(new.to_string())));
+        s.history = true;
+        Ok(s)
+    }
+
+    fn git_against(path: &Path, base: Option<&str>, against: Option<&str>) -> Result<Source> {
         let repo = gix::discover(path).context("not in a git repository")?;
         let worktree = repo
             .workdir()
@@ -291,11 +334,30 @@ impl Source {
             .context("the repository has no commits")?
             .id;
         let branch = repo.head_name()?.map(|n| n.shorten().to_string());
-        let (base, base_id) = find_base(&repo, base)?;
-        let merge_base = repo
-            .merge_base(head, base_id)?
-            .with_context(|| format!("this branch shares no history with {base}"))?
-            .detach();
+        let (base, merge_base) = match against {
+            // Against a revision: the review is still the branch's (its base found as usual,
+            // if there is one), but the old side is that revision.
+            Some(rev) => {
+                let id = repo
+                    .rev_parse_single(rev)
+                    .with_context(|| {
+                        format!("`{rev}` is neither a file or folder nor a git revision")
+                    })?
+                    .object()?
+                    .peel_to_commit()?
+                    .id;
+                let base = find_base(&repo, base).map_or(rev.to_string(), |(b, _)| b);
+                (base, id)
+            }
+            None => {
+                let (base, base_id) = find_base(&repo, base)?;
+                let mb = repo
+                    .merge_base(head, base_id)?
+                    .with_context(|| format!("this branch shares no history with {base}"))?
+                    .detach();
+                (base, mb)
+            }
+        };
         let base_tree = repo.find_commit(merge_base)?.tree()?;
 
         // One status pass: merge-base tree → index (committed and staged), then index →
@@ -398,6 +460,8 @@ impl Source {
             root: worktree.clone(),
             generated,
             paths: None,
+            revs: against.map(|r| (r.to_string(), None)),
+            history: false,
             git: Some(Git {
                 common_dir: repo.common_dir().canonicalize()?,
                 worktree,
@@ -450,76 +514,7 @@ impl Source {
             Some(p) => Some(repo.find_commit(p)?.tree()?),
             None => None,
         };
-        use gix::object::tree::diff::ChangeDetached as C;
-        let mut changes = vec![];
-        for c in repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), None)? {
-            let blob = |m: gix::object::tree::EntryMode| m.is_blob() || m.is_link();
-            let change = match c {
-                C::Addition {
-                    location,
-                    entry_mode,
-                    id,
-                    ..
-                } if blob(entry_mode) => Change {
-                    path: location.to_string(),
-                    old_path: None,
-                    old: Content::None,
-                    new: Content::Blob(id),
-                    old_mode: None,
-                    new_mode: Some(tree_mode(entry_mode)),
-                    same_content: false,
-                },
-                C::Deletion {
-                    location,
-                    entry_mode,
-                    id,
-                    ..
-                } if blob(entry_mode) => Change {
-                    path: location.to_string(),
-                    old_path: Some(location.to_string()),
-                    old: Content::Blob(id),
-                    new: Content::None,
-                    old_mode: Some(tree_mode(entry_mode)),
-                    new_mode: None,
-                    same_content: false,
-                },
-                C::Modification {
-                    location,
-                    previous_entry_mode,
-                    previous_id,
-                    entry_mode,
-                    id,
-                } if blob(entry_mode) => Change {
-                    path: location.to_string(),
-                    old_path: Some(location.to_string()),
-                    old: Content::Blob(previous_id),
-                    new: Content::Blob(id),
-                    old_mode: Some(tree_mode(previous_entry_mode)),
-                    new_mode: Some(tree_mode(entry_mode)),
-                    same_content: previous_id == id,
-                },
-                C::Rewrite {
-                    source_location,
-                    source_entry_mode,
-                    source_id,
-                    location,
-                    entry_mode,
-                    id,
-                    ..
-                } if blob(entry_mode) => Change {
-                    path: location.to_string(),
-                    old_path: Some(source_location.to_string()),
-                    old: Content::Blob(source_id),
-                    new: Content::Blob(id),
-                    old_mode: Some(tree_mode(source_entry_mode)),
-                    new_mode: Some(tree_mode(entry_mode)),
-                    same_content: source_id == id,
-                },
-                _ => continue,
-            };
-            changes.push(change);
-        }
-        changes.sort_by(|a, b| a.path.cmp(&b.path));
+        let changes = tree_changes(&repo, parent.as_ref(), &tree)?;
         let generated = linguist_generated(&repo, &changes)?;
         Ok(Source {
             changes,
@@ -534,6 +529,8 @@ impl Source {
                 head: g.head,
             }),
             paths: self.paths.clone(),
+            revs: self.revs.clone(),
+            history: true,
             generated,
         })
     }
@@ -586,6 +583,85 @@ impl Source {
         self.changes = changes;
         Ok(self)
     }
+}
+
+/// The changes from one tree to another, as `Change`s with blob contents.
+fn tree_changes(
+    repo: &gix::Repository,
+    old: Option<&gix::Tree<'_>>,
+    new: &gix::Tree<'_>,
+) -> Result<Vec<Change>> {
+    use gix::object::tree::diff::ChangeDetached as C;
+    let mut changes = vec![];
+    for c in repo.diff_tree_to_tree(old, Some(new), None)? {
+        let blob = |m: gix::object::tree::EntryMode| m.is_blob() || m.is_link();
+        let change = match c {
+            C::Addition {
+                location,
+                entry_mode,
+                id,
+                ..
+            } if blob(entry_mode) => Change {
+                path: location.to_string(),
+                old_path: None,
+                old: Content::None,
+                new: Content::Blob(id),
+                old_mode: None,
+                new_mode: Some(tree_mode(entry_mode)),
+                same_content: false,
+            },
+            C::Deletion {
+                location,
+                entry_mode,
+                id,
+                ..
+            } if blob(entry_mode) => Change {
+                path: location.to_string(),
+                old_path: Some(location.to_string()),
+                old: Content::Blob(id),
+                new: Content::None,
+                old_mode: Some(tree_mode(entry_mode)),
+                new_mode: None,
+                same_content: false,
+            },
+            C::Modification {
+                location,
+                previous_entry_mode,
+                previous_id,
+                entry_mode,
+                id,
+            } if blob(entry_mode) => Change {
+                path: location.to_string(),
+                old_path: Some(location.to_string()),
+                old: Content::Blob(previous_id),
+                new: Content::Blob(id),
+                old_mode: Some(tree_mode(previous_entry_mode)),
+                new_mode: Some(tree_mode(entry_mode)),
+                same_content: previous_id == id,
+            },
+            C::Rewrite {
+                source_location,
+                source_entry_mode,
+                source_id,
+                location,
+                entry_mode,
+                id,
+                ..
+            } if blob(entry_mode) => Change {
+                path: location.to_string(),
+                old_path: Some(source_location.to_string()),
+                old: Content::Blob(source_id),
+                new: Content::Blob(id),
+                old_mode: Some(tree_mode(source_entry_mode)),
+                new_mode: Some(tree_mode(entry_mode)),
+                same_content: source_id == id,
+            },
+            _ => continue,
+        };
+        changes.push(change);
+    }
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(changes)
 }
 
 fn find_base(repo: &gix::Repository, given: Option<&str>) -> Result<(String, gix::ObjectId)> {
@@ -845,6 +921,56 @@ mod tests {
         // Without git there are no commits.
         let (o, n) = (r.join("a.txt"), r.join("b.txt"));
         assert!(Source::diff(&o, &n).unwrap().commits().is_err());
+    }
+
+    #[test]
+    fn revisions_against_files_and_each_other() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        git(r, &["init", "-q"]);
+        write(&r.join("a.txt"), "1\n");
+        git(r, &["add", "."]);
+        git(r, &["commit", "-qm", "one"]);
+        write(&r.join("a.txt"), "2\n");
+        git(r, &["commit", "-qam", "two"]);
+        write(&r.join("b.txt"), "new\n");
+
+        let s = Source::revs(r, "HEAD~1", None).unwrap();
+        assert_eq!(
+            kinds(&s),
+            [
+                ("a.txt".to_string(), Kind::Modified),
+                ("b.txt".to_string(), Kind::Added)
+            ]
+        );
+        assert!(!s.history);
+        assert_eq!(s.revs, Some(("HEAD~1".to_string(), None)));
+        assert_eq!(
+            s.git.as_ref().unwrap().base,
+            "main",
+            "the branch's base is still found"
+        );
+
+        let s = Source::revs(r, "HEAD~1", Some("HEAD")).unwrap();
+        assert_eq!(kinds(&s), [("a.txt".to_string(), Kind::Modified)]);
+        assert!(s.history);
+        assert_eq!(s.read(&s.changes[0].new).unwrap().unwrap(), b"2\n");
+        // Same revision twice: nothing.
+        assert!(
+            Source::revs(r, "HEAD", Some("HEAD"))
+                .unwrap()
+                .changes
+                .is_empty()
+        );
+        let err = Source::revs(r, "nope", None).err().unwrap().to_string();
+        assert!(
+            err.contains("neither a file or folder nor a git revision"),
+            "{err}"
+        );
+        assert!(Source::revs(r, "HEAD", Some("nope")).is_err());
+        // Outside a repository.
+        let plain = tempfile::tempdir().unwrap();
+        assert!(Source::revs(plain.path(), "HEAD", None).is_err());
     }
 
     fn kinds(s: &Source) -> Vec<(String, Kind)> {

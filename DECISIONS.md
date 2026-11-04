@@ -321,6 +321,14 @@ PLAN.md:
 - **`space v` and `space o` are menus,** like `space s`, so the key help panel lists the choices
   that apply (`]C` only in the per-commit scope, "since last review" only after a submit).
 
+## Revisions in `glos diff` (2026-11-04)
+
+- **Comments only when the new side is your files:** `glos diff <rev>` compares a revision with
+  the worktree and comments work, on the branch's own review (it keeps its base). Two revisions
+  are history: read-only, like the per-commit scope, so threads are never shown against code
+  they weren't made on. One rule covers both: the source says when its new side is history.
+- **Paths win:** an argument that exists on disk is a path; otherwise it's a revision.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
