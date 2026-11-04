@@ -134,6 +134,14 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE reviews ADD COLUMN suggested_line INTEGER;
     ALTER TABLE reviews ADD COLUMN suggested_note TEXT;
     "#,
+    // v4: the diff each thread was made on, so an agent knows what code a comment is about.
+    r#"
+    -- The commits on each side (NULL for the files on disk, or a non-git side).
+    ALTER TABLE threads ADD COLUMN old_rev TEXT;
+    ALTER TABLE threads ADD COLUMN new_rev TEXT;
+    -- What was compared, said for a reader: e.g. 'commit 2/3 d0c4165 "add b" vs its parent'.
+    ALTER TABLE threads ADD COLUMN diff TEXT;
+    "#,
 ];
 
 /// Opens (creating if needed) the database at `path` and brings its schema up to date.

@@ -227,6 +227,15 @@ impl Review {
     }
 }
 
+/// The diff a thread was made on: the commits on each side (`None` for the files on disk, or a
+/// side that isn't git) and what was compared, said for a reader.
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+pub struct DiffContext {
+    pub old_rev: Option<String>,
+    pub new_rev: Option<String>,
+    pub diff: Option<String>,
+}
+
 /// Where a thread sits: lines `start..=end` (1-based) of `path`, on the new side.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Anchor {
@@ -257,6 +266,10 @@ pub struct Thread {
     pub anchor_text: Option<String>,
     /// When you last opened it: agents' comments after this are unread.
     pub last_seen_at: Option<String>,
+    /// The diff it was made on. A thread on your files follows them as they change; one made
+    /// on a commit stays on that commit's code.
+    #[serde(flatten)]
+    pub on: DiffContext,
     pub comments: Vec<Comment>,
 }
 
@@ -300,7 +313,7 @@ pub fn threads(conn: &Connection, review_id: &str) -> Result<Vec<Thread>> {
     let mut threads: Vec<Thread> = conn
         .prepare(
             "SELECT id, path, line_start, line_end, status, created_round, anchor_text,
-                    last_seen_at
+                    last_seen_at, old_rev, new_rev, diff
              FROM threads WHERE review_id = ?1 ORDER BY path, line_start, rowid",
         )?
         .query_map([review_id], |r| {
@@ -319,6 +332,11 @@ pub fn threads(conn: &Connection, review_id: &str) -> Result<Vec<Thread>> {
                 created_round: r.get(5)?,
                 anchor_text: r.get(6)?,
                 last_seen_at: r.get(7)?,
+                on: DiffContext {
+                    old_rev: r.get(8)?,
+                    new_rev: r.get(9)?,
+                    diff: r.get(10)?,
+                },
                 comments: vec![],
             })
         })?
@@ -361,6 +379,7 @@ fn touch(conn: &Connection, review_id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 /// Starts a thread with one comment. `file` is the anchored file's content now: its lines,
 /// the three lines around them and the whole content are kept for re-anchoring.
 pub fn comment(
@@ -370,7 +389,26 @@ pub fn comment(
     author: &str,
     body: &str,
 ) -> Result<String> {
-    comment_as(conn, review_id, anchor, author, "comment", body)
+    comment_in(
+        conn,
+        review_id,
+        anchor,
+        author,
+        body,
+        &DiffContext::default(),
+    )
+}
+
+/// [`comment`] on a diff: what was compared is kept with the thread.
+pub fn comment_in(
+    conn: &Connection,
+    review_id: &str,
+    anchor: Option<(&Anchor, &str)>,
+    author: &str,
+    body: &str,
+    on: &DiffContext,
+) -> Result<String> {
+    comment_as(conn, review_id, anchor, author, "comment", body, on)
 }
 
 /// An agent's note on its own change, made before you review: a thread like a comment's, of
@@ -399,6 +437,7 @@ pub fn annotate(
         author,
         "annotation",
         body,
+        &DiffContext::default(),
     )
 }
 
@@ -409,6 +448,7 @@ fn comment_as(
     author: &str,
     kind: &str,
     body: &str,
+    on: &DiffContext,
 ) -> Result<String> {
     let tx = conn.unchecked_transaction()?;
     let id = new_id();
@@ -421,8 +461,9 @@ fn comment_as(
             let hash = put_blob(&tx, file.as_bytes())?;
             tx.execute(
                 "INSERT INTO threads (id, review_id, path, line_start, line_end, anchor_text,
-                                      context_above, context_below, file_hash, created_round)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                      context_above, context_below, file_hash, created_round,
+                                      old_rev, new_rev, diff)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     id,
                     review_id,
@@ -433,14 +474,18 @@ fn comment_as(
                     text(s.saturating_sub(3).min(e)..s.min(e)),
                     text(e..(e + 3).min(lines.len())),
                     hash,
-                    round
+                    round,
+                    on.old_rev,
+                    on.new_rev,
+                    on.diff
                 ],
             )?;
         }
         None => {
             tx.execute(
-                "INSERT INTO threads (id, review_id, created_round) VALUES (?1, ?2, ?3)",
-                params![id, review_id, round],
+                "INSERT INTO threads (id, review_id, created_round, old_rev, new_rev, diff)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, review_id, round, on.old_rev, on.new_rev, on.diff],
             )?;
         }
     }
@@ -517,6 +562,43 @@ pub fn mark_seen(conn: &Connection, thread_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Where a thread's lines are in `text` (1-based), without storing anything: how a thread made
+/// on one version of a file (a commit, or your files then) is shown on another, and how an
+/// agent is told whether the code it's about is still there.
+pub fn place(conn: &Connection, thread_id: &str, text: &str) -> Result<Option<(u32, u32)>> {
+    let row: Option<(u32, u32, String, String, String, Vec<u8>)> = conn
+        .query_row(
+            "SELECT t.line_start, t.line_end, t.anchor_text, t.context_above, t.context_below,
+                    b.content
+             FROM threads t JOIN blobs b ON b.hash = t.file_hash WHERE t.id = ?1",
+            [thread_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((start, end, anchored, above, below, old)) = row else {
+        return Ok(None);
+    };
+    let old = String::from_utf8_lossy(&old);
+    let a = crate::reanchor::Anchored {
+        old: &old,
+        start: start as usize - 1,
+        end: end as usize - 1,
+        text: &anchored,
+        above: &above,
+        below: &below,
+    };
+    Ok(crate::reanchor::place(&a, text).map(|(s, e)| (s as u32 + 1, e as u32 + 1)))
+}
+
 /// What [`reanchor`] did to a file's threads.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Reanchored {
@@ -554,7 +636,8 @@ pub fn reanchor(
             "SELECT t.id, t.line_start, t.line_end, t.anchor_text, t.context_above,
                     t.context_below, t.status, b.content
              FROM threads t JOIN blobs b ON b.hash = t.file_hash
-             WHERE t.review_id = ?1 AND t.path = ?2 AND t.status != 'outdated'",
+             WHERE t.review_id = ?1 AND t.path = ?2 AND t.status != 'outdated'
+               AND t.new_rev IS NULL",
         )?
         .query_map(params![review_id, path], |r| {
             let content: Vec<u8> = r.get(7)?;
@@ -1370,6 +1453,68 @@ mod tests {
         assert_eq!(
             reanchor(&f.conn, id, "other.rs", "", true).unwrap(),
             Reanchored::default()
+        );
+    }
+
+    #[test]
+    fn threads_keep_the_diff_they_were_made_on() {
+        let f = fx();
+        let id = &f.review.id;
+        let on = DiffContext {
+            old_rev: Some("aaa".into()),
+            new_rev: Some("bbb".into()),
+            diff: Some("commit 1/2 bbb \"x\" vs its parent aaa".into()),
+        };
+        let t = comment_in(
+            &f.conn,
+            id,
+            Some((&at("new.rs", 2, 2), FILE)),
+            YOU,
+            "c",
+            &on,
+        )
+        .unwrap();
+        let th = threads(&f.conn, id)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == t)
+            .unwrap();
+        assert_eq!(th.on, on);
+        // Kept with a review-level thread too, and absent for plain comments.
+        let r = comment_in(&f.conn, id, None, YOU, "r", &on).unwrap();
+        let th = threads(&f.conn, id)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == r)
+            .unwrap();
+        assert_eq!(th.on.new_rev.as_deref(), Some("bbb"));
+        let p = comment(&f.conn, id, Some((&at("new.rs", 3, 3), FILE)), YOU, "p").unwrap();
+
+        // Files change: only the thread on your files moves; the commit's stays on its code.
+        let new = format!("top\n{FILE}");
+        let r = reanchor(&f.conn, id, "new.rs", &new, true).unwrap();
+        assert_eq!(r.moved, 1);
+        let lines = |t: &str| {
+            let th = threads(&f.conn, id)
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == t)
+                .unwrap();
+            th.anchor.map(|a| (a.start, a.end))
+        };
+        assert_eq!(lines(&p), Some((4, 4)));
+        assert_eq!(lines(&t), Some((2, 2)));
+        // But it can be placed on the new text, to show it there or tell an agent it's still there.
+        assert_eq!(place(&f.conn, &t, &new).unwrap(), Some((3, 3)));
+        assert_eq!(place(&f.conn, &t, "gone\n").unwrap(), None);
+        assert_eq!(place(&f.conn, "nope", &new).unwrap(), None);
+        // As JSON the context is part of the thread.
+        let json = serde_json::to_value(threads(&f.conn, id).unwrap()).unwrap();
+        assert!(
+            json.as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["new_rev"] == "bbb")
         );
     }
 

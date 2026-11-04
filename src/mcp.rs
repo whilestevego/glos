@@ -20,6 +20,8 @@ use rmcp::{
 use rusqlite::{Connection, params};
 use serde::Deserialize;
 
+#[cfg(test)]
+use crate::review::DiffContext;
 use crate::review::{self, Anchor, Review, Round, Thread, Verdict, YOU};
 
 const INSTRUCTIONS: &str = "glos is the user's code reviewer. When your work is ready, call \
@@ -114,7 +116,7 @@ impl Agent {
         };
         let out = match thread {
             Some(id) => match threads.iter().find(|t| t.id == id) {
-                Some(t) => full_thread(t),
+                Some(t) => full_thread(t, &self.now(&r, t)),
                 None => format!("No thread {id} in this review."),
             },
             None => {
@@ -150,8 +152,12 @@ impl Agent {
                 out += &format!("Open threads ({}):\n", open.len());
                 for t in open {
                     let first = &t.comments[0];
+                    let on = match &t.on.new_rev {
+                        Some(c) => format!(" [on commit {}]", &c[..c.len().min(7)]),
+                        None => String::new(),
+                    };
                     out += &format!(
-                        "- {} {} {}: {} ({} comment{}{})\n",
+                        "- {} {}{on} {}: {} ({} comment{}{})\n",
                         t.id,
                         place(t),
                         first.author,
@@ -332,7 +338,60 @@ impl Agent {
         };
         let taken = review::take_delivery(&self.conn, &r.id, name)?;
         self.touch();
-        Ok(taken.map(|(round, threads)| delivery(&r, &round, &threads)))
+        let Some((round, threads)) = taken else {
+            return Ok(None);
+        };
+        let mut files: Vec<String> = review::snapshot(&self.conn, &r.id, round.n)?
+            .into_keys()
+            .collect();
+        files.sort();
+        let now: Vec<String> = threads.iter().map(|t| self.now(&r, t)).collect();
+        Ok(Some(delivery(&r, &round, &threads, &files, &now)))
+    }
+
+    /// Where a thread's code is in your files now, for an agent deciding what to do about it:
+    /// still there, moved, or changed since the comment was made (outdated).
+    fn now(&self, r: &Review, t: &Thread) -> String {
+        let Some(a) = &t.anchor else {
+            return String::new();
+        };
+        if t.on.new_rev.is_none() && t.status == "outdated" {
+            return format!(
+                "Now: that code has changed in your files since (the thread is outdated); the \
+                 comment is about the code quoted above, as it was in {}.\n",
+                a.path
+            );
+        }
+        let text = match std::fs::read(PathBuf::from(&r.folder).join(&a.path)) {
+            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+            Err(_) => return format!("Now: {} isn't in your files any more.\n", a.path),
+        };
+        match review::place(&self.conn, &t.id, &text) {
+            Ok(Some((s, e))) if t.on.new_rev.is_none() && (s, e) == (a.start, a.end) => {
+                String::new() // where it says: nothing to add
+            }
+            Ok(Some((s, e))) => {
+                let at = Anchor {
+                    path: a.path.clone(),
+                    start: s,
+                    end: e,
+                };
+                format!("Now: the same code is at {at} in your files.\n")
+            }
+            _ => format!(
+                "Now: that code isn't in {} as it is in your files: it has changed since.\n",
+                a.path
+            ),
+        }
+    }
+}
+
+/// What a thread was made on, said for the agent: which diff, unless it's the usual one (the
+/// files on disk).
+fn on(t: &Thread) -> String {
+    match &t.on.diff {
+        Some(d) => format!("On: {d}.\n"),
+        None => String::new(),
     }
 }
 
@@ -370,8 +429,15 @@ fn quote(t: &Thread) -> String {
     out
 }
 
-fn full_thread(t: &Thread) -> String {
-    let mut out = format!("Thread {} {} ({}):\n{}", t.id, place(t), t.status, quote(t));
+fn full_thread(t: &Thread, now: &str) -> String {
+    let mut out = format!(
+        "Thread {} {} ({}):\n{}{}{now}",
+        t.id,
+        place(t),
+        t.status,
+        on(t),
+        quote(t)
+    );
     for c in &t.comments {
         let edited = if c.edited_at.is_some() {
             " (edited)"
@@ -391,19 +457,38 @@ fn indent(body: &str) -> String {
 }
 
 /// The answer `wait_for_review` gives when the user submits.
-fn delivery(r: &Review, round: &Round, threads: &[Thread]) -> String {
+fn delivery(
+    r: &Review,
+    round: &Round,
+    threads: &[Thread],
+    files: &[String],
+    now: &[String],
+) -> String {
     let mut out = format!(
         "The user submitted their review of {} (round {}): {}.\n",
         r.describe(),
         round.n,
         round.verdict.describe()
     );
+    if !files.is_empty() {
+        out += &format!(
+            "Files in the review ({}): {}.\n",
+            files.len(),
+            files.join(", ")
+        );
+    }
     let n: usize = threads.iter().map(|t| t.comments.len()).sum();
     if n > 0 {
         out += &format!("\n{n} comment{}:\n", plural(n));
     }
-    for t in threads {
-        out += &format!("\n[thread {}] {}\n{}", t.id, place(t), quote(t));
+    for (t, now) in threads.iter().zip(now) {
+        out += &format!(
+            "\n[thread {}] {}\n{}{}{now}",
+            t.id,
+            place(t),
+            on(t),
+            quote(t)
+        );
         for c in &t.comments {
             let edited = if c.edited_at.is_some() {
                 " (edited since you last saw it)"
@@ -905,6 +990,72 @@ mod tests {
         assert_eq!(
             said(a.suggest("claude", "a.rs", 5, "").unwrap()),
             "a.rs has 4 lines."
+        );
+    }
+
+    #[test]
+    fn comments_say_what_diff_they_were_on_and_where_the_code_is_now() {
+        let (d, mut a, r) = setup();
+        let on = DiffContext {
+            old_rev: Some("1111111aaa".into()),
+            new_rev: Some("2222222bbb".into()),
+            diff: Some("commit 1/2 2222222 \"add two\" vs its parent 1111111".into()),
+        };
+        // On a commit, line 2 (`two`); on your files, line 3 (`three`) and line 4 (`four`).
+        let c =
+            review::comment_in(&a.conn, &r.id, Some((&at(2, 2), FILE)), YOU, "c?", &on).unwrap();
+        let w = review::comment(&a.conn, &r.id, Some((&at(3, 3), FILE)), YOU, "w?").unwrap();
+        let o = review::comment(&a.conn, &r.id, Some((&at(4, 4), FILE)), YOU, "o?").unwrap();
+        // Then the files change: a line on top, and `four` rewritten.
+        let new = "zero\none\ntwo\nthree\nFOUR\n";
+        std::fs::write(d.path().join("n/a.rs"), new).unwrap();
+        review::reanchor(&a.conn, &r.id, "a.rs", new, true).unwrap();
+        review::submit(
+            &a.conn,
+            &r.id,
+            Verdict::Changes,
+            &[("a.rs".into(), new.into())],
+            None,
+        )
+        .unwrap();
+        let answer = a.try_take("claude").unwrap().unwrap();
+        assert!(
+            answer.contains("Files in the review (1): a.rs."),
+            "{answer}"
+        );
+        let section = |id: &str| {
+            let start = answer.find(&format!("[thread {id}]")).unwrap();
+            let rest = &answer[start + 1..];
+            rest[..rest.find("\n[thread").unwrap_or(rest.len())].to_string()
+        };
+        let sc = section(&c);
+        assert!(
+            sc.contains("On: commit 1/2 2222222 \"add two\" vs its parent 1111111."),
+            "{sc}"
+        );
+        assert!(sc.contains("> two"), "{sc}");
+        assert!(
+            sc.contains("Now: the same code is at a.rs:3 in your files."),
+            "{sc}"
+        );
+        // A thread on your files that followed its code needs no note; one whose code went does.
+        let sw = section(&w);
+        assert!(sw.contains("on a.rs:4") && !sw.contains("Now:"), "{sw}");
+        let so = section(&o);
+        assert!(
+            so.contains("Now: that code has changed in your files since"),
+            "{so}"
+        );
+        // The summary marks threads made on a commit.
+        let summary = a.get_review(None).unwrap();
+        assert!(
+            summary.contains(&format!("{c} on a.rs:2 [on commit 2222222]")),
+            "{summary}"
+        );
+        let full = a.get_review(Some(&c)).unwrap();
+        assert!(
+            full.contains("On: commit 1/2") && full.contains("Now: the same code"),
+            "{full}"
         );
     }
 

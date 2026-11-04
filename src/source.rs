@@ -124,9 +124,10 @@ pub struct Source {
     pub paths: Option<(PathBuf, PathBuf)>,
     /// `glos diff <rev> [<rev>]`: the revisions given, the second `None` for your files.
     pub revs: Option<(String, Option<String>)>,
-    /// The new side is a commit, not the files on disk: threads, anchored to the files, don't
-    /// apply, and comments are off.
-    pub history: bool,
+    /// The commit on the old side, if it's one (the merge base, a parent, a revision).
+    pub old_commit: Option<gix::ObjectId>,
+    /// The commit on the new side; `None` when it's the files on disk.
+    pub new_commit: Option<gix::ObjectId>,
     /// Paths marked `linguist-generated` in `.gitattributes`.
     generated: Vec<String>,
 }
@@ -206,7 +207,8 @@ impl Source {
             git: None,
             paths: Some((old.canonicalize()?, new.canonicalize()?)),
             revs: None,
-            history: false,
+            old_commit: None,
+            new_commit: None,
             generated: vec![],
         })
     }
@@ -282,7 +284,8 @@ impl Source {
             git: None,
             paths: Some((old.canonicalize()?, new.canonicalize()?)),
             revs: None,
-            history: false,
+            old_commit: None,
+            new_commit: None,
             generated: vec![],
         })
     }
@@ -319,7 +322,7 @@ impl Source {
             g.head = n;
         }
         s.revs = Some((old.to_string(), Some(new.to_string())));
-        s.history = true;
+        (s.old_commit, s.new_commit) = (Some(o), Some(n));
         Ok(s)
     }
 
@@ -461,7 +464,8 @@ impl Source {
             generated,
             paths: None,
             revs: against.map(|r| (r.to_string(), None)),
-            history: false,
+            old_commit: Some(merge_base),
+            new_commit: None,
             git: Some(Git {
                 common_dir: repo.common_dir().canonicalize()?,
                 worktree,
@@ -510,7 +514,8 @@ impl Source {
         let repo = g.repo.to_thread_local();
         let commit = repo.find_commit(id)?;
         let tree = commit.tree()?;
-        let parent = match commit.parent_ids().next() {
+        let parent_id = commit.parent_ids().next().map(|p| p.detach());
+        let parent = match parent_id {
             Some(p) => Some(repo.find_commit(p)?.tree()?),
             None => None,
         };
@@ -530,7 +535,8 @@ impl Source {
             }),
             paths: self.paths.clone(),
             revs: self.revs.clone(),
-            history: true,
+            old_commit: parent_id,
+            new_commit: Some(id),
             generated,
         })
     }
@@ -581,6 +587,7 @@ impl Source {
         }
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         self.changes = changes;
+        self.old_commit = None; // the old side is glos's snapshot
         Ok(self)
     }
 }
@@ -943,7 +950,8 @@ mod tests {
                 ("b.txt".to_string(), Kind::Added)
             ]
         );
-        assert!(!s.history);
+        assert_eq!(s.new_commit, None);
+        assert!(s.old_commit.is_some());
         assert_eq!(s.revs, Some(("HEAD~1".to_string(), None)));
         assert_eq!(
             s.git.as_ref().unwrap().base,
@@ -953,7 +961,7 @@ mod tests {
 
         let s = Source::revs(r, "HEAD~1", Some("HEAD")).unwrap();
         assert_eq!(kinds(&s), [("a.txt".to_string(), Kind::Modified)]);
-        assert!(s.history);
+        assert!(s.new_commit.is_some() && s.old_commit.is_some());
         assert_eq!(s.read(&s.changes[0].new).unwrap().unwrap(), b"2\n");
         // Same revision twice: nothing.
         assert!(

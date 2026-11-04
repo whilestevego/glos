@@ -312,8 +312,6 @@ PLAN.md:
   side's own syntax tree, so it's the same as in the file view.
 - **Side by side never wraps,** so both sides stay line for line; padding rows keep changes level,
   and thread rows on the right have blank rows on the left.
-- **Per-commit scope is history:** threads are anchored to the branch's code, not a commit's, so
-  they're hidden there and comments are refused, rather than shown at the wrong lines.
 - **Since last review** compares each file with its snapshot from the latest round, and counts
   files reverted since; it works with or without git.
 - **The file tree is a panel,** not a picker: it stays visible while you read, `space e` focuses
@@ -321,13 +319,24 @@ PLAN.md:
 - **`space v` and `space o` are menus,** like `space s`, so the key help panel lists the choices
   that apply (`]C` only in the per-commit scope, "since last review" only after a submit).
 
-## Revisions in `glos diff` (2026-11-04)
+## Revisions in `glos diff`, and comments on any diff (2026-11-04)
 
-- **Comments only when the new side is your files:** `glos diff <rev>` compares a revision with
-  the worktree and comments work, on the branch's own review (it keeps its base). Two revisions
-  are history: read-only, like the per-commit scope, so threads are never shown against code
-  they weren't made on. One rule covers both: the source says when its new side is history.
+- **Comments work on any diff,** two revisions and single commits included. First built
+  read-only (comments only when the new side was your files); changed at the user's request: a
+  reviewer comments on what they're looking at, and the agent is told what that was.
+- **Each thread keeps its diff** (schema v4): the commits on each side and a sentence saying
+  what was compared. It's what lets an agent tell a comment on an old commit from one on the
+  current code.
+- **Where a thread lives:** one made on your files is re-anchored as they change (as before);
+  one made on a commit stays on that commit's code, which never changes. In any other view a
+  thread is placed by its code, without storing anything, and marked with the version it was
+  made on (`on d0c4165`, `on your files`); if its code isn't there it isn't shown inline.
+- **Agents are told where the code is now:** with each comment, whether the same code is
+  still in the files (and where), or has changed since. A thread on your files that simply
+  followed its code needs no note.
 - **Paths win:** an argument that exists on disk is a path; otherwise it's a revision.
+- **The per-commit and two-revision diffs share the branch's review,** so their comments reach
+  the agent with the rest.
 
 ## The plan folder
 
