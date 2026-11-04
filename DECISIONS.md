@@ -249,6 +249,18 @@ PLAN.md:
 - **Channels:** declared through rmcp's experimental capabilities; the protocol is capped at
   2025-11-25 so pushes can be delivered. Needs a launch flag while channels are in preview.
 
+## M1 (2026-11-04)
+
+- **tree-house-bindings 0.2.4, not Helix's 0.2.1:** 0.2.1 can't take a statically linked grammar.
+  It's still the one tree-sitter runtime, under tree-house 0.3.0.
+- **Language loading:** helix-core's `Loader` only loads grammars from disk, so glos has its own,
+  parsing `languages.toml` with Helix's types and matching files as helix-core does. Only languages
+  with vendored queries count as supported.
+- **Drawing goes through helix-core's `DocumentFormatter`,** and scrolling and clicks through its
+  visual-offset helpers, so tabs, wide characters and soft wrap match Helix exactly.
+- **Commands ported from helix-term** live in one MPL-2.0 file, `src/ui/commands.rs`, tested in
+  Helix's selection notation. Where a test and helix-core disagreed, helix-core won.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
