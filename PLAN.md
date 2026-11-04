@@ -44,9 +44,9 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
    files, and `space f` opens any file in the repo, read-only, when you need context.
 4. Select lines the Helix way (`x`, `X`, `v`, or a mouse drag), then `space c` to comment. A small
    box opens in insert mode; `esc` then `enter` saves the comment. The draft is saved as you type.
-5. `space s` submits, with a verdict: approved, changes requested, or just comments. The review is
-   pushed straight into the agent's Claude Code session through an MCP channel. There's no prompt
-   to paste. Until you submit, the statusline shows how many comments the agent hasn't received.
+5. `space s` submits, with a verdict: approved, changes requested, or just comments. The agent is
+   waiting on glos's `wait_for_review` tool, and the review comes back to it as that tool's answer.
+   There's no prompt to paste. Until you submit, the statusline shows how many comments the agent hasn't received.
 6. As the agent works, glos refreshes live without moving your view: the diff changes, threads
    follow their lines, and replies appear in place, marked unread. `]u` jumps to the next unread
    reply. A thread whose code is gone is marked outdated.
@@ -83,7 +83,7 @@ or reuse call for it.
 | `source` | Turns two files, two folders or a git repo into changes; git through gix |
 | `store` | The SQLite database, its migrations, and snapshots |
 | `ui` | ratatui front end: views, keymap engine, key help panel, comment box, pickers, popups, themes, highlighting |
-| `mcp` | MCP server for agents, including the channel push |
+| `mcp` | MCP server for agents, including delivering submitted reviews |
 | `edit` | After the MVP: in-place editing on top of `helix-core` |
 
 ### Processes and how they talk
@@ -91,8 +91,7 @@ or reuse call for it.
 - **The UI** (`glos`) is the only process that draws.
 - **The MCP server** (`glos mcp`) is started by the agent host (Claude Code) over stdio, one per
   agent session. It registers itself and the folder it was started in, and reads and writes review
-  state in the store. It's also the channel that pushes your submitted review into that agent's
-  session.
+  state in the store. It's also how your submitted review reaches that agent's session.
 - **The CLI** (`glos list`, `glos reply`, …) reads and writes the same state for scripts and for
   agents without MCP.
 - All of them share one SQLite database, and that's the only channel between them: no socket and
@@ -357,18 +356,24 @@ not.
 | `annotate` | Leave an agent note on a line or range before you review |
 | `request_review` | Say the work is ready, optionally scoped to the files it touched. An open glos shows the request; otherwise glos runs `open_command` if set, and the answer tells the agent to ask you to run `glos` if nothing opened |
 | `suggest` | Suggest a file and line for you to look at. It shows as a notice in your open view, and `space n` jumps there; your view never moves on its own |
-| `wait_for_review` | Fallback for hosts without channels: waits a few minutes for you to submit, then answers "still waiting" so the agent calls again, staying under the host's tool timeout |
+| `wait_for_review` | How a submitted review reaches the agent: waits a few minutes for you to submit, then answers with the review, or "still waiting" so the agent calls again, staying under the host's tool timeout |
 
-**Channel push.** When you submit, the MCP server attached to that review's agent session sees the
-submit in the database and pushes the review into the session as a channel message (Claude Code
-channels: the server declares the `claude/channel` experimental capability and sends
-`notifications/claude/channel`, with the review in `content` and ids in `meta`). The server caps
-its MCP protocol at revision 2025-11-25: the newer 2026-07-28 drops the handshake and can't carry
-channel messages. The message holds
-the verdict and every new or edited comment with its file, lines and thread id, and tells the
-agent to answer each one with `reply`/`resolve`. This needs checking first (see M0): if channels
-aren't available or behave differently, `wait_for_review` covers it inside glos, and the separate
-Claude Code plugin can wait for a submit through the CLI and send the review as a prompt.
+**Delivering a review.** After `request_review`, the agent calls `wait_for_review`. When you
+submit, the MCP server serving that review's folder sees the submit in the database and answers
+the waiting call. The answer holds the verdict and every new or edited comment with its file,
+lines and thread id, and tells the agent to answer each one with `reply`/`resolve`, then call
+`request_review` again (or finish, on an approval). This works in any MCP host, with no flags or
+organisation settings. While it waits, the session is busy; that's the cost.
+
+The separate Claude Code plugin can add a `Stop` hook that waits for a submit through the CLI and
+hands the review back as the agent's next instruction, so the agent needn't loop.
+
+**Channels, later.** Claude Code channels would let the server push the review into an idle
+session instead. M0 showed the server side works (the `claude/channel` experimental capability,
+`notifications/claude/channel`, and the MCP protocol capped at 2025-11-25), but channels are a
+research preview: they need a launch flag, an organisation setting, and drop messages silently
+when either is missing. glos supports them once they're no longer experimental; the spike in
+`spikes/channel/` is the starting point.
 
 **Which session gets it:** an MCP server over stdio isn't told the host's session id, so each
 server is identified by its own process id and named after the `clientInfo` its MCP client sends.
@@ -379,10 +384,7 @@ servers whose process is gone are removed. With none attached, the review waits 
 when one attaches.
 
 **Setting it up:** `claude mcp add glos -- glos mcp` registers glos with Claude Code; `glos doctor`
-checks that it worked. Channels are a research preview: until glos ships as a plugin, a session
-must be started with `claude --dangerously-load-development-channels server:glos` to receive
-pushes, and Team and Enterprise organisations must enable channels. Without that, pushes are
-dropped silently, so `wait_for_review` stays.
+checks that it worked.
 
 ## The CLI
 
@@ -483,28 +485,26 @@ the dashboard.
   suspend, colour fallback); `glos doctor`.
 - **M2, commenting.** The comment box with drafts saved as you type and `:editor`; comments on
   selections, review-level comments, editing and deleting; inline collapsible threads; the
-  unsubmitted count; snapshots; `space s` submit with a verdict through the channel; the CLI with
-  `--json`.
+  unsubmitted count; snapshots; `space s` submit with a verdict; `glos mcp` with `get_review`,
+  `request_review` and `wait_for_review`, so a submit reaches the agent; the CLI with `--json`.
 - **Checkpoint.** Use glos for real reviews instead of tuicr before building M3–M5, and adjust the
   rest of the plan from what that shows. Include a fidelity pass: use glos and Helix side by side
   on the same files, and note every difference in how they feel.
-- **M3, two-way.** MCP tools (reply, resolve, annotate, request review, suggest), live refresh
+- **M3, two-way.** The rest of the MCP tools (reply, resolve, annotate, suggest), live refresh
   through `notify` and the database without moving your view, unread replies, re-anchoring and
   outdated threads.
 - **M4, views and scopes.** Unified and side by side; since last review, per commit, files filter;
   file tree.
 - **M5, dashboard and launching.** Multi-review dashboard; closing and archiving reviews, `glos gc`;
   `open_command` and `glos open`; shell completions and the man page.
-- **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish.
+- **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish;
+  channel push once Claude Code channels are no longer experimental.
 
 In-place editing is listed after the MVP because the reviewer is useful without it, and it's the
 largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be needed daily.
 
 ## Open questions
 
-- **Channels:** whether a push reaches a live session end to end. The server side and the
-  handshake with Claude Code are proven; delivery needs an org with channels enabled or a personal
-  account. Until then, `wait_for_review` is the path to rely on, so it moves up to M2 with submit.
 - **Re-anchoring rules:** how far to search for moved text before calling a thread outdated.
 - **Branch renames and detached HEAD:** how a review follows a renamed branch, and what a review
   made in detached HEAD is keyed by.

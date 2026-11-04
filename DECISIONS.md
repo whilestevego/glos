@@ -29,6 +29,10 @@ Each decision made while planning glos on 2026-11-03, with revisions from a revi
 - **Chosen:** MCP channel push.
 - **Why:** no mod is needed, and the review arrives as you submit. The other two remain as fallbacks
   (`wait_for_review` is in the tool list) pending the M0 spike.
+- **Revised 2026-11-04, after M0:** `wait_for_review` is the baseline. Channels are a research
+  preview: they need a launch flag and an organisation setting (blocked on the account used for
+  the spike) and drop messages silently otherwise. glos supports them once they're no longer
+  experimental. The Claude Code plugin can add a `Stop` hook so the agent needn't loop.
 
 ## Helix fidelity
 
