@@ -1,7 +1,8 @@
 # Decisions
 
-Each decision made while planning glos on 2026-11-03: the options considered, what was chosen, and
-why. The design itself is in [PLAN.md](PLAN.md).
+Each decision made while planning glos on 2026-11-03, with revisions from a review of the plan on
+2026-11-04: the options considered, what was chosen, and why. The design itself is in
+[PLAN.md](PLAN.md).
 
 ## Why build it at all
 
@@ -15,9 +16,11 @@ why. The design itself is in [PLAN.md](PLAN.md).
 ## Agent integration
 
 - **Options:** MCP server; event hooks; CLI + JSON; local socket/RPC.
-- **Chosen:** MCP server, CLI + JSON, and a local socket.
-- **Why:** MCP lets any agent use glos natively; the CLI serves scripts and agents without MCP; the
-  socket lets replies appear live in an open UI.
+- **Chosen:** MCP server and CLI + JSON.
+- **Why:** MCP lets any agent use glos natively; the CLI serves scripts and agents without MCP.
+- **Revised 2026-11-04:** the local socket was dropped. The shared SQLite database (see Storage)
+  already carries changes between processes, and every process notices them by checking
+  `PRAGMA data_version`, so replies still appear live in an open UI.
 
 ## Delivering a submitted review
 
@@ -39,6 +42,20 @@ why. The design itself is in [PLAN.md](PLAN.md).
 - **Chosen:** ratatui with Helix-style behaviour.
 - **Why:** stable crates.io dependencies. Helix's crates have no stable API and pull in the whole
   editor, and a fork means maintaining a large editor.
+- **Revised 2026-11-04:** one exception, `helix-core`, for motions, selections and text objects.
+  Rewriting them from memory is how a near-copy ends up feeling off. Pinning it to one Helix
+  release avoids the unstable API, and `helix-core` alone has no UI and isn't the whole editor.
+  The M0 spike checks that; the fallback is copying its files in under MPL-2.0.
+- **Making the feel checkable (2026-11-04):** a generated keymap checklist (`KEYMAP.md`), tests in
+  Helix's selection notation, screen snapshots of the elements that must look like Helix, and a
+  side-by-side fidelity pass at the M2 checkpoint.
+
+## Code layout (2026-11-04)
+
+- **Options:** a Cargo workspace of eight focused crates; one crate split into modules.
+- **Chosen:** one crate split into modules.
+- **Why:** the crate boundaries would be guesses before any code exists. Split later if compile
+  times or reuse call for it.
 
 ## Scope: review only, or editing too
 
@@ -53,6 +70,17 @@ why. The design itself is in [PLAN.md](PLAN.md).
 - **Chosen:** the user data dir.
 - **Why:** keeps repos clean. Every change is saved at once, as a direct answer to tuicr losing
   unsaved comments.
+- **Format, revised 2026-11-04:** a JSON file per review with a file lock was replaced by one
+  SQLite database. The UI, MCP servers and CLI all write at once; rewriting a whole JSON file lets
+  one overwrite another's changes, and a socket alone needs a process that's always running to
+  save anything. SQLite transactions avoid both, with no daemon.
+- **Pure-Rust databases considered:** Turso (Limbo), `redb`, `fjall`, `sled`, GlueSQL. Rejected:
+  none supports several processes opening the database at once, so each would need a daemon. Speed
+  doesn't matter at glos's data size. `rusqlite` with `bundled` needs only a C compiler at build
+  time.
+- **Snapshots (2026-11-04):** what you reviewed in each round is stored in this database too, not as
+  git objects, which `git gc` deletes when nothing references them and which don't exist without
+  git.
 
 ## Diff views
 
@@ -64,6 +92,9 @@ why. The design itself is in [PLAN.md](PLAN.md).
 - **Options:** resolve and reopen; outdated tracking; comment types; review-level comments.
 - **Chosen:** resolve and reopen, outdated tracking, review-level comments.
 - **Not chosen:** comment types (issue, nit, praise…).
+- **Revised 2026-11-04:** comments go on the new side only in the MVP. A thread becomes outdated
+  only once the files have been quiet for a few seconds or the round ends, and then stays outdated
+  until you reopen or resolve it, so threads don't flicker while the agent edits.
 
 ## While the agent works
 
@@ -76,10 +107,21 @@ why. The design itself is in [PLAN.md](PLAN.md).
 - **Options:** gix; git2; shelling out to git.
 - **Chosen:** gix. It's pure Rust and what Helix uses for its diff gutter.
 
+## Git required or not (2026-11-04)
+
+- **Options:** git repos only; git optional.
+- **Chosen:** git optional. glos also reviews two files (`glos old new`) or two folders. Every
+  source becomes old/new text that glos diffs itself with imara-diff; gix is used only to read git
+  sources. Per-commit scope is git only; since last review works everywhere.
+
 ## Review keys
 
 - **Options:** space-mode menu; bracket motions; typable commands; selection-first comments.
 - **Chosen:** all four.
+- **Key help panel (2026-11-04):** essential, part of M1. As in Helix's infobox, every key that
+  starts a sequence opens a panel of the keys that can follow. glos lists only the actions that
+  apply where you are, and builds the panel from the live keymap so remapped keys show their new
+  bindings.
 
 ## What agents can do
 
@@ -90,6 +132,12 @@ why. The design itself is in [PLAN.md](PLAN.md).
 
 - **Options:** a standalone command; from Claude Code; when the agent asks.
 - **Chosen:** all three.
+- **Revised 2026-11-04:** no dependency on Ghostty or any terminal. Opening a split is an optional
+  `open_command` in `config.toml` (tmux, kitty, WezTerm, or a Ghostty script). Without it, an open
+  glos shows the request, or the agent asks you to run `glos`.
+- **Revised 2026-11-04:** glos is the CLI and the MCP server only. Launching from Claude Code (a
+  `/glos` slash command, replacing `/tuicr`) and the channel fallback mod move to a separate Claude
+  Code plugin built on them.
 
 ## What a review covers
 
@@ -124,12 +172,19 @@ why. The design itself is in [PLAN.md](PLAN.md).
 ## Grammars and themes
 
 - **Options:** reuse Helix's runtime; bundle common grammars; both.
-- **Chosen:** reuse Helix's runtime. Exactly your editor's colours; without Helix, plain text.
+- **First chosen:** reuse Helix's runtime at run time. Exactly your editor's colours; without
+  Helix, plain text.
+- **Revised 2026-11-04:** bundle instead. Everything taken from Helix (grammars, queries, themes,
+  `languages.toml`) is compiled into glos from a pinned Helix release, so glos runs the same
+  whether Helix is installed or not, and a Helix upgrade can't break it. glos no longer reads
+  `~/.config/helix`; your own themes go in `~/.config/glos/themes/`.
 
 ## MVP
 
 - **Options:** reading and commenting; threads both ways; all three views; the dashboard.
 - **Chosen:** all four. In-place editing follows the MVP.
+- **Checkpoint (2026-11-04):** after M2, glos is used for real reviews instead of tuicr before M3–M5
+  are built, and the plan is adjusted from that.
 
 ## Name
 
