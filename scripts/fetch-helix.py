@@ -9,7 +9,7 @@ import io, shutil, sys, tarfile, tomllib, urllib.request
 from pathlib import Path
 
 HELIX_TAG = "25.07.1"
-# The languages glos highlights (PLAN.md, Helix fidelity). Adding one: a line here, then rerun.
+# The languages glos highlights (plans/PLAN.md, Helix fidelity). Adding one: a line here, then rerun.
 LANGS = sys.argv[1:] or [
     "rust", "typescript", "tsx", "javascript", "python", "go", "c", "cpp", "java", "ruby",
     "bash", "json", "toml", "yaml", "markdown", "markdown.inline", "html", "css", "sql", "lua",

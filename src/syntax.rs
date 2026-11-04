@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(at_fn.fg, theme.get("keyword.function").fg.or(keyword.fg));
     }
 
-    /// Every language in PLAN.md's list is found by file name and highlights something.
+    /// Every language in plans/PLAN.md's list is found by file name and highlights something.
     #[test]
     fn every_language_highlights() {
         let (l, theme) = loader();
