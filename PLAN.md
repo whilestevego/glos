@@ -1,4 +1,4 @@
-# loupe
+# glos
 
 A terminal code reviewer for work done by coding agents. It feels like Helix, runs locally, and
 talks to agents both ways: you comment, the agent answers on the same line, and the review stays
@@ -20,15 +20,15 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
 
 ## Non-goals
 
-- Replacing Helix. Edits in loupe are for quick fixes; bigger work stays in your editor.
+- Replacing Helix. Edits in glos are for quick fixes; bigger work stays in your editor.
 - Posting to GitHub, GitLab or any other forge.
 - Windows support.
 
 ## The experience
 
-1. An agent finishes a task and calls `request_review`. Through the Ghostty integration, loupe opens
+1. An agent finishes a task and calls `request_review`. Through the Ghostty integration, glos opens
    in a split showing the branch since it left `main`, uncommitted and untracked files included.
-   You can also run `loupe` yourself in any repo, or open it from Claude Code with a slash command.
+   You can also run `glos` yourself in any repo, or open it from Claude Code with a slash command.
 2. The agent may already have left notes on its own changes, such as "why I did this" or "unsure
    here". They're drawn in their own colour.
 3. You read the code in full-file view, with changed lines marked in the gutter. `]h` jumps to the
@@ -37,7 +37,7 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
    comment saves instantly.
 5. `space s` submits. The review is pushed straight into the agent's Claude Code session through an
    MCP channel. There's no prompt to paste.
-6. As the agent works, loupe refreshes live: the diff changes, threads follow their lines, and
+6. As the agent works, glos refreshes live: the diff changes, threads follow their lines, and
    replies appear in place with a notice. A thread whose code is gone is marked outdated.
 7. Round 2: switch the scope to "since last review" to see only what changed in response to you.
    Reply, resolve, or reopen, then submit again.
@@ -50,29 +50,29 @@ One Rust binary, organised as a Cargo workspace of focused crates:
 
 | Crate | Job |
 |---|---|
-| `loupe` (bin) | CLI entry point: `loupe`, `loupe mcp`, `loupe review …`, `loupe dashboard` |
-| `loupe-core` | Review data model: reviews, rounds, threads, comments, anchors, and re-anchoring |
-| `loupe-git` | Diffs from gix: branch vs base, since last review, per commit, untracked files |
-| `loupe-store` | Persistence in the user data dir; atomic writes; file lock |
-| `loupe-ui` | ratatui front end: views, keymap engine, pickers, popups, themes, highlighting |
-| `loupe-edit` | The in-place editing buffer (ropey) and the Helix selection model |
-| `loupe-rpc` | Unix-socket protocol between running UIs, the MCP server and the CLI |
-| `loupe-mcp` | MCP server for agents, including the channel push |
+| `glos` (bin) | CLI entry point: `glos`, `glos mcp`, `glos review …`, `glos dashboard` |
+| `glos-core` | Review data model: reviews, rounds, threads, comments, anchors, and re-anchoring |
+| `glos-git` | Diffs from gix: branch vs base, since last review, per commit, untracked files |
+| `glos-store` | Persistence in the user data dir; atomic writes; file lock |
+| `glos-ui` | ratatui front end: views, keymap engine, pickers, popups, themes, highlighting |
+| `glos-edit` | The in-place editing buffer (ropey) and the Helix selection model |
+| `glos-rpc` | Unix-socket protocol between running UIs, the MCP server and the CLI |
+| `glos-mcp` | MCP server for agents, including the channel push |
 
 ### Processes and how they talk
 
-- **The UI** (`loupe`) is the only process that draws. It opens a Unix socket at
-  `$XDG_RUNTIME_DIR/loupe/<review-id>.sock`, or the data dir on macOS.
-- **The MCP server** (`loupe mcp`) is started by the agent host (Claude Code) over stdio, one per
+- **The UI** (`glos`) is the only process that draws. It opens a Unix socket at
+  `$XDG_RUNTIME_DIR/glos/<review-id>.sock`, or the data dir on macOS.
+- **The MCP server** (`glos mcp`) is started by the agent host (Claude Code) over stdio, one per
   agent session. It reads and writes review state through the store, and through the socket when a
   UI is open, so replies appear live. It's also the channel that pushes your submitted review into
   that agent's session.
-- **The CLI** (`loupe review …`) reads and writes the same state as JSON for scripts and for agents
+- **The CLI** (`glos review …`) reads and writes the same state as JSON for scripts and for agents
   without MCP.
 - The store is the source of truth. The socket is for live notifications only, so nothing breaks
   if a UI isn't open.
 
-### Data model (`loupe-core`)
+### Data model (`glos-core`)
 
 ```
 Review     id, repo path, worktree path, branch, base, created/updated, rounds[], threads[]
@@ -85,13 +85,13 @@ Comment    id, author (you | agent name), kind (comment | annotation), body, cre
 
 **Re-anchoring.** When the code changes, each thread is placed again: the old position is mapped
 through the diff between the snapshot it was anchored in and now (with imara-diff). If the
-anchored text is gone, loupe searches the file for the same text near the old spot, using the
+anchored text is gone, glos searches the file for the same text near the old spot, using the
 context lines as a tie-break. If that fails, the thread becomes **outdated** and is shown against
 the code as it was. This is the riskiest logic in the project and gets the most tests.
 
-### Storage (`loupe-store`)
+### Storage (`glos-store`)
 
-- Location: the user data dir from `etcetera` (`~/.local/share/loupe` on Linux; macOS uses its
+- Location: the user data dir from `etcetera` (`~/.local/share/glos` on Linux; macOS uses its
   Application Support folder), one folder per repo (keyed by the repo's absolute path hash), one
   JSON file per review (one per branch or worktree).
 - Every change is written immediately with an atomic rename, so there's no "save" step and quitting
@@ -122,7 +122,7 @@ one-line marker until you open them, like Helix's inline diagnostics.
 
 ## Keymap (Helix first)
 
-loupe follows Helix's keys wherever an action exists there: `hjkl`, `w`/`b`/`e`, `gg`/`ge`, `gh`/`gl`,
+glos follows Helix's keys wherever an action exists there: `hjkl`, `w`/`b`/`e`, `gg`/`ge`, `gh`/`gl`,
 `x`/`X`, `v` (select mode), `%`, `;`, `,`, `/` search, `u` undo, `:` commands, `space`-mode, and so on.
 Review actions are added where Helix leaves room:
 
@@ -157,21 +157,21 @@ primary.
 ## Helix fidelity
 
 - **Themes and config:** read Helix theme TOML files from the Helix runtime and from
-  `~/.config/helix/themes`. loupe's own `config.toml` sits in `~/.config/loupe/` and mirrors Helix's
+  `~/.config/helix/themes`. glos's own `config.toml` sits in `~/.config/glos/` and mirrors Helix's
   layout (`theme`, `[keys.normal]`, `[editor]`). If no theme is set, use the one Helix's config sets.
 - **Syntax highlighting:** tree-sitter, reusing Helix's runtime: compiled grammars in
   `runtime/grammars/*.so`, highlight queries in `runtime/queries/<lang>/`, and `languages.toml`
   (built into Helix, overridable in `~/.config/helix/languages.toml`) to map files to languages.
   Runtime directories are found the way `hx --health` lists them: `~/.config/helix/runtime`, then
   the install's own (here `/opt/homebrew/Cellar/helix/25.07.1/libexec/runtime`). Without Helix
-  installed, loupe falls back to plain text and says so.
+  installed, glos falls back to plain text and says so.
 - **Editing:** a ropey buffer with Helix's selection-first model (selections, multiple cursors,
   `insert`/`normal`/`select` modes). Writes go to the worktree file, which triggers a live refresh
   like any other change.
 
 ## Agents: the MCP server
 
-`loupe mcp` speaks MCP over stdio (crate `rmcp`). Tools:
+`glos mcp` speaks MCP over stdio (crate `rmcp`). Tools:
 
 | Tool | What it does |
 |---|---|
@@ -179,7 +179,7 @@ primary.
 | `reply` | Reply on a thread |
 | `resolve` | Resolve a thread with a note; `reopen` reverses it |
 | `annotate` | Leave an agent note on a line or range before you review |
-| `request_review` | Say the work is ready; opens or notifies loupe (via the Ghostty integration), optionally scoped to the files it touched |
+| `request_review` | Say the work is ready; opens or notifies glos (via the Ghostty integration), optionally scoped to the files it touched |
 | `focus` | Move your open view to a file and line. Only works when you've allowed it, per review, and shows who moved it |
 | `wait_for_review` | Fallback for hosts without channels: blocks until you submit |
 
@@ -197,22 +197,22 @@ the review waits and is delivered when one attaches.
 ## The CLI
 
 For scripts and agents without MCP, every operation exists as a subcommand with JSON output:
-`loupe review list | show | comments | reply | resolve | annotate | submit`. This is also how the
-Claude Code mod fallback and tests drive loupe.
+`glos review list | show | comments | reply | resolve | annotate | submit`. This is also how the
+Claude Code mod fallback and tests drive glos.
 
 ## The dashboard
 
-`loupe dashboard`, or `space d` inside a review, lists every review on this machine: repo, branch or
+`glos dashboard`, or `space d` inside a review, lists every review on this machine: repo, branch or
 worktree, the agent's state (working, waiting for review, replied), and open, outdated and new-reply
 counts. `enter` opens one. It's built from the store plus live socket status, and refreshes on its
 own.
 
 ## Launching
 
-- **Standalone:** `loupe` in a repo finds the branch, its base and any existing review.
-- **From Claude Code:** a slash command opens loupe in a zoomed Ghostty split, which is what the
+- **Standalone:** `glos` in a repo finds the branch, its base and any existing review.
+- **From Claude Code:** a slash command opens glos in a zoomed Ghostty split, which is what the
   ghostty mod's `/tuicr` does today (it would be adapted).
-- **When the agent asks:** `request_review` opens loupe the same way, or notifies you when a split
+- **When the agent asks:** `request_review` opens glos the same way, or notifies you when a split
   can't be opened.
 
 ## Crates
@@ -257,8 +257,8 @@ the dashboard.
 - **M4, views and scopes.** Unified and side by side; since last review, per commit, files filter;
   file tree.
 - **M5, dashboard and launch.** Multi-review dashboard; Ghostty and Claude Code launching; the
-  `/tuicr` command reworked as `/loupe`.
-- **After the MVP:** in-place editing with the Helix model (`loupe-edit`), remappable keys, and
+  `/tuicr` command reworked as `/glos`.
+- **After the MVP:** in-place editing with the Helix model (`glos-edit`), remappable keys, and
   polish.
 
 In-place editing is listed after the MVP because the reviewer is useful without it, and it's the
@@ -266,9 +266,6 @@ largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be
 
 ## Open questions
 
-- **The name.** `loupe` is also GNOME's image viewer (its binary is `loupe` on many Linux desktops)
-  and an existing crate on crates.io (Wasmer's). Fine for a hobby binary on macOS; reconsider before
-  publishing.
 - **Channels:** how stable Claude Code channels are, whether they need a launch flag, and what they
   allow, decided by the M0 spike.
 - **`tree-house`:** whether Helix's highlighter crate is usable outside Helix, or
