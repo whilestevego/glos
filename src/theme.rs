@@ -10,7 +10,7 @@ use anyhow::{Result, anyhow};
 use ratatui::style::{Color, Modifier, Style};
 use toml::{Table, Value};
 
-use crate::embedded::THEMES;
+use glos_helix::THEMES;
 
 pub struct Theme {
     styles: HashMap<String, Style>,

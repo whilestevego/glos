@@ -4,17 +4,19 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use crossterm::event::KeyCode;
-use helix_core::{
-    Position, Range, Rope, Selection, Tendril, Transaction,
-    graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
-    text_annotations::LineAnnotation,
+use glos_helix::{
+    layout::LineAnnotation,
+    syntax::Loader,
+    text::{
+        Position, Range, Rope, Selection, Tendril, Transaction, next_grapheme_boundary,
+        prev_grapheme_boundary,
+    },
 };
 use ratatui::style::Style;
 
 use super::view::File;
 use crate::{
     review::{Anchor, Thread, YOU},
-    syntax::Loader,
     theme::Theme,
 };
 
@@ -149,10 +151,10 @@ impl CommentBox {
 }
 
 /// Moves an insert-mode cursor with the arrow keys, keeping the column across lines.
-fn move_point(text: helix_core::RopeSlice, pos: usize, code: KeyCode) -> usize {
+fn move_point(text: glos_helix::text::RopeSlice, pos: usize, code: KeyCode) -> usize {
     let line = text.char_to_line(pos);
     let start = text.line_to_char(line);
-    let line_end = |l: usize| helix_core::line_ending::line_end_char_index(&text, l);
+    let line_end = |l: usize| glos_helix::text::line_end_char_index(&text, l);
     let to_line =
         |l: usize| text.line_to_char(l) + (pos - start).min(line_end(l) - text.line_to_char(l));
     match code {
@@ -282,7 +284,7 @@ fn who(c: &crate::review::Comment) -> String {
 pub struct ThreadLines(pub HashMap<usize, usize>);
 
 impl ThreadLines {
-    pub fn new(threads: &Threads, text: helix_core::RopeSlice) -> ThreadLines {
+    pub fn new(threads: &Threads, text: glos_helix::text::RopeSlice) -> ThreadLines {
         ThreadLines(
             threads
                 .rows
@@ -332,10 +334,15 @@ pub fn editor() -> String {
 mod tests {
     use super::*;
     use crate::theme::ColorSupport;
-    use helix_core::test::plain;
+    use glos_helix::test::plain;
 
     fn loader() -> Loader {
-        Loader::new(&Theme::load("default", ColorSupport::TrueColor).unwrap()).unwrap()
+        Loader::new(
+            Theme::load("default", ColorSupport::TrueColor)
+                .unwrap()
+                .scopes(),
+        )
+        .unwrap()
     }
 
     fn typed(b: &mut CommentBox, s: &str, loader: &Loader) {

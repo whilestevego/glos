@@ -156,5 +156,5 @@ have been finished for more than 30 days.
 ## Credits
 
 glos borrows a lot from Helix: its editing core, its themes, its syntax queries and its key
-layout. The files taken from Helix are in the `helix/` folder and stay under Helix's licence,
-MPL-2.0.
+layout. Everything taken from Helix lives in its own crate, `crates/glos-helix`, which stays under
+Helix's licence, MPL-2.0.

@@ -23,7 +23,8 @@ use helix_core::{
 };
 use helix_stdx::rope::RopeSliceExt;
 
-use crate::diff::Hunk;
+/// Lines `before` in the old text became lines `after` in the new one (0-based, end exclusive).
+pub use imara_diff::Hunk;
 
 /// What a command sees and changes: one file's text and selection, and the view over it.
 pub struct Ctx<'a> {
@@ -42,6 +43,9 @@ pub struct Ctx<'a> {
     pub status: Option<(String, bool)>,
     /// Centre the cursor if it ends up outside the view (Helix's `ensure_cursor_in_view_center`).
     pub center: bool,
+    /// The screen column of a character on its line, as the view draws it: (text, char index,
+    /// tab width).
+    pub visual_col: fn(helix_core::RopeSlice, usize, usize) -> usize,
     /// The command placed the view itself (`zz`…): don't scroll to the cursor afterwards.
     pub keep_top: bool,
 }
@@ -805,7 +809,7 @@ pub fn align_view_middle(cx: &mut Ctx) {
         return;
     }
     let text = cx.text.slice(..);
-    let col = super::view::visual_col(
+    let col = (cx.visual_col)(
         text,
         cx.sel.primary().cursor(text),
         cx.fmt.tab_width as usize,
@@ -963,6 +967,7 @@ mod tests {
             status: None,
             center: false,
             keep_top: false,
+            visual_col: |text, pos, _| pos - text.line_to_char(text.char_to_line(pos)),
         };
         for c in cmds {
             c(&mut cx);
@@ -1210,6 +1215,7 @@ mod tests {
             status: None,
             center: false,
             keep_top: false,
+            visual_col: |text, pos, _| pos - text.line_to_char(text.char_to_line(pos)),
         };
         assert_eq!(search_selection(&mut cx, true), "\\bfoo\\b");
         assert_eq!(search_selection(&mut cx, false), "foo");
@@ -1294,6 +1300,7 @@ mod tests {
             status: None,
             center: false,
             keep_top: false,
+            visual_col: |text, pos, _| pos - text.line_to_char(text.char_to_line(pos)),
         };
         f(&mut cx);
         let top = cx.top;
@@ -1447,6 +1454,7 @@ mod tests {
             status: None,
             center: false,
             keep_top: false,
+            visual_col: |text, pos, _| pos - text.line_to_char(text.char_to_line(pos)),
         };
         goto_next_change(&mut cx);
         assert_eq!(

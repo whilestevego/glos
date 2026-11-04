@@ -3,14 +3,12 @@ mod clipboard;
 mod config;
 mod diff;
 mod doctor;
-mod embedded;
 mod launch;
 mod mcp;
 mod reanchor;
 mod review;
 mod source;
 mod store;
-mod syntax;
 mod theme;
 mod ui;
 
