@@ -230,4 +230,90 @@ mod tests {
             .unwrap();
         assert_eq!(has_b, 0);
     }
+
+    #[test]
+    fn schema_has_every_table_and_enforces_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("glos.db")).unwrap();
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            tables,
+            [
+                "blobs",
+                "comments",
+                "drafts",
+                "reviews",
+                "rounds",
+                "sessions",
+                "snapshot_files",
+                "threads"
+            ]
+        );
+        // Foreign keys are on: a comment needs its thread.
+        let err = conn.execute(
+            "INSERT INTO comments (id, thread_id, author, body, created_at) VALUES ('c', 'nope', 'you', 'x', 'now')",
+            [],
+        );
+        assert!(err.is_err());
+        // Deleting a review deletes its threads and their comments.
+        conn.execute_batch(
+            "INSERT INTO reviews (id, source_kind, source_key, folder, created_at, updated_at)
+                 VALUES ('r', 'files', 'k', '/f', 'now', 'now');
+             INSERT INTO threads (id, review_id, created_round) VALUES ('t', 'r', 0);
+             INSERT INTO comments (id, thread_id, author, body, created_at) VALUES ('c', 't', 'you', 'x', 'now');
+             DELETE FROM reviews WHERE id = 'r';",
+        )
+        .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM comments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn two_processes_write_without_losing_each_others_changes() {
+        // Two connections stand in for the UI and an MCP server.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glos.db");
+        let a = open(&path).unwrap();
+        let b = open(&path).unwrap();
+        let mode: String = a
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let version = |c: &Connection| -> i64 {
+            c.pragma_query_value(None, "data_version", |r| r.get(0))
+                .unwrap()
+        };
+        let seen = version(&a);
+        b.execute(
+            "INSERT INTO reviews (id, source_kind, source_key, folder, created_at, updated_at)
+             VALUES ('r', 'files', 'k', '/f', 'now', 'now')",
+            [],
+        )
+        .unwrap();
+        // `a` notices `b`'s write through data_version, which is how processes see changes.
+        assert_ne!(version(&a), seen);
+        a.execute("UPDATE reviews SET status = 'closed' WHERE id = 'r'", [])
+            .unwrap();
+        let status: String = b
+            .query_row("SELECT status FROM reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "closed");
+    }
+
+    #[test]
+    fn open_fails_clearly_when_the_folder_cannot_be_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        let err = open(&file.join("glos.db")).unwrap_err().to_string();
+        assert!(err.contains("creating"), "{err}");
+    }
 }

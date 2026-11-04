@@ -444,4 +444,101 @@ mod tests {
         assert_eq!(visual_col(t.slice(..), 4, 4), 8);
         assert_eq!(visual_col(t.slice(..), 5, 4), 9);
     }
+
+    use crate::{
+        source::Source,
+        theme::{ColorSupport, Theme},
+    };
+
+    /// Draws `text` as a new file into a `w`×`h` buffer, from column `left`, and returns the
+    /// rows as text.
+    fn drawn(text: &str, w: u16, h: u16, left: usize, wrap: bool, main: bool) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+        std::fs::write(&old, "").unwrap();
+        std::fs::write(&new, text).unwrap();
+        let source = Source::diff(&old, &new).unwrap();
+        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+        let loader = Loader::new(&theme).unwrap();
+        let mut file = File::change(&source.changes[0], &source, &loader);
+        file.notices.clear();
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        let styles = main.then(SelectionStyles::default);
+        draw(
+            &mut buf, area, &file, 0, left, wrap, &loader, &theme, styles,
+        );
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tabs_wide_and_control_characters() {
+        // Tabs to the next stop of 4; 漢 takes two cells; ESC shows as ␛.
+        let rows = drawn("\tx\n漢字y\na\x1bb\n", 20, 3, 0, false, false);
+        assert_eq!(rows, ["    x", "漢字y", "a␛b"]);
+    }
+
+    #[test]
+    fn horizontal_offset_never_splits_a_wide_character() {
+        let rows = drawn("漢字abc\n", 20, 1, 1, false, false);
+        // Column 1 is the second half of 漢: it's skipped, and 字 starts the row.
+        assert_eq!(rows, [" 字abc"]);
+        let rows = drawn("abcdef\n", 20, 1, 3, false, false);
+        assert_eq!(rows, ["def"]);
+    }
+
+    #[test]
+    fn main_view_has_a_gutter_and_preview_does_not() {
+        let rows = drawn("a\nb\n", 20, 2, 0, false, true);
+        assert_eq!(rows, ["    1 ▍a", "    2 ▍b"]);
+        let rows = drawn("a\nb\n", 20, 2, 0, false, false);
+        assert_eq!(rows, ["a", "b"]);
+    }
+
+    #[test]
+    fn long_lines_clip_or_wrap() {
+        let line = "one two three four five six\n";
+        assert_eq!(
+            drawn(line, 12, 3, 0, false, false),
+            ["one two thre", "", ""]
+        );
+        let rows = drawn(line, 12, 4, 0, true, false);
+        assert!(rows[0].starts_with("one two"), "{rows:?}");
+        assert!(rows[1].starts_with("↪ "), "{rows:?}");
+        assert!(rows.concat().contains("six"), "{rows:?}");
+    }
+
+    #[test]
+    fn notices_come_first_and_collapsed_files_show_only_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("o"), dir.path().join("Cargo.lock"));
+        std::fs::write(&old, "").unwrap();
+        std::fs::write(&new, "x\n").unwrap();
+        let source = Source::diff(&old, &new).unwrap();
+        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+        let loader = Loader::new(&theme).unwrap();
+        let mut file = File::change(&source.changes[0], &source, &loader);
+        // Two files given directly aren't "generated", so collapse by hand.
+        file.collapsed = true;
+        file.notices = vec!["collapsed".into()];
+        let area = Rect::new(0, 0, 20, 3);
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &file, 0, 0, false, &loader, &theme, None);
+        let row = |y| {
+            (0..20)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        };
+        assert_eq!([row(0), row(1)], [" collapsed".to_string(), String::new()]);
+    }
 }

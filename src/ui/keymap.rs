@@ -538,4 +538,82 @@ mod tests {
             matches!(k.select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode")
         );
     }
+
+    fn all_menus<'a>(m: &'a Menu, out: &mut Vec<&'a Menu>) {
+        out.push(m);
+        for (_, n) in &m.keys {
+            if let Node::Menu(sub) = n {
+                all_menus(sub, out);
+            }
+        }
+    }
+
+    #[test]
+    fn no_key_is_bound_twice_in_a_menu() {
+        let k = Keymaps::default();
+        for root in [&k.normal, &k.select] {
+            let mut menus = vec![];
+            all_menus(root, &mut menus);
+            for m in menus {
+                let mut keys: Vec<_> = m.keys.iter().map(|(k, _)| k.to_string()).collect();
+                keys.sort();
+                let before = keys.len();
+                keys.dedup();
+                assert_eq!(before, keys.len(), "a key is bound twice in {}", m.name);
+            }
+        }
+    }
+
+    #[test]
+    fn every_command_is_bound_and_described() {
+        let k = Keymaps::default();
+        let mut bound = std::collections::HashSet::new();
+        let mut menus = vec![];
+        all_menus(&k.normal, &mut menus);
+        all_menus(&k.select, &mut menus);
+        for m in menus {
+            for (_, n) in &m.keys {
+                if let Node::Cmd(c) = n {
+                    bound.insert(c.name);
+                }
+            }
+        }
+        for c in COMMANDS {
+            assert!(!c.doc.is_empty(), "{} has no description", c.name);
+            assert!(bound.contains(c.name), "{} isn't bound to any key", c.name);
+        }
+    }
+
+    #[test]
+    fn select_mode_differs_only_where_helix_does() {
+        let k = Keymaps::default();
+        let get = |m: &Menu, key: &str| match m.get(Key::parse(key).unwrap()) {
+            Some(Node::Cmd(c)) => Some(c.name),
+            Some(Node::Menu(m)) => Some(m.name),
+            None => None,
+        };
+        assert_eq!(get(&k.normal, "v"), Some("select_mode"));
+        assert_eq!(get(&k.select, "v"), Some("normal_mode"));
+        assert_eq!(get(&k.normal, "esc"), Some("normal_mode"));
+        assert_eq!(get(&k.select, "esc"), Some("exit_select_mode"));
+        for key in ["h", "w", "x", "g", "space", "z", "/", "n", "f"] {
+            assert_eq!(get(&k.normal, key), get(&k.select, key), "{key}");
+        }
+        let Some(Node::Menu(z)) = k.normal.get(Key::parse("Z").unwrap()) else {
+            panic!()
+        };
+        assert!(z.sticky);
+    }
+
+    #[test]
+    fn keys_parse_like_helix() {
+        assert_eq!(Key::parse("C-A-x").unwrap().to_string(), "C-A-x");
+        assert_eq!(Key::parse("S-tab").unwrap().to_string(), "S-tab");
+        assert!(Key::parse("").is_none());
+        assert!(Key::parse("ab").is_none());
+        assert!(Key::parse("C-").is_none());
+        assert_eq!(Key::parse("a").unwrap().char(), Some('a'));
+        assert_eq!(Key::parse("C-a").unwrap().char(), None);
+        assert_eq!(Key::parse("ret").unwrap().char(), None);
+    }
 }

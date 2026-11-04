@@ -100,7 +100,7 @@ fn run() -> Result<ExitCode> {
         None => default_db()?,
     };
     if let Some(Command::Doctor) = cli.command {
-        doctor::run(&db, log.as_deref());
+        doctor::run(&mut std::io::stdout(), &db, log.as_deref())?;
         return Ok(ExitCode::SUCCESS);
     }
     let _conn = store::open(&db)?;

@@ -335,4 +335,78 @@ mod tests {
         let at_fn = spans.iter().rev().find(|(at, _)| *at <= fn_at).unwrap().1;
         assert_eq!(at_fn.fg, theme.get("keyword.function").fg.or(keyword.fg));
     }
+
+    /// Every language in PLAN.md's list is found by file name and highlights something.
+    #[test]
+    fn every_language_highlights() {
+        let (l, theme) = loader();
+        let samples = [
+            ("a.rs", "rust", "fn main() { let x = 1; }\n"),
+            ("a.ts", "typescript", "const x: number = 1;\n"),
+            ("a.tsx", "tsx", "const a = <div>{x}</div>;\n"),
+            ("a.js", "javascript", "function f() { return 1; }\n"),
+            ("a.py", "python", "def f():\n    return 1\n"),
+            ("a.go", "go", "package main\nfunc main() {}\n"),
+            ("a.c", "c", "int main(void) { return 0; }\n"),
+            ("a.cpp", "cpp", "class A { public: int x; };\n"),
+            ("A.java", "java", "class A { void f() {} }\n"),
+            ("a.rb", "ruby", "def f\n  1\nend\n"),
+            ("a.sh", "bash", "if true; then echo hi; fi\n"),
+            ("a.json", "json", "{\"a\": true}\n"),
+            ("a.toml", "toml", "[a]\nb = 1\n"),
+            ("a.yaml", "yaml", "a: [1, true]\n"),
+            ("a.md", "markdown", "# Title\n\n*x*\n"),
+            ("a.html", "html", "<p class=\"x\">hi</p>\n"),
+            ("a.css", "css", "a { color: red; }\n"),
+            ("a.sql", "sql", "SELECT a FROM b WHERE c = 1;\n"),
+            ("a.lua", "lua", "local function f() return 1 end\n"),
+        ];
+        for (file, lang, text) in samples {
+            let rope = Rope::from(text);
+            let found = l.language_for(&Path::new("/r").join(file), rope.slice(..));
+            assert_eq!(found.map(|f| l.name(f)), Some(lang), "{file}");
+            let syntax = l
+                .parse(rope.slice(..), found.unwrap())
+                .unwrap_or_else(|| panic!("{lang} parses"));
+            let spans = l.highlights(&syntax, rope.slice(..), 0..rope.len_bytes(), &theme);
+            assert!(
+                spans.iter().any(|(_, st)| st.fg.is_some()),
+                "{lang} highlights nothing: {spans:?}"
+            );
+        }
+        // Every compiled grammar's queries compile.
+        assert!(l.health().iter().all(|(_, ok)| *ok), "{:?}", l.health());
+        assert_eq!(l.health().len(), 20);
+    }
+
+    #[test]
+    fn plain_text_and_tab_widths() {
+        let (l, _) = loader();
+        let empty = Rope::new();
+        assert!(
+            l.language_for(Path::new("/r/notes.unknown"), empty.slice(..))
+                .is_none()
+        );
+        assert!(
+            l.language_for(Path::new("/r/README"), empty.slice(..))
+                .is_none()
+        );
+        // languages.toml's indent: Go uses tabs of width 4, Ruby two spaces, plain text 4.
+        let go = l.language_for(Path::new("/r/a.go"), empty.slice(..));
+        let rb = l.language_for(Path::new("/r/a.rb"), empty.slice(..));
+        assert_eq!(l.tab_width(go), 4);
+        assert_eq!(l.tab_width(rb), 2);
+        assert_eq!(l.tab_width(None), 4);
+    }
+
+    #[test]
+    fn highlights_only_the_range_asked_for() {
+        let (l, theme) = loader();
+        let text = Rope::from("fn a() {}\nfn b() {}\n");
+        let lang = l.language_for(Path::new("/a.rs"), text.slice(..)).unwrap();
+        let syntax = l.parse(text.slice(..), lang).unwrap();
+        let second = text.line_to_byte(1);
+        let spans = l.highlights(&syntax, text.slice(..), second..text.len_bytes(), &theme);
+        assert!(spans.iter().all(|(at, _)| *at >= second), "{spans:?}");
+    }
 }

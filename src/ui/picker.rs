@@ -84,7 +84,13 @@ impl Picker {
                     Some((i as u32, s))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            // As nucleo's worker sorts them: best score, then the shorter text, then list order.
+            let len = |i: u32| self.items[i as usize].text.chars().count();
+            scored.sort_by(|a, b| {
+                b.1.cmp(&a.1)
+                    .then(len(a.0).cmp(&len(b.0)))
+                    .then(a.0.cmp(&b.0))
+            });
             self.matched = scored.into_iter().map(|(i, _)| i).collect();
         }
         self.cursor = self.cursor.min(self.matched.len().saturating_sub(1));
@@ -433,5 +439,109 @@ mod tests {
             ),
             Outcome::Close
         ));
+    }
+
+    #[test]
+    fn keys_wrap_page_and_jump() {
+        let names: Vec<String> = (0..30).map(|i| format!("f{i:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut p = picker(&refs);
+        let key = |code| Key {
+            code,
+            mods: KeyModifiers::NONE,
+        };
+        let ctrl = |c| Key {
+            code: KeyCode::Char(c),
+            mods: KeyModifiers::CONTROL,
+        };
+        let at = |p: &Picker| p.selected().cloned();
+        p.key(key(KeyCode::Up), 10);
+        assert_eq!(
+            at(&p),
+            Some(Target::Path("f29".into())),
+            "up wraps to the end"
+        );
+        p.key(key(KeyCode::Down), 10);
+        assert_eq!(
+            at(&p),
+            Some(Target::Path("f00".into())),
+            "down wraps to the start"
+        );
+        p.key(ctrl('n'), 10);
+        p.key(key(KeyCode::Tab), 10);
+        assert_eq!(at(&p), Some(Target::Path("f02".into())));
+        p.key(ctrl('p'), 10);
+        p.key(key(KeyCode::BackTab), 10);
+        assert_eq!(at(&p), Some(Target::Path("f00".into())));
+        p.key(ctrl('d'), 10);
+        assert_eq!(at(&p), Some(Target::Path("f10".into())));
+        p.key(key(KeyCode::PageDown), 100);
+        assert_eq!(
+            at(&p),
+            Some(Target::Path("f29".into())),
+            "pages stop at the end"
+        );
+        p.key(ctrl('u'), 10);
+        assert_eq!(at(&p), Some(Target::Path("f19".into())));
+        p.key(key(KeyCode::Home), 10);
+        assert_eq!(at(&p), Some(Target::Path("f00".into())));
+        p.key(key(KeyCode::End), 10);
+        assert_eq!(at(&p), Some(Target::Path("f29".into())));
+        assert!(matches!(p.key(ctrl('c'), 10), Outcome::Close));
+    }
+
+    #[test]
+    fn no_matches_and_enter() {
+        let mut p = picker(&["a.rs", "b.rs"]);
+        typed(&mut p, "zzz");
+        assert_eq!(p.selected(), None);
+        assert!(matches!(
+            p.key(
+                Key {
+                    code: KeyCode::Enter,
+                    mods: KeyModifiers::NONE
+                },
+                10
+            ),
+            Outcome::Close
+        ));
+        let mut p = picker(&["a.rs", "b.rs"]);
+        typed(&mut p, "b");
+        assert!(matches!(
+            p.key(Key { code: KeyCode::Enter, mods: KeyModifiers::NONE }, 10),
+            Outcome::Open(Target::Path(ref s)) if s == "b.rs"
+        ));
+        // Alt and ctrl characters aren't typed into the query.
+        let mut p = picker(&["a.rs"]);
+        p.key(
+            Key {
+                code: KeyCode::Char('x'),
+                mods: KeyModifiers::ALT,
+            },
+            10,
+        );
+        assert_eq!(p.query, "");
+    }
+
+    #[test]
+    fn best_match_first_and_smart_case() {
+        let mut p = picker(&["src/ui/view.rs", "docs/overview.md", "view.rs"]);
+        typed(&mut p, "view.rs");
+        assert_eq!(p.selected(), Some(&Target::Path("view.rs".into())));
+        let mut p = picker(&["README.md", "readme.txt"]);
+        typed(&mut p, "READ");
+        assert_eq!(p.matched.len(), 1, "an uppercase query matches case");
+    }
+
+    #[test]
+    fn clicks_map_to_rows() {
+        let p = picker(&["a", "b", "c"]);
+        let area = Rect::new(0, 0, 40, 10);
+        // Border, prompt, separator, then the items.
+        assert_eq!(p.target_at(area, 5, 3), Some(Target::Path("a".into())));
+        assert_eq!(p.target_at(area, 5, 5), Some(Target::Path("c".into())));
+        assert_eq!(p.target_at(area, 5, 6), None);
+        assert_eq!(p.target_at(area, 0, 3), None, "the border");
+        assert_eq!(p.target_at(area, 5, 1), None, "the prompt");
     }
 }
