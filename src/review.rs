@@ -856,6 +856,21 @@ pub fn take_delivery(
     Ok(Some((round, threads)))
 }
 
+/// What you reviewed in a round: each file's content when you submitted, by path.
+pub fn snapshot(
+    conn: &Connection,
+    review_id: &str,
+    round: u32,
+) -> Result<std::collections::HashMap<String, Vec<u8>>> {
+    Ok(conn
+        .prepare(
+            "SELECT s.path, b.content FROM snapshot_files s JOIN blobs b ON b.hash = s.hash
+             WHERE s.review_id = ?1 AND s.round = ?2",
+        )?
+        .query_map(params![review_id, round], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 /// The comment box's text for a place, saved as you type (see [`save_draft`]).
 pub fn draft(conn: &Connection, review_id: &str, place: &str) -> Result<Option<String>> {
     Ok(conn
@@ -1143,6 +1158,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(snap, 2);
+        let snap = snapshot(&f.conn, id, 2).unwrap();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap["b"], b"1");
+        assert!(snapshot(&f.conn, id, 9).unwrap().is_empty());
         let all = rounds(&f.conn, id).unwrap();
         assert_eq!(all.iter().map(|r| r.comments).collect::<Vec<_>>(), [0, 2]);
         // A new comment after submitting belongs to the next round.

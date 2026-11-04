@@ -39,6 +39,40 @@ pub struct File {
     pub binary: bool,
     /// Line numbers and diff signs; the comment box has none.
     pub gutter: bool,
+    /// For the unified and side-by-side views: where each line came from. `None` for a file
+    /// as it is.
+    pub rows: Option<Vec<Row>>,
+    /// Highlighting precomputed for such a view, from the two sides' syntax trees.
+    pub spans: Option<Vec<(usize, Style)>>,
+    /// The left side of a side-by-side view numbers its lines by the old file.
+    pub old_numbers: bool,
+    /// The biggest line number shown, for the gutter's width.
+    pub numbers: usize,
+}
+
+/// Where a line of a unified or side-by-side view came from (0-based line numbers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    Same {
+        old: usize,
+        new: usize,
+    },
+    Added(usize),
+    Removed(usize),
+    /// Unchanged lines left out of a unified view: how many.
+    Fold(usize),
+    /// Padding that keeps the two sides of a side-by-side view level.
+    Filler,
+}
+
+impl Row {
+    /// The new side's line, for comments and threads.
+    pub fn new_line(self) -> Option<usize> {
+        match self {
+            Row::Same { new, .. } | Row::Added(new) => Some(new),
+            _ => None,
+        }
+    }
 }
 
 impl File {
@@ -149,7 +183,89 @@ impl File {
             collapsed: false,
             binary,
             gutter: true,
+            rows: None,
+            spans: None,
+            old_numbers: false,
+            numbers: 0,
         }
+        .numbered()
+    }
+
+    fn numbered(mut self) -> File {
+        self.numbers = self.text.len_lines();
+        self
+    }
+
+    /// A view made of lines from both sides (unified, or one side of side by side).
+    pub fn synthetic(
+        text: String,
+        tab_width: usize,
+        rows: Vec<Row>,
+        spans: Vec<(usize, Style)>,
+        numbers: usize,
+    ) -> File {
+        let text = Rope::from(text);
+        let sel = Selection::point(0).ensure_invariants(text.slice(..));
+        File {
+            text,
+            hunks: vec![],
+            sel,
+            top: 0,
+            left: 0,
+            syntax: None,
+            tab_width,
+            notices: vec![],
+            collapsed: false,
+            binary: false,
+            gutter: true,
+            rows: Some(rows),
+            spans: Some(spans),
+            old_numbers: false,
+            numbers,
+        }
+    }
+
+    /// The new side's line shown on view line `line`, if it is one.
+    pub fn new_line_at(&self, line: usize) -> Option<usize> {
+        match &self.rows {
+            None => Some(line),
+            Some(rows) => rows.get(line).and_then(|r| r.new_line()),
+        }
+    }
+
+    /// The view line showing the new side's line `new` (or the next one shown after it).
+    pub fn line_of(&self, new: usize) -> usize {
+        match &self.rows {
+            None => new,
+            Some(rows) => rows
+                .iter()
+                .position(|r| r.new_line().is_some_and(|n| n >= new))
+                .unwrap_or(rows.len().saturating_sub(1)),
+        }
+    }
+
+    /// The new side's line nearest at or after view line `line`, for a cursor on a removed or
+    /// folded line.
+    pub fn new_line_near(&self, line: usize) -> Option<usize> {
+        match &self.rows {
+            None => Some(line),
+            Some(rows) => rows[line.min(rows.len().saturating_sub(1))..]
+                .iter()
+                .find_map(|r| r.new_line())
+                .or_else(|| rows.iter().rev().find_map(|r| r.new_line())),
+        }
+    }
+
+    /// One side of a change, highlighted by `path`'s language: the views' raw material.
+    pub fn side(path: &std::path::Path, bytes: &[u8], loader: &Loader) -> File {
+        File::new(
+            path,
+            bytes,
+            source::is_binary(bytes),
+            vec![],
+            vec![],
+            loader,
+        )
     }
 
     /// A buffer for writing in (the comment box): Markdown, with no gutter.
@@ -179,7 +295,7 @@ impl File {
         if !self.gutter {
             return 0;
         }
-        1 + 1 + self.text.len_lines().to_string().len().max(3) + 1 + 1
+        1 + 1 + self.numbers.to_string().len().max(3) + 1 + 1
     }
 }
 
@@ -260,14 +376,19 @@ pub fn draw(
     let height = area.bottom().saturating_sub(y) as usize;
     let top = top.min(text.len_lines().saturating_sub(1));
     let last = (top + height).min(text.len_lines());
-    let spans = match &file.syntax {
-        Some(s) => loader.highlights(
-            s,
-            text,
-            text.line_to_byte(top)..text.line_to_byte(last),
-            theme,
-        ),
-        None => vec![],
+    let computed;
+    let spans: &[(usize, Style)] = match (&file.spans, &file.syntax) {
+        (Some(s), _) => s,
+        (None, Some(s)) => {
+            computed = loader.highlights(
+                s,
+                text,
+                text.line_to_byte(top)..text.line_to_byte(last),
+                theme,
+            );
+            &computed
+        }
+        (None, None) => &[],
     };
     let mut span = 0;
 
@@ -276,7 +397,7 @@ pub fn draw(
     } else {
         0
     };
-    let digits = text.len_lines().to_string().len().max(3);
+    let digits = file.numbers.to_string().len().max(3);
     let cursor_lines: Vec<usize> = file
         .sel
         .iter()
@@ -318,19 +439,33 @@ pub fn draw(
                 break;
             }
         }
-        let sign = file
-            .hunks
-            .get(hunk_i)
-            .filter(|h| h.after.start <= l)
-            .map(|h| {
-                if h.before.is_empty() {
-                    ("▍", added, true)
-                } else if h.after.is_empty() {
-                    ("▔", deleted, false) // a removal shows on the first row only
-                } else {
-                    ("▍", modified, true)
-                }
-            });
+        let kind = file.rows.as_ref().and_then(|r| r.get(line)).copied();
+        let number = match kind {
+            // The empty line after a view's last line has no number.
+            None if file.rows.is_some() => None,
+            None => Some(line),
+            Some(Row::Same { old, new }) => Some(if file.old_numbers { old } else { new }),
+            Some(Row::Added(n) | Row::Removed(n)) => Some(n),
+            Some(Row::Fold(_) | Row::Filler) => None,
+        };
+        let sign = match kind {
+            Some(Row::Added(_)) => Some(("▍", added, true)),
+            Some(Row::Removed(_)) => Some(("▍", deleted, true)),
+            Some(_) => None,
+            None => file
+                .hunks
+                .get(hunk_i)
+                .filter(|h| h.after.start <= l)
+                .map(|h| {
+                    if h.before.is_empty() {
+                        ("▍", added, true)
+                    } else if h.after.is_empty() {
+                        ("▔", deleted, false) // a removal shows on the first row only
+                    } else {
+                        ("▍", modified, true)
+                    }
+                }),
+        };
         let mark = threads
             .marks
             .iter()
@@ -351,7 +486,9 @@ pub fn draw(
                 } else {
                     "ui.linenr"
                 });
-                buf.set_string(area.x + 2, y, format!("{:>digits$}", line + 1), nr_style);
+                if let Some(n) = number {
+                    buf.set_string(area.x + 2, y, format!("{:>digits$}", n + 1), nr_style);
+                }
             }
             if let Some((sign, style, every_row)) = sign
                 && (row == 0 || every_row)

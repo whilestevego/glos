@@ -529,6 +529,13 @@ the dashboard.
   only after 3 quiet seconds or at a submit, shown with the code they were on.
 - **M4, views and scopes.** Unified and side by side; since last review, per commit, files filter;
   file tree.
+  *Status (2026-11-04):* built: `space v` (`f` file, `u` unified, `s` side by side) and `:view`,
+  keeping your line; the unified and side-by-side views are read-only documents made of both
+  sides' lines, so motions, search and selections work in them and comments map to the new side;
+  `space o` (`b` base, `r` since your last review, `c` per commit with `]C`/`[C`, `f` filter) and
+  `:scope`, `:filter <glob>` / `:filter threads`; `space e` file tree with `+added -removed` and
+  open-thread counts. Commits are read-only: threads are hidden and comments refused there.
+  Removed lines shown inline in the file view are left for later.
 - **M5, dashboard and launching.** Multi-review dashboard; closing and archiving reviews, `glos gc`;
   `open_command` and `glos open`; shell completions and the man page.
 - **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish;

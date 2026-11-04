@@ -3,8 +3,10 @@
 
 mod commands;
 mod comments;
+mod diffview;
 mod keymap;
 mod picker;
+mod tree;
 mod view;
 
 use std::{
@@ -13,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -100,6 +102,52 @@ impl Prompt {
     }
 }
 
+/// How the file on screen is shown: whole with the gutter, as hunks, or old beside new.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ViewKind {
+    File,
+    Unified,
+    Split,
+}
+
+impl ViewKind {
+    fn name(self) -> &'static str {
+        match self {
+            ViewKind::File => "file",
+            ViewKind::Unified => "unified",
+            ViewKind::Split => "split",
+        }
+    }
+}
+
+/// The unified or side-by-side document for one file, built when it's shown.
+struct Alt {
+    cur: Cur,
+    kind: ViewKind,
+    doc: File,
+    /// The old side, for side by side.
+    left: Option<File>,
+}
+
+/// Which changes are reviewed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// Branch vs base for git; old vs new for two files or folders.
+    Base,
+    /// Against the snapshot of a round: what changed since you submitted it.
+    SinceReview(u32),
+    /// One commit of the branch, by its index (oldest first).
+    Commit(usize),
+}
+
+/// `:filter`: which of the changed files to step through.
+#[derive(Clone, Debug)]
+pub enum Filter {
+    Glob(String, globset::GlobMatcher),
+    /// Only files with open threads.
+    Threads,
+}
+
 /// The comment box's height, borders included.
 const BOX_HEIGHT: u16 = 8;
 
@@ -129,6 +177,21 @@ const TYPABLE: &[(&str, &[&str], &str)] = &[
         "Submit the review to the agent: approve, changes or comment",
     ),
     ("editor", &[], "Edit the open comment in $VISUAL or $EDITOR"),
+    (
+        "view",
+        &[],
+        "Show the file whole, unified, or split side by side",
+    ),
+    (
+        "scope",
+        &[],
+        "Review the branch (base), since your last review, or commit by commit",
+    ),
+    (
+        "filter",
+        &[],
+        "Only files matching a glob, or with open threads; empty for all",
+    ),
     ("toggle-option", &["toggle"], "Toggle an option: soft-wrap"),
 ];
 
@@ -154,6 +217,17 @@ fn completions(line: &str) -> (usize, Vec<(String, &'static str)>) {
                     ("comment", "Send comments without a verdict"),
                 ],
                 "toggle" | "toggle-option" => &[("soft-wrap", "Soft-wrap long lines")],
+                "view" => &[
+                    ("file", "The whole file, changes in the gutter"),
+                    ("unified", "Changes with three lines around them"),
+                    ("split", "Old and new side by side"),
+                ],
+                "scope" => &[
+                    ("base", "The branch against its base (or old against new)"),
+                    ("since", "What changed since your last submit"),
+                    ("commits", "One commit at a time"),
+                ],
+                "filter" => &[("threads", "Only files with open threads")],
                 _ => &[],
             };
             (
@@ -223,6 +297,18 @@ pub struct App {
     watch: Option<Watch>,
     /// When files last changed, until they settle.
     changed_at: Option<std::time::Instant>,
+    view_kind: ViewKind,
+    alt: Option<Alt>,
+    /// The old side's area, in the side-by-side view.
+    left_view: Rect,
+    scope: Scope,
+    /// The branch's commits, for the per-commit scope.
+    commits: Vec<crate::source::Commit>,
+    filter: Option<Filter>,
+    /// The last round submitted, for "since last review".
+    last_round: Option<u32>,
+    tree: Option<tree::Tree>,
+    tree_area: Rect,
 }
 
 /// After this long without file changes, threads whose code is gone are marked outdated.
@@ -339,6 +425,15 @@ impl App {
             data_version: 0,
             watch: None,
             changed_at: None,
+            view_kind: ViewKind::File,
+            alt: None,
+            left_view: Rect::default(),
+            scope: Scope::Base,
+            commits: vec![],
+            filter: None,
+            last_round: None,
+            tree: None,
+            tree_area: Rect::default(),
         };
         app.load(0);
         app.reload();
@@ -356,6 +451,9 @@ impl App {
             self.review = self.review.reload(&self.conn)?;
             self.threads = review::threads(&self.conn, &self.review.id)?;
             self.unsent = review::unsent(&self.conn, &self.review.id)?;
+            self.last_round = review::rounds(&self.conn, &self.review.id)?
+                .last()
+                .map(|r| r.n);
             Ok(())
         })();
         if let Err(e) = result {
@@ -434,14 +532,7 @@ impl App {
             Some(a) => (order(&a.path), a.start as usize - 1),
             None => (0, 0),
         };
-        let here = {
-            let f = self.main_file();
-            let text = f.text.slice(..);
-            (
-                order(self.main_path()),
-                text.char_to_line(f.sel.primary().cursor(text)),
-            )
-        };
+        let here = (order(self.main_path()), self.cursor_new_line());
         let mut unread: Vec<(bool, (usize, usize), String)> = self
             .threads
             .iter()
@@ -465,11 +556,165 @@ impl App {
 
     /// The source read again, the way glos found it at the start.
     fn rebuild_source(&self) -> Result<Source> {
-        match (&self.source.git, &self.source.paths) {
-            (Some(g), _) => Source::git(&g.worktree, Some(&g.base)),
-            (None, Some((old, new))) => Source::diff(old, new),
+        let base = match (&self.source.git, &self.source.paths) {
+            (Some(g), _) => Source::git(&g.worktree, Some(&g.base))?,
+            (None, Some((old, new))) => Source::diff(old, new)?,
             (None, None) => anyhow::bail!("nothing to read again"),
+        };
+        let mut source = match &self.scope {
+            Scope::Base => base,
+            Scope::SinceReview(n) => {
+                base.since(&review::snapshot(&self.conn, &self.review.id, *n)?)?
+            }
+            Scope::Commit(i) => {
+                let c = self.commits.get(*i).context("no such commit")?;
+                base.commit(c.id)?
+            }
+        };
+        match &self.filter {
+            Some(Filter::Glob(_, m)) => source.changes.retain(|c| {
+                m.is_match(&c.path) || c.old_path.as_ref().is_some_and(|p| m.is_match(p))
+            }),
+            Some(Filter::Threads) => {
+                let open: HashSet<&str> = self
+                    .threads
+                    .iter()
+                    .filter(|t| t.status == "open")
+                    .filter_map(|t| t.anchor.as_ref().map(|a| a.path.as_str()))
+                    .collect();
+                source.changes.retain(|c| open.contains(c.path.as_str()));
+            }
+            None => {}
         }
+        Ok(source)
+    }
+
+    /// Changes scope or filter: the changes are found again, and you stay on your file.
+    fn rescope(&mut self, scope: Scope, filter: Option<Filter>) {
+        let (old_scope, old_filter) = (self.scope.clone(), self.filter.clone());
+        self.scope = scope;
+        self.filter = filter;
+        if let Scope::Commit(_) = self.scope
+            && self.commits.is_empty()
+        {
+            match self.source.commits() {
+                Ok(c) if !c.is_empty() => self.commits = c,
+                Ok(_) => {
+                    self.status = Some(("The branch has no commits since its base".into(), true));
+                    (self.scope, self.filter) = (old_scope, old_filter);
+                    return;
+                }
+                Err(e) => {
+                    self.status = Some((format!("{e:#}"), true));
+                    (self.scope, self.filter) = (old_scope, old_filter);
+                    return;
+                }
+            }
+        }
+        if let Err(e) = self.rebuild_source() {
+            self.status = Some((format!("{e:#}"), true));
+            (self.scope, self.filter) = (old_scope, old_filter);
+            return;
+        }
+        self.files_changed();
+        // Showing nothing but your file isn't useful: go to the first change in scope.
+        if matches!(self.cur, Cur::Context(_)) && !self.source.changes.is_empty() {
+            self.open(Target::Change(0));
+        }
+        self.status = Some((
+            match self.source.changes.len() {
+                0 => "No changes in this scope".to_string(),
+                n => format!(
+                    "{}: {n} file{}",
+                    self.scope_label(),
+                    if n == 1 { "" } else { "s" }
+                ),
+            },
+            false,
+        ));
+    }
+
+    /// The file tree's entries: each change with its added and removed lines and open threads.
+    fn tree_entries(&self) -> Vec<tree::Entry> {
+        self.source
+            .changes
+            .iter()
+            .map(|c| {
+                let read = |x: &Content| self.source.read(x).ok().flatten().unwrap_or_default();
+                let (old, new) = (read(&c.old), read(&c.new));
+                let (mut added, mut removed) = (0, 0);
+                if !crate::source::is_binary(&old) && !crate::source::is_binary(&new) {
+                    for h in crate::diff::hunks(
+                        &String::from_utf8_lossy(&old),
+                        &String::from_utf8_lossy(&new),
+                    ) {
+                        added += h.after.len();
+                        removed += h.before.len();
+                    }
+                }
+                let threads = self
+                    .threads
+                    .iter()
+                    .filter(|t| {
+                        t.status == "open" && t.anchor.as_ref().is_some_and(|a| a.path == c.path)
+                    })
+                    .count();
+                tree::Entry {
+                    path: c.path.clone(),
+                    added,
+                    removed,
+                    threads,
+                }
+            })
+            .collect()
+    }
+
+    /// Keys while the file tree is focused: `j`/`k` move, `ret` or `l` opens the file (the
+    /// tree stays), `esc` goes back to the file, `q` closes the tree.
+    fn tree_key(&mut self, key: Key) {
+        let Some(t) = &mut self.tree else { return };
+        match (key.code, key.char()) {
+            (KeyCode::Down, _) | (_, Some('j')) => t.step(true),
+            (KeyCode::Up, _) | (_, Some('k')) => t.step(false),
+            (KeyCode::Enter, _) | (_, Some('l')) => {
+                if let Some(p) = t.selected().map(str::to_string) {
+                    t.focused = false;
+                    self.open(Target::Path(p));
+                }
+            }
+            (KeyCode::Esc, _) => t.focused = false,
+            (_, Some('q')) => {
+                self.tree = None;
+                self.layout();
+            }
+            _ => {}
+        }
+    }
+
+    /// The scope and filter, as the statusline and messages say them.
+    fn scope_label(&self) -> String {
+        let mut s = match &self.scope {
+            Scope::Base if self.source.git.is_some() => "Branch vs base".to_string(),
+            Scope::Base => "Old vs new".to_string(),
+            Scope::SinceReview(n) => format!("Since round {n}"),
+            Scope::Commit(i) => {
+                let c = &self.commits[*i];
+                let id = c.id.to_string();
+                format!(
+                    "Commit {}/{} {} {}",
+                    i + 1,
+                    self.commits.len(),
+                    &id[..7],
+                    c.summary
+                )
+            }
+        };
+        match &self.filter {
+            Some(Filter::Glob(g, _)) => s += &format!(", files {g}"),
+            Some(Filter::Threads) => s += ", files with open threads",
+            None => {}
+        }
+        s
     }
 
     /// Files changed on disk: the review's changes are found again, and every loaded file is
@@ -477,6 +722,9 @@ impl App {
     /// does when a file changes under it. Threads follow their lines.
     fn files_changed(&mut self) {
         self.changed_at = Some(std::time::Instant::now());
+        if let Some(a) = self.alt.take() {
+            self.sync_base(a);
+        }
         let source = match self.rebuild_source() {
             Ok(s) => s,
             Err(e) => {
@@ -554,6 +802,16 @@ impl App {
             }
         }
         self.reanchor(false);
+        self.ensure_alt();
+        if let Some(t) = &self.tree {
+            let (focused, selected) = (t.focused, t.selected().map(str::to_string));
+            let mut t = tree::Tree::new(self.tree_entries());
+            t.focused = focused;
+            if let Some(p) = selected {
+                t.select(&p);
+            }
+            self.tree = Some(t);
+        }
     }
 
     /// Places every thread again against the files on disk. Threads whose code is gone are
@@ -668,8 +926,22 @@ impl App {
         } else {
             0
         };
-        self.view = Rect::new(0, 0, w, h - box_h);
-        self.box_area = Rect::new(0, h - box_h, w, box_h);
+        // The file tree takes the left; side by side halves what's left.
+        let tree_w = if self.tree.is_some() {
+            (w / 3).clamp(16, 40).min(w.saturating_sub(20))
+        } else {
+            0
+        };
+        self.tree_area = Rect::new(0, 0, tree_w, h);
+        let (x, rest) = (tree_w, w - tree_w);
+        self.view = Rect::new(x, 0, rest, h - box_h);
+        self.left_view = Rect::default();
+        if self.split_left().is_some() {
+            let half = rest / 2;
+            self.left_view = Rect::new(x, 0, half, h - box_h);
+            self.view = Rect::new(x + half, 0, rest - half, h - box_h);
+        }
+        self.box_area = Rect::new(x, h - box_h, rest, box_h);
     }
 
     fn load(&mut self, i: usize) {
@@ -729,18 +1001,133 @@ impl App {
         self.main_file_mut()
     }
 
-    /// The file on screen, under the comment box if one is open.
+    /// The file on screen, under the comment box if one is open: in the unified and
+    /// side-by-side views, the document built for it.
     fn main_file(&self) -> &File {
+        match &self.alt {
+            Some(a) if a.cur == self.cur && a.kind == self.view_kind => &a.doc,
+            _ => self.base_file(),
+        }
+    }
+
+    fn main_file_mut(&mut self) -> &mut File {
+        let alt = matches!(&self.alt, Some(a) if a.cur == self.cur && a.kind == self.view_kind);
+        if alt {
+            return &mut self.alt.as_mut().unwrap().doc;
+        }
+        self.base_file_mut()
+    }
+
+    /// The file itself: a change's new side (or its old side, if deleted), or a context file.
+    fn base_file(&self) -> &File {
         match &self.cur {
             Cur::Change(i) => self.files[*i].as_ref().expect("the current file is loaded"),
             Cur::Context(p) => &self.context[p],
         }
     }
 
-    fn main_file_mut(&mut self) -> &mut File {
+    fn base_file_mut(&mut self) -> &mut File {
         match &self.cur {
             Cur::Change(i) => self.files[*i].as_mut().expect("the current file is loaded"),
             Cur::Context(p) => self.context.get_mut(p).expect("the current file is loaded"),
+        }
+    }
+
+    /// The side-by-side view's old side, when it's on screen.
+    fn split_left(&self) -> Option<&File> {
+        match &self.alt {
+            Some(a) if a.cur == self.cur && a.kind == self.view_kind => a.left.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The cursor's line on the new side: for a removed or folded line in a view, the next
+    /// new line.
+    fn cursor_new_line(&self) -> usize {
+        let f = self.main_file();
+        let text = f.text.slice(..);
+        let line = text.char_to_line(f.sel.primary().cursor(text));
+        f.new_line_near(line).unwrap_or(0)
+    }
+
+    /// Builds (or drops) the unified or side-by-side document for the file on screen, keeping
+    /// the cursor on the same line of the new side.
+    fn ensure_alt(&mut self) {
+        let current = matches!(&self.alt, Some(a) if a.cur == self.cur && a.kind == self.view_kind);
+        if current {
+            return;
+        }
+        if let Some(a) = self.alt.take() {
+            self.sync_base(a);
+            if self.view_kind == ViewKind::File {
+                self.layout();
+                self.scroll_to_cursor(true);
+            }
+        }
+        if self.view_kind == ViewKind::File {
+            return;
+        }
+        let Cur::Change(i) = self.cur.clone() else {
+            return; // a context file has no diff
+        };
+        let base = self.files[i].as_ref().expect("the current file is loaded");
+        if base.binary || base.collapsed {
+            return;
+        }
+        let change = &self.source.changes[i];
+        let read = |c: &Content| self.source.read(c).ok().flatten().unwrap_or_default();
+        let (old_bytes, new_bytes) = (read(&change.old), read(&change.new));
+        let path = self.source.root.join(&change.path);
+        let old = File::side(&path, &old_bytes, &self.loader);
+        let new = File::side(&path, &new_bytes, &self.loader);
+        let hunks = crate::diff::hunks(
+            &String::from_utf8_lossy(&old_bytes),
+            &String::from_utf8_lossy(&new_bytes),
+        );
+        let (mut doc, left) = match self.view_kind {
+            ViewKind::Unified => (
+                diffview::unified(&old, &new, &hunks, &self.loader, &self.theme),
+                None,
+            ),
+            _ => {
+                let (l, r) = diffview::split(&old, &new, &hunks, &self.loader, &self.theme);
+                (r, Some(l))
+            }
+        };
+        // The same place: the base file's cursor line and column.
+        let t = base.text.slice(..);
+        let cursor = base.sel.primary().cursor(t);
+        let line = t.char_to_line(cursor);
+        let col = cursor - t.line_to_char(line);
+        let dt = doc.text.slice(..);
+        let at = doc.line_of(line).min(dt.len_lines() - 1);
+        let len = helix_core::line_ending::line_end_char_index(&dt, at) - dt.line_to_char(at);
+        doc.sel = Selection::point(dt.line_to_char(at) + col.min(len)).ensure_invariants(dt);
+        self.alt = Some(Alt {
+            cur: self.cur.clone(),
+            kind: self.view_kind,
+            doc,
+            left,
+        });
+        self.layout();
+        self.scroll_to_cursor(true);
+    }
+
+    /// Leaving a view: its cursor goes back to the file, so the next view opens there.
+    fn sync_base(&mut self, a: Alt) {
+        let t = a.doc.text.slice(..);
+        let line = t.char_to_line(a.doc.sel.primary().cursor(t));
+        let Some(n) = a.doc.new_line_near(line) else {
+            return;
+        };
+        let file = match &a.cur {
+            Cur::Change(i) => self.files[*i].as_mut(),
+            Cur::Context(p) => self.context.get_mut(p),
+        };
+        if let Some(f) = file {
+            let t = f.text.slice(..);
+            let n = n.min(t.len_lines() - 1);
+            f.sel = Selection::point(t.line_to_char(n)).ensure_invariants(t);
         }
     }
 
@@ -754,7 +1141,29 @@ impl App {
 
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
-        comments::layout(&self.threads, self.main_path(), &self.expanded, &self.theme)
+        // A commit is history: threads are on the branch's code now.
+        if matches!(self.scope, Scope::Commit(_)) {
+            return Threads::default();
+        }
+        let t = comments::layout(&self.threads, self.main_path(), &self.expanded, &self.theme);
+        let f = self.main_file();
+        if f.rows.is_none() {
+            return t;
+        }
+        // In a view, threads go under the view's line for their last new-side line.
+        let mut rows: std::collections::BTreeMap<usize, Vec<comments::ThreadRow>> =
+            Default::default();
+        for (line, r) in t.rows {
+            rows.entry(f.line_of(line)).or_default().extend(r);
+        }
+        Threads {
+            rows,
+            marks: t
+                .marks
+                .into_iter()
+                .map(|(s, e, st)| (f.line_of(s), f.line_of(e), st))
+                .collect(),
+        }
     }
 
     /// Thread rows as helix-core annotations, so scrolling and the mouse see them; none in the
@@ -768,9 +1177,10 @@ impl App {
         a
     }
 
-    /// Soft wrap of the focused file: the comment box always wraps.
+    /// Soft wrap of the focused file: the comment box always wraps; side by side never does,
+    /// so the two sides stay level.
     fn wrap(&self) -> bool {
-        self.wrap || self.comment_box.is_some()
+        self.comment_box.is_some() || (self.wrap && self.split_left().is_none())
     }
 
     /// The focused file's text area: (rows, columns).
@@ -804,6 +1214,7 @@ impl App {
                 let _ = self.push_jump();
                 self.load(i);
                 self.cur = Cur::Change(i);
+                self.ensure_alt();
             }
             Target::Path(p) => {
                 // A changed file opens as its change, with its diff.
@@ -841,6 +1252,7 @@ impl App {
     /// Selects whole lines `start..=end` (0-based) of the file on screen, as `x` does.
     fn select_lines(&mut self, start: usize, end: usize) {
         let file = self.main_file_mut();
+        let (start, end) = (file.line_of(start), file.line_of(end));
         let text = file.text.slice(..);
         let last = text.len_lines() - 1;
         let (from, to) = (
@@ -852,9 +1264,12 @@ impl App {
 
     /// The thread under the cursor in the file on screen: the innermost one holding its line.
     fn thread_here(&self) -> Option<usize> {
+        if matches!(self.scope, Scope::Commit(_)) {
+            return None;
+        }
         let f = self.main_file();
         let text = f.text.slice(..);
-        let line = text.char_to_line(f.sel.primary().cursor(text)) as u32 + 1;
+        let line = f.new_line_at(text.char_to_line(f.sel.primary().cursor(text)))? as u32 + 1;
         let path = self.main_path();
         self.threads
             .iter()
@@ -873,6 +1288,9 @@ impl App {
         {
             return Err("Comments go on the new side, and this file was deleted");
         }
+        if matches!(self.scope, Scope::Commit(_)) {
+            return Err("A commit is history: comment in another scope (space o)");
+        }
         let f = self.main_file();
         if f.binary {
             return Err("A binary file has no lines to comment on");
@@ -888,7 +1306,16 @@ impl App {
             n - 1
         };
         let (s, e) = f.sel.primary().line_range(text);
-        let e = e.min(last);
+        // In a view, the selected lines that are on the new side.
+        let (s, e) = if f.rows.is_some() {
+            let new: Vec<usize> = (s..=e).filter_map(|l| f.new_line_at(l)).collect();
+            match (new.iter().min(), new.iter().max()) {
+                (Some(a), Some(b)) => (*a, *b),
+                _ => return Err("Comments go on the new side: select lines that are on it"),
+            }
+        } else {
+            (s, e.min(last))
+        };
         Ok(Anchor {
             path: self.main_path().to_string(),
             start: s.min(e) as u32 + 1,
@@ -992,7 +1419,7 @@ impl App {
 
     /// `ret` in the box: the comment is written to the store, and the box closes.
     fn save_box(&mut self) {
-        let file_text = self.main_file().text.to_string();
+        let file_text = self.base_file().text.to_string();
         let Some(b) = &mut self.comment_box else {
             return;
         };
@@ -1085,9 +1512,7 @@ impl App {
             .collect();
         spans.sort();
         spans.dedup();
-        let f = self.main_file();
-        let text = f.text.slice(..);
-        let line = text.char_to_line(f.sel.primary().cursor(text));
+        let line = self.cursor_new_line();
         let target = match (edge, forward) {
             (true, true) => spans.last(),
             (true, false) => spans.first(),
@@ -1156,6 +1581,15 @@ impl App {
             "goto_next_diag" | "goto_prev_diag" | "goto_first_diag" | "goto_last_diag"
             | "diagnostics_picker" => here(),
             "workspace_diagnostics_picker" => !self.threads.is_empty(),
+            "view_file" => self.view_kind != ViewKind::File,
+            "view_unified" => self.view_kind != ViewKind::Unified,
+            "view_split" => self.view_kind != ViewKind::Split,
+            "scope_base" => self.scope != Scope::Base,
+            "scope_since_review" => {
+                self.last_round.is_some() && !matches!(self.scope, Scope::SinceReview(_))
+            }
+            "scope_commits" => self.source.git.is_some() && !matches!(self.scope, Scope::Commit(_)),
+            "goto_next_commit" | "goto_prev_commit" => matches!(self.scope, Scope::Commit(_)),
             _ => true,
         }
     }
@@ -1182,6 +1616,10 @@ impl App {
         }
         if self.prompt.is_some() {
             self.prompt_key(key);
+            return None;
+        }
+        if self.tree.as_ref().is_some_and(|t| t.focused) {
+            self.tree_key(key);
             return None;
         }
         if let Some(next) = self.next_key.take() {
@@ -1461,6 +1899,11 @@ impl App {
                     | A::NextUnread(_)
                     | A::ToggleResolved
                     | A::GotoSuggestion
+                    | A::View(_)
+                    | A::Scope(_)
+                    | A::NextCommit(_)
+                    | A::FilterPrompt
+                    | A::FileTree
             )
         {
             self.status = Some((
@@ -1510,6 +1953,72 @@ impl App {
                     self.reload();
                 }
                 None => self.status = Some(("No thread here".into(), true)),
+            },
+            A::View(kind) => {
+                self.view_kind = kind;
+                self.ensure_alt();
+                if kind != ViewKind::File && self.split_left().is_none() && self.alt.is_none() {
+                    self.status = Some((
+                        format!(
+                            "This file has no diff to show {}; showing it whole",
+                            kind.name()
+                        ),
+                        false,
+                    ));
+                }
+            }
+            A::Scope(which) => {
+                let scope = match which {
+                    keymap::ScopeKey::Base => Some(Scope::Base),
+                    keymap::ScopeKey::SinceReview => self.last_round.map(Scope::SinceReview),
+                    keymap::ScopeKey::Commits => Some(Scope::Commit(0)),
+                };
+                match scope {
+                    Some(s) => self.rescope(s, self.filter.clone()),
+                    None => {
+                        self.status =
+                            Some(("Nothing submitted yet, so no last review".into(), true))
+                    }
+                }
+            }
+            A::NextCommit(forward) => match self.scope {
+                Scope::Commit(i) => {
+                    let n = self.commits.len();
+                    let step = self.count.map_or(1, NonZeroUsize::get);
+                    let j = if forward {
+                        (i + step).min(n - 1)
+                    } else {
+                        i.saturating_sub(step)
+                    };
+                    if j == i {
+                        self.status = Some((
+                            if forward {
+                                "The last commit"
+                            } else {
+                                "The first commit"
+                            }
+                            .into(),
+                            false,
+                        ));
+                    } else {
+                        self.rescope(Scope::Commit(j), self.filter.clone());
+                    }
+                }
+                _ => self.status = Some(("Not in the per-commit scope: space o c".into(), true)),
+            },
+            A::FilterPrompt => {
+                let mut p = Prompt::new(PromptKind::Command);
+                p.line = "filter ".into();
+                self.prompt = Some(p);
+            }
+            A::FileTree => match &mut self.tree {
+                Some(t) if !t.focused => t.focused = true,
+                Some(_) => self.tree = None,
+                None => {
+                    let mut t = tree::Tree::new(self.tree_entries());
+                    t.select(self.main_path());
+                    self.tree = Some(t);
+                }
             },
             A::GotoSuggestion => match self.review.suggestion.clone() {
                 Some(s) => {
@@ -1567,11 +2076,12 @@ impl App {
                     self.toggle_thread(i);
                     return None;
                 }
-                let file = self.main_file_mut();
+                let file = self.base_file_mut();
                 let marker = "generated file, collapsed; enter expands";
                 if file.notices.iter().any(|n| n == marker) || file.collapsed {
                     file.collapsed = !file.collapsed;
                 }
+                self.ensure_alt();
             }
             AppAction::Yank | AppAction::YankToClipboard { .. } => {
                 let file = self.file();
@@ -1625,6 +2135,7 @@ impl App {
                 if let Cur::Change(i) = self.cur {
                     self.load(i);
                 }
+                self.ensure_alt();
                 let file = self.file_mut();
                 file.sel = sel.ensure_invariants(file.text.slice(..));
                 self.scroll_to_cursor(true);
@@ -1747,6 +2258,21 @@ impl App {
             return;
         }
         if self.prompt.is_some() || self.comment_box.is_some() {
+            return;
+        }
+        // A click in the file tree opens that file.
+        if let Some(t) = &self.tree
+            && m.column < self.tree_area.right()
+        {
+            if m.kind == MouseEventKind::Down(MouseButton::Left)
+                && let Some(p) = t.path_at(self.tree_area, m.row).map(str::to_string)
+            {
+                self.open(Target::Path(p.clone()));
+                if let Some(t) = &mut self.tree {
+                    t.select(&p);
+                    t.focused = false;
+                }
+            }
             return;
         }
         // A click on a thread opens or closes it.
@@ -1897,6 +2423,42 @@ impl App {
                     ))
                 }
             },
+            "view" => match args.trim() {
+                "file" => _ = self.app_command(AppAction::View(ViewKind::File)),
+                "unified" => _ = self.app_command(AppAction::View(ViewKind::Unified)),
+                "split" => _ = self.app_command(AppAction::View(ViewKind::Split)),
+                _ => self.status = Some(("View how? :view file, unified or split".into(), true)),
+            },
+            "scope" => {
+                let key = match args.trim() {
+                    "base" => Some(keymap::ScopeKey::Base),
+                    "since" => Some(keymap::ScopeKey::SinceReview),
+                    "commits" => Some(keymap::ScopeKey::Commits),
+                    _ => None,
+                };
+                match key {
+                    Some(k) => _ = self.app_command(AppAction::Scope(k)),
+                    None => {
+                        self.status = Some(("Scope? :scope base, since or commits".into(), true))
+                    }
+                }
+            }
+            "filter" => {
+                let arg = args.trim();
+                let filter = match arg {
+                    "" => Ok(None),
+                    "threads" => Ok(Some(Filter::Threads)),
+                    g => globset::Glob::new(g)
+                        .map(|glob| Some(Filter::Glob(g.to_string(), glob.compile_matcher()))),
+                };
+                match filter {
+                    Ok(f) => {
+                        let scope = self.scope.clone();
+                        self.rescope(scope, f);
+                    }
+                    Err(e) => self.status = Some((format!("Bad glob: {e}"), true)),
+                }
+            }
             "editor" => match self.comment_box {
                 Some(_) => self.run_editor = true,
                 None => {
@@ -2039,6 +2601,42 @@ impl App {
             return;
         }
         self.layout();
+        let current = self.main_path().to_string();
+        let tree_area = self.tree_area;
+        if let Some(t) = &mut self.tree {
+            t.render(buf, tree_area, &current, &self.theme);
+        }
+        let threads = self.main_threads();
+        if let Some(left) = self.split_left() {
+            // The old side follows the new side's scroll; its thread rows are blank so the
+            // sides stay level.
+            let right = self.main_file();
+            let mut blank = Threads::default();
+            for (line, rows) in &threads.rows {
+                let pad = rows
+                    .iter()
+                    .map(|r| comments::ThreadRow {
+                        text: String::new(),
+                        style: Style::default(),
+                        thread: r.thread,
+                    })
+                    .collect();
+                blank.rows.insert(*line, pad);
+            }
+            let none = Style::default();
+            view::draw(
+                buf,
+                self.left_view,
+                left,
+                right.top,
+                right.left,
+                false,
+                &self.loader,
+                &self.theme,
+                Some((none, none, none, none)),
+                &blank,
+            );
+        }
         let file = self.main_file();
         // Under the comment box, the commented lines keep normal mode's colours.
         let styles = if self.comment_box.is_some() {
@@ -2052,11 +2650,11 @@ impl App {
             file,
             file.top,
             file.left,
-            self.wrap,
+            self.wrap && self.split_left().is_none(),
             &self.loader,
             &self.theme,
             Some(styles),
-            &self.main_threads(),
+            &threads,
         );
         self.render_box(buf);
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
@@ -2224,6 +2822,12 @@ impl App {
             _ => " NOR ",
         };
         let mut left = format!("{mode} {}", clean(path));
+        if self.scope != Scope::Base || self.filter.is_some() {
+            left += &format!(" · {}", clean(&self.scope_label()));
+        }
+        if self.view_kind != ViewKind::File {
+            left += &format!(" · {}", self.view_kind.name());
+        }
         if let Some(b) = &self.comment_box {
             left += &format!(" · {}", clean(&b.place.title()));
         }
@@ -2242,6 +2846,8 @@ impl App {
         let cursor = file.sel.primary().cursor(text);
         let line = text.char_to_line(cursor);
         let col = cursor - text.line_to_char(line);
+        // In a view, the position is the file's: its new-side line.
+        let line = file.new_line_near(line).unwrap_or(line);
         let sels = file.sel.len();
         let right = format!(
             " {which}  {sels} sel{}  {}:{} ",
