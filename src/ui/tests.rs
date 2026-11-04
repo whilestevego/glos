@@ -1324,6 +1324,10 @@ fn threads_follow_changes_made_while_glos_was_closed() {
 
 /// A git repo with `main` and a branch `topic` of two commits, then uncommitted work.
 fn git_repo() -> T {
+    git_repo_with(|r| Source::git(r, None).unwrap())
+}
+
+fn git_repo_with(source: impl FnOnce(&Path) -> Source) -> T {
     let dir = tempfile::tempdir().unwrap();
     let r = dir.path().join("repo");
     std::fs::create_dir_all(&r).unwrap();
@@ -1354,7 +1358,7 @@ fn git_repo() -> T {
     git(&["add", "."]);
     git(&["commit", "-qm", "add b"]);
     std::fs::write(r.join("c.rs"), "uncommitted\n").unwrap();
-    let source = Source::git(&r, None).unwrap();
+    let source = source(&r);
     T::new(source, dir, 72, 14, &config())
 }
 
@@ -1486,7 +1490,11 @@ fn one_commit_at_a_time() {
     assert_eq!(t.said(), "The last commit");
     // A commit is history: no comments here.
     t.keys("space c");
-    assert!(t.said().starts_with("A commit is history"));
+    assert!(
+        t.said().starts_with("The new side is a commit"),
+        "{}",
+        t.said()
+    );
     t.keys("[ C [ C");
     assert_eq!(t.said(), "The first commit");
     t.keys("space o b");
@@ -1554,4 +1562,56 @@ fn view_and_scope_help_list_what_applies() {
     t.keys("esc");
     let (_, items) = completions("view ");
     assert_eq!(items.len(), 3);
+}
+
+#[test]
+fn a_revision_against_your_files() {
+    let mut t = git_repo_with(|r| Source::revs(r, "HEAD~1", None).unwrap());
+    // Since HEAD~1: b.rs (the last commit) and c.rs (uncommitted); not a.rs.
+    let paths: Vec<&str> = t
+        .app
+        .source
+        .changes
+        .iter()
+        .map(|c| c.path.as_str())
+        .collect();
+    assert_eq!(paths, ["b.rs", "c.rs"]);
+    assert!(t.shows("HEAD~1 vs your files"), "{}", t.screen());
+    // The new side is your files: comments work, on the branch's review.
+    t.keys("space c").typed("ok?").keys("esc ret");
+    assert_eq!(t.bodies(), ["ok?"]);
+    assert_eq!(t.app.review.kind, "git");
+    assert_eq!(
+        t.app.review.base.as_deref(),
+        Some("main"),
+        "the review keeps its base"
+    );
+    // Reading the files again keeps comparing with HEAD~1.
+    t.app.files_changed();
+    assert_eq!(t.app.source.changes.len(), 2);
+}
+
+#[test]
+fn two_revisions_are_read_only() {
+    let mut t = git_repo_with(|r| Source::revs(r, "HEAD~2", Some("HEAD~1")).unwrap());
+    let paths: Vec<&str> = t
+        .app
+        .source
+        .changes
+        .iter()
+        .map(|c| c.path.as_str())
+        .collect();
+    assert_eq!(paths, ["a.rs"]);
+    assert!(t.shows("HEAD~2 vs HEAD~1"), "{}", t.screen());
+    assert!(t.shows("line two"), "the commit's content:\n{}", t.screen());
+    t.keys("space c");
+    assert!(
+        t.said().starts_with("The new side is a commit"),
+        "{}",
+        t.said()
+    );
+    assert!(t.app.comment_box.is_none());
+    // Still history after a reload.
+    t.app.files_changed();
+    assert!(t.app.source.history);
 }

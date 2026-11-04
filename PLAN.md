@@ -62,6 +62,10 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
 - **Two folders:** `glos diff old/ new/`. Files are matched by relative path; `.gitignore` rules
   are honoured if present.
 - **A git repo:** `glos` inside it. Branch vs base by default, plus per-commit scope.
+- **Git revisions:** `glos diff HEAD~1` compares a revision with your files (uncommitted work
+  included; comments work and belong to the branch's review); `glos diff HEAD~3 HEAD~1`
+  compares two revisions, read-only, as the per-commit scope is. An existing path wins over a
+  revision of the same name.
 
 Each source becomes the same list of changes, and glos diffs text itself with imara-diff. Git is
 only one way to get the old side; everything after that is shared.
@@ -394,7 +398,7 @@ subcommand is never ambiguous:
 | Command | What it does |
 |---|---|
 | `glos` | Open the review for the current repo (branch vs base) |
-| `glos diff <old> <new>` | Review two files or two folders, like `git diff --no-index` |
+| `glos diff <old> <new>` | Review two files or two folders, like `git diff --no-index`; or `glos diff <rev> [<rev>]`, like `git diff` |
 | `glos list [--all]` | Reviews on this machine: open ones by default, closed and archived with `--all` |
 | `glos show [<review>]` | A review's threads and comments |
 | `glos reply`, `resolve`, `reopen`, `annotate`, `submit`, `close` | The same actions as in the UI and MCP |
