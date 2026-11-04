@@ -299,11 +299,18 @@ impl App {
                 _ => None,
             });
             if let Some(ch) = ch {
+                // The motion keeps its own count, so `A-.` repeats it exactly (Helix's
+                // `apply_motion`).
+                let count = self.count;
                 let motion: Motion = match next {
-                    NextKey::Char(f, _) => std::rc::Rc::new(move |cx| f(cx, ch)),
-                    NextKey::Textobject(around) => {
-                        std::rc::Rc::new(move |cx| commands::select_textobject(cx, around, ch))
-                    }
+                    NextKey::Char(f, _) => std::rc::Rc::new(move |cx| {
+                        cx.count = count;
+                        f(cx, ch)
+                    }),
+                    NextKey::Textobject(around) => std::rc::Rc::new(move |cx| {
+                        cx.count = count;
+                        commands::select_textobject(cx, around, ch)
+                    }),
                 };
                 self.doc_command(|cx| motion(cx));
                 self.last_motion = Some(motion);
@@ -371,7 +378,11 @@ impl App {
                         | "goto_next_paragraph"
                         | "goto_prev_paragraph"
                 ) {
-                    self.last_motion = Some(std::rc::Rc::new(f));
+                    let count = self.count;
+                    self.last_motion = Some(std::rc::Rc::new(move |cx: &mut Ctx| {
+                        cx.count = count;
+                        f(cx)
+                    }));
                 }
                 self.doc_command(f);
                 None
@@ -616,8 +627,9 @@ impl App {
                 self.scroll_to_cursor(true);
             }
             AppAction::RepeatLastMotion => {
+                // A count repeats the motion that many times, each with its own count.
                 if let Some(m) = self.last_motion.clone() {
-                    for _ in 0..self.count.map_or(1, NonZeroUsize::get) {
+                    for _ in 0..self.count.take().map_or(1, NonZeroUsize::get) {
                         self.doc_command(|cx| m(cx));
                     }
                 }
@@ -954,16 +966,24 @@ impl App {
             .ok()
             .map(|(p, _)| p.row)
         };
-        let outside = line < file.top + so || row_of(file.top).is_none_or(|r| r + so >= height);
+        // Lines from `top` the cursor would sit at, if `top` were the first line shown.
+        let row = row_of(file.top);
+        let above = line < file.top || (file.top > 0 && row.is_some_and(|r| r < so));
+        let below = !above && row.is_none_or(|r| r + so >= height);
+        let outside = line < file.top || row.is_none_or(|r| r >= height);
         if center && outside {
+            // The cursor half way down: back up from its line while it stays above the middle.
             file.top = line;
-            // Back up until the cursor is about half way down.
             while file.top > 0 && row_of(file.top - 1).is_some_and(|r| r <= height / 2) {
                 file.top -= 1;
             }
-        } else if line < file.top + so {
-            file.top = line.saturating_sub(so);
-        } else {
+        } else if above {
+            // Up to the cursor's line, then back `so` rows more.
+            file.top = line;
+            while file.top > 0 && row_of(file.top - 1).is_some_and(|r| r <= so) {
+                file.top -= 1;
+            }
+        } else if below {
             while file.top < line && row_of(file.top).is_none_or(|r| r + so >= height) {
                 file.top += 1;
             }
@@ -1241,78 +1261,4 @@ fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    //! Screen snapshots of the parts that must look like Helix: the view with its gutter and
-    //! statusline, the key help panel, the picker and the prompt.
-    use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
-
-    fn app(dir: &std::path::Path) -> App {
-        let (old, new) = (dir.join("old.rs"), dir.join("main.rs"));
-        std::fs::write(
-            &old,
-            "fn main() {\n    println!(\"hi\");\n}\n\nfn gone() {}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            &new,
-            "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n",
-        )
-        .unwrap();
-        let source = Source::diff(&old, &new).unwrap();
-        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
-        App::new(source, &Config::default(), theme).unwrap()
-    }
-
-    /// Types Helix-notation keys (`g`, `space`, `C-d`…), then draws and returns the screen.
-    fn screen(app: &mut App, keys: &str) -> String {
-        let mut term = Terminal::new(TestBackend::new(72, 14)).unwrap();
-        term.draw(|f| app.draw(f)).unwrap();
-        for k in keys.split_whitespace() {
-            app.key(Key::parse(k).unwrap_or_else(|| panic!("key {k}")));
-        }
-        term.draw(|f| app.draw(f)).unwrap();
-        let buf = term.backend().buffer();
-        (0..buf.area.height)
-            .map(|y| {
-                (0..buf.area.width)
-                    .map(|x| buf[(x, y)].symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn file_view() {
-        let d = tempfile::tempdir().unwrap();
-        insta::assert_snapshot!(screen(&mut app(d.path()), ""));
-    }
-
-    #[test]
-    fn key_help_panel() {
-        let d = tempfile::tempdir().unwrap();
-        insta::assert_snapshot!(screen(&mut app(d.path()), "g"));
-    }
-
-    #[test]
-    fn select_mode_and_count() {
-        let d = tempfile::tempdir().unwrap();
-        insta::assert_snapshot!(screen(&mut app(d.path()), "v 2 w"));
-    }
-
-    #[test]
-    fn changed_file_picker() {
-        let d = tempfile::tempdir().unwrap();
-        let mut term_app = app(d.path());
-        insta::assert_snapshot!(screen(&mut term_app, "space g"));
-    }
-
-    #[test]
-    fn search_prompt() {
-        let d = tempfile::tempdir().unwrap();
-        insta::assert_snapshot!(screen(&mut app(d.path()), "/ l e t"));
-    }
-}
+mod tests;

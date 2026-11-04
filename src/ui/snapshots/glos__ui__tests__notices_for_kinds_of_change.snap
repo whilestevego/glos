@@ -1,0 +1,10 @@
+---
+source: src/ui/tests.rs
+expression: "seen.join(\"\\n\")"
+---
+Cargo.lock: new file | generated file, collapsed; enter expands
+after.txt: renamed from before.txt
+bin.dat: new file | binary file; not shown
+gone.txt: deleted file; showing what was removed
+link: new file | symlink; showing its target
+run.sh: mode changed: file → executable

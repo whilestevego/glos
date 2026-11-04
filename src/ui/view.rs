@@ -96,7 +96,9 @@ impl File {
         // Open on the first change, as a reviewer wants.
         if let Some(h) = file.hunks.first() {
             let line = (h.after.start as usize).min(file.text.len_lines().saturating_sub(1));
-            file.sel = Selection::point(file.text.line_to_char(line));
+            // A one-grapheme cursor, as Helix's set_selection makes it.
+            file.sel = Selection::point(file.text.line_to_char(line))
+                .ensure_invariants(file.text.slice(..));
             file.top = line.saturating_sub(SCROLLOFF);
         }
         file
@@ -131,11 +133,13 @@ impl File {
         };
         let lang = loader.language_for(path, text.slice(..));
         let syntax = lang.and_then(|l| loader.parse(text.slice(..), l));
+        // A one-grapheme cursor, as Helix's set_selection makes it.
+        let sel = Selection::point(0).ensure_invariants(text.slice(..));
         File {
             tab_width: loader.tab_width(lang),
             text,
             hunks,
-            sel: Selection::point(0),
+            sel,
             top: 0,
             left: 0,
             syntax,
