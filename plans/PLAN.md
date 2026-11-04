@@ -390,7 +390,7 @@ session instead. M0 showed the server side works (the `claude/channel` experimen
 `notifications/claude/channel`, and the MCP protocol capped at 2025-11-25), but channels are a
 research preview: they need a launch flag, an organisation setting, and drop messages silently
 when either is missing. glos supports them once they're no longer experimental; the spike in
-`spikes/channel/` is the starting point.
+`spikes/channel/` (deleted; in git history before fbdf711) is the starting point.
 
 **Which session gets it:** an MCP server over stdio isn't told the host's session id, so each
 server is identified by its own process id and named after the `clientInfo` its MCP client sends.
@@ -500,7 +500,7 @@ wrong. Each commit includes its tests, and `cargo fmt`, `cargo clippy` (no warni
 The MVP is M0 through M5: reading and commenting, threads in both directions, all three views and
 the dashboard.
 
-- **M0, spikes (done; see `spikes/*/FINDINGS.md`).** Prove the four risky pieces before building
+- **M0, spikes (done; the spikes and their `FINDINGS.md` are in git history before fbdf711).** Prove the four risky pieces before building
   around them. All four work. The channel push reaches the real Claude Code handshake, but
   delivery is unproven: this Team account's org policy blocks channels.
   1. A Claude Code channel push from an `rmcp` server reaches a session as a message.
