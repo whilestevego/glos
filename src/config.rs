@@ -9,6 +9,10 @@ use serde::Deserialize;
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     pub theme: String,
+    /// How glos opens itself when an agent asks for review or on `glos open`: the start of a
+    /// shell command that runs the rest in a new pane, e.g. `tmux split-window -h`. glos adds
+    /// its own command line.
+    pub open_command: Option<String>,
     pub editor: Editor,
 }
 
@@ -33,6 +37,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             theme: "default".into(),
+            open_command: None,
             editor: Editor::default(),
         }
     }
@@ -96,6 +101,13 @@ mod tests {
         );
         // Typos are errors, as in Helix, so they don't pass silently.
         assert!(parse("[editor]\nmose = false\n").is_err());
+    }
+
+    #[test]
+    fn open_command_is_top_level() {
+        assert_eq!(Config::default().open_command, None);
+        let c = parse("open-command = \"tmux split-window -h\"\n").unwrap();
+        assert_eq!(c.open_command.as_deref(), Some("tmux split-window -h"));
     }
 
     #[test]

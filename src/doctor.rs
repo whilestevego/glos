@@ -105,6 +105,10 @@ fn report(db: &Path, log: Option<&Path>) -> String {
             Err(_) => "MCP: no database, so no sessions".into(),
         },
     );
+    line(match &cfg.open_command {
+        Some(c) => format!("Launching: open-command = {c:?}"),
+        None => "Launching: no open-command; an agent's request asks you to run glos".into(),
+    });
     r
 }
 
@@ -118,7 +122,7 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
         for part in [
             "Database:",
-            "(schema v4)",
+            "(schema v5)",
             "Config:",
             "Theme:",
             "Log: unavailable",
@@ -127,6 +131,7 @@ mod tests {
             "Languages (20):",
             "rust",
             "MCP: 0 agent sessions attached",
+            "Launching:",
         ] {
             assert!(out.contains(part), "{part} missing from:\n{out}");
         }

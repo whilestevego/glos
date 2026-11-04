@@ -25,7 +25,8 @@ fn glos(dir: &Path, repo: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_glos"));
     c.current_dir(repo)
         .env("GLOS_DB", dir.join("glos.db"))
-        .env("XDG_STATE_HOME", dir.join("state"));
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .env("XDG_CONFIG_HOME", dir.join("config"));
     c
 }
 

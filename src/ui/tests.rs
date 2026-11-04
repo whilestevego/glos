@@ -1827,3 +1827,67 @@ fn palette_in_the_tree_picker_and_prompt() {
     t.keys("esc");
     assert_eq!(t.app.prompt.as_ref().unwrap().line, "subm");
 }
+
+#[test]
+fn the_dashboard_lists_reviews_and_opens_another() {
+    let mut t = T::files_sized(OLD, NEW, 220, 16);
+    // A second review in the same store, made as another glos would.
+    let dir = t._dir.path().to_path_buf();
+    let (o, n) = (dir.join("other.old"), dir.join("other.rs"));
+    std::fs::write(&o, "a\n").unwrap();
+    std::fs::write(&n, "b\n").unwrap();
+    let other = Review::open(&t.app.conn, &Source::diff(&o, &n).unwrap()).unwrap();
+
+    t.keys("space l");
+    assert!(
+        t.shows("state") && t.shows("unsent") && t.shows("outdated"),
+        "{}",
+        t.screen()
+    );
+    assert!(t.shows("other.rs") && t.shows("main.rs"), "{}", t.screen());
+    assert!(t.shows("2/2"));
+
+    // It refreshes on its own when another process writes.
+    other.request(&t.app.conn, "claude", "", &[]).unwrap();
+    t.app.data_version -= 1; // as if another process wrote
+    t.app.refresh();
+    t.draw();
+    assert!(t.shows("waiting for review"), "{}", t.screen());
+
+    // Its own review: the dashboard just closes.
+    t.typed("main.rs").keys("ret");
+    assert!(t.app.picker.is_none() && !t.app.quit && t.app.switch.is_none());
+
+    // Another: glos closes this review and opens that one.
+    t.keys("space l").typed("other").keys("ret");
+    assert!(t.app.quit);
+    let s = t.app.switch.as_ref().expect("a review to open");
+    assert_eq!(s.changes[0].path, "other.rs");
+}
+
+#[test]
+fn the_dashboard_is_a_command_and_a_key() {
+    let mut t = T::files(OLD, NEW);
+    t.keys(": d a s h b o a r d ret");
+    assert!(t.app.picker.as_ref().is_some_and(dashboard::is_dashboard));
+    t.keys("esc");
+    assert!(t.app.picker.is_none());
+    // C-g over it lists the picker's keys.
+    t.keys("space l C-g");
+    assert!(t.shows("Filter the list"), "{}", t.screen());
+    t.keys("C-g");
+    assert!(t.app.picker.as_ref().is_some_and(dashboard::is_dashboard));
+}
+
+#[test]
+fn close_needs_everything_sent_then_quits() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("x space c").typed("hmm").keys("esc ret");
+    t.keys(": c l o s e ret");
+    assert!(!t.app.quit);
+    assert!(t.said().contains("1 comment not sent"), "{}", t.said());
+    t.keys(": s u b m i t space c o m m e n t ret");
+    t.keys(": c l o s e ret");
+    assert!(t.app.quit);
+    assert_eq!(t.app.review.reload(&t.app.conn).unwrap().status, "closed");
+}

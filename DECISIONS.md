@@ -348,6 +348,29 @@ PLAN.md:
   learn: in the file view `ret` runs the command; elsewhere the keys are listed, and `esc` goes
   back to where you were (a covered picker comes back with its query).
 
+## Dashboard, closing and launching (M5, 2026-11-04)
+
+- **The dashboard is a picker** (columns: state, agent, unsent, unread, open, outdated, review),
+  so typing filters and `C-g` lists its keys. `space l` opens it over a review; `glos dashboard`
+  shows it on its own. Choosing another review closes this one and opens that one in the same
+  terminal; `:q` still quits glos.
+- **The agent's state** comes from the store: *waiting for review* (an open request),
+  *replied* (unread replies), *submitted, not picked up* (no `wait_for_review` took the last
+  round), *working* (it did). The agent column names the live MCP sessions serving the folder.
+- **`:close` needs everything sent,** then quits. Running glos on the same source opens the
+  review again, as there's one review per source.
+- **Archiving on its own** happens when glos lists reviews (`glos list`, `glos dashboard`,
+  `glos gc`): the folder is gone, the branch was deleted, or the branch was merged. A branch
+  counts as merged when its tip is in the base, it had at least one round, and nothing is left
+  to review there; a new branch with no commits looks merged otherwise.
+- **`open-command` is a prefix:** glos adds its own command line (`<glos> --db <db> --review
+  <id>`), since a new tmux or kitty pane doesn't inherit glos's folder or environment. So the
+  setting is `open-command = "tmux split-window -h"`, not `... glos`.
+- **A running glos registers itself** (schema v5, `viewers`), so `request_review` and `glos open`
+  don't open a second one.
+- **The man page is `glos man`** (hidden), not a build-time file: one place to keep it up to
+  date, and packagers run `glos man > glos.1`.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.

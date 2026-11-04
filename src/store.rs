@@ -142,6 +142,14 @@ const MIGRATIONS: &[&str] = &[
     -- What was compared, said for a reader: e.g. 'commit 2/3 d0c4165 "add b" vs its parent'.
     ALTER TABLE threads ADD COLUMN diff TEXT;
     "#,
+    // v5: which running glos shows which review, so a review request doesn't open a second one.
+    r#"
+    CREATE TABLE viewers (
+        pid        INTEGER PRIMARY KEY,
+        review_id  TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL
+    );
+    "#,
 ];
 
 /// Opens (creating if needed) the database at `path` and brings its schema up to date.
@@ -279,7 +287,8 @@ mod tests {
                 "rounds",
                 "sessions",
                 "snapshot_files",
-                "threads"
+                "threads",
+                "viewers"
             ]
         );
         // Foreign keys are on: a comment needs its thread.

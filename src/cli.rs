@@ -21,6 +21,7 @@ fn find(conn: &Connection, id: Option<&str>, cwd: &Path) -> Result<Option<Review
 }
 
 pub fn list(conn: &Connection, all: bool, json: bool, out: &mut impl Write) -> Result<()> {
+    review::archive_finished(conn)?;
     let reviews = Review::list(conn, all)?;
     let mut rows = vec![];
     for r in &reviews {
@@ -124,6 +125,71 @@ pub fn show(
         }
     }
     Ok(())
+}
+
+/// `glos close`: you're done with the review.
+pub fn close(
+    conn: &Connection,
+    id: Option<&str>,
+    cwd: &Path,
+    json: bool,
+    out: &mut impl Write,
+) -> Result<()> {
+    let r = find(conn, id, cwd)?.context("no open review here; give its id (see glos list)")?;
+    review::close(conn, &r.id)?;
+    if json {
+        writeln!(out, "{}", json!({ "version": VERSION, "closed": r.id }))?;
+    } else {
+        writeln!(out, "Closed review {} of {}.", r.id, r.describe())?;
+    }
+    Ok(())
+}
+
+/// `glos gc`: archives what's over, then deletes old archived reviews and unused content.
+pub fn gc(conn: &Connection, days: u32, json: bool, out: &mut impl Write) -> Result<()> {
+    let archived = review::archive_finished(conn)?.len();
+    let age = jiff::SignedDuration::from_hours(24 * i64::from(days));
+    let (reviews, blobs) = review::gc(conn, age)?;
+    if json {
+        let doc = json!({ "version": VERSION, "archived": archived, "deleted_reviews": reviews,
+                          "deleted_contents": blobs });
+        writeln!(out, "{doc}")?;
+    } else {
+        writeln!(
+            out,
+            "Archived {archived} finished review(s); deleted {reviews} archived more than \
+             {days} days ago, and {blobs} file content(s) nothing used."
+        )?;
+    }
+    Ok(())
+}
+
+/// `glos open`: opens glos on this folder's review the way `request_review` does. `false` when
+/// it couldn't (no `open-command`), after saying how to open it by hand.
+pub fn open(
+    conn: &Connection,
+    cwd: &Path,
+    open_command: Option<&str>,
+    db: &Path,
+    out: &mut impl Write,
+) -> Result<bool> {
+    use crate::launch::{self, Launch};
+    let r = match Review::for_folder(conn, cwd)? {
+        Some(r) => r,
+        None => Review::open(conn, &crate::source::Source::git(cwd, None)?)?,
+    };
+    match launch::launch(conn, &r, open_command, db)? {
+        Launch::AlreadyOpen => writeln!(out, "glos is already open on {}.", r.describe())?,
+        Launch::Ran(cmd) => writeln!(out, "Opened glos on {}: {cmd}", r.describe())?,
+        Launch::NoCommand => {
+            eprintln!(
+                "No open-command in config.toml, so glos can't open itself. Run {}.",
+                launch::by_hand(&r)
+            );
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub fn submit(

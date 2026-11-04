@@ -84,6 +84,8 @@ pub enum AppAction {
     FileTree,
     /// `space ?` (and `C-g` anywhere): the palette of keys for where you are.
     CommandPalette,
+    /// `space l`: every open review.
+    Dashboard,
 }
 
 /// Scopes as keys choose them; "since last review" becomes the latest round.
@@ -233,6 +235,7 @@ commands! {
     goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
     file_explorer, "Open the file tree", App(AppAction::FileTree);
     command_palette, "Open command palette", App(AppAction::CommandPalette);
+    dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
 }
 
 pub fn command(name: &str) -> Option<&'static Command> {
@@ -552,6 +555,7 @@ fn normal_defs() -> Vec<Def> {
                 cmd("x", "toggle_resolved"),
                 cmd("n", "goto_suggestion"),
                 cmd("e", "file_explorer"),
+                cmd("l", "dashboard"),
                 cmd("?", "command_palette"),
                 menu(
                     "v",

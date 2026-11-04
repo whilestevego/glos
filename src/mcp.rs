@@ -45,6 +45,9 @@ pub struct Agent {
     folder: PathBuf,
     /// When this agent last looked, for "new" markers.
     seen: Option<String>,
+    /// `open-command` and the database, for opening glos on `request_review`.
+    pub open_command: Option<String>,
+    pub db: Option<PathBuf>,
 }
 
 impl Agent {
@@ -53,6 +56,8 @@ impl Agent {
             conn,
             folder,
             seen: None,
+            open_command: None,
+            db: None,
         }
     }
 
@@ -68,7 +73,7 @@ impl Agent {
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for pid in pids {
-            if !alive(pid) {
+            if !review::alive(pid) {
                 self.conn
                     .execute("DELETE FROM sessions WHERE pid = ?1", [pid])?;
             }
@@ -193,11 +198,18 @@ impl Agent {
         };
         r.request(&self.conn, name, note, files)?;
         self.touch();
+        use crate::launch::{self, Launch};
+        let ask = format!("ask the user to run {}", launch::by_hand(&r));
+        let db = self.db.clone().unwrap_or_default();
+        let shown = match launch::launch(&self.conn, &r, self.open_command.as_deref(), &db) {
+            Ok(Launch::AlreadyOpen) => "glos is open on it and shows the request now".into(),
+            Ok(Launch::Ran(_)) => "glos opened for the user".into(),
+            Ok(Launch::NoCommand) => format!("glos isn't open on it: {ask}"),
+            Err(e) => format!("glos couldn't open itself ({e:#}): {ask}"),
+        };
         Ok(format!(
-            "Review requested for {}. If glos is open there, it shows the request now; if not, ask \
-             the user to run `glos` in {}. Then call wait_for_review to receive the review.",
-            r.describe(),
-            r.folder
+            "Review requested for {}; {shown}. Then call wait_for_review to receive the review.",
+            r.describe()
         ))
     }
 
@@ -514,12 +526,6 @@ fn delivery(
     out
 }
 
-fn alive(pid: i64) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
-    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
 #[derive(Deserialize, schemars::JsonSchema)]
 struct GetReview {
     /// A thread's id, for the whole thread instead of the summary.
@@ -762,9 +768,12 @@ impl ServerHandler for Server {
 }
 
 /// Runs the server on stdin and stdout until the host closes it.
-pub fn run(conn: Connection) -> Result<()> {
+pub fn run(conn: Connection, db: &std::path::Path, open_command: Option<String>) -> Result<()> {
     let folder = std::env::current_dir()?.canonicalize()?;
-    let agent = Arc::new(Mutex::new(Agent::new(conn, folder)));
+    let mut agent = Agent::new(conn, folder);
+    agent.open_command = open_command;
+    agent.db = Some(db.to_path_buf());
+    let agent = Arc::new(Mutex::new(agent));
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -862,6 +871,13 @@ mod tests {
             .request_review("claude", "parser done", &["a.rs".into()])
             .unwrap();
         assert!(out.contains("Then call wait_for_review"), "{out}");
+        assert!(
+            out.contains(&format!(
+                "isn't open on it: ask the user to run `glos --review {}`",
+                r.id
+            )),
+            "{out}"
+        );
         let rr = r.reload(&a.conn).unwrap();
         assert_eq!(rr.request_note.as_deref(), Some("parser done"));
         assert!(
@@ -912,6 +928,36 @@ mod tests {
             "{answer}"
         );
         assert!(answer.ends_with("The work is approved: finish up."));
+    }
+
+    #[test]
+    fn a_request_opens_glos_unless_it_is_open() {
+        let (d, mut a, r) = setup();
+        let log = d.path().join("opened");
+        a.open_command = Some(format!("echo >> '{}'", log.display()));
+        a.db = Some(d.path().join("glos.db"));
+        let out = a.request_review("claude", "", &[]).unwrap();
+        assert!(out.contains("glos opened for the user"), "{out}");
+        let opened = std::fs::read_to_string(&log).unwrap();
+        assert!(opened.contains(&format!("--review {}", r.id)), "{opened}");
+
+        review::set_viewer(&a.conn, Some(&r.id)).unwrap();
+        let out = a.request_review("claude", "", &[]).unwrap();
+        assert!(
+            out.contains("glos is open on it and shows the request now"),
+            "{out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            opened,
+            "not opened twice"
+        );
+        review::set_viewer(&a.conn, None).unwrap();
+
+        a.open_command = Some("exit 3".into());
+        let out = a.request_review("claude", "", &[]).unwrap();
+        assert!(out.contains("glos couldn't open itself"), "{out}");
+        assert!(out.contains("ask the user to run"), "{out}");
     }
 
     #[test]
