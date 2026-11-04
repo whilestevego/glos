@@ -82,6 +82,8 @@ pub enum AppAction {
     FilterPrompt,
     /// `space e`: open, focus or close the file tree.
     FileTree,
+    /// `space ?` (and `C-g` anywhere): the palette of keys for where you are.
+    CommandPalette,
 }
 
 /// Scopes as keys choose them; "since last review" becomes the latest round.
@@ -230,6 +232,7 @@ commands! {
     goto_next_commit, "Goto next commit", App(AppAction::NextCommit(true));
     goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
     file_explorer, "Open the file tree", App(AppAction::FileTree);
+    command_palette, "Open command palette", App(AppAction::CommandPalette);
 }
 
 pub fn command(name: &str) -> Option<&'static Command> {
@@ -549,6 +552,7 @@ fn normal_defs() -> Vec<Def> {
                 cmd("x", "toggle_resolved"),
                 cmd("n", "goto_suggestion"),
                 cmd("e", "file_explorer"),
+                cmd("?", "command_palette"),
                 menu(
                     "v",
                     "View",

@@ -29,6 +29,10 @@ pub enum Target {
     Path(String),
     /// A thread, by its id.
     Thread(String),
+    /// A command, by its name: the palette runs it.
+    Command(&'static str),
+    /// Nothing to open: a key the palette only lists.
+    Nothing,
 }
 
 pub struct Item {
@@ -48,6 +52,8 @@ pub struct Picker {
     matched: Vec<u32>,
     cursor: usize,
     matcher: Matcher,
+    /// A preview beside the list, when there's room; the palette has none.
+    pub preview: bool,
 }
 
 pub enum Outcome {
@@ -65,6 +71,7 @@ impl Picker {
             query: String::new(),
             cursor: 0,
             matcher: Matcher::new(nucleo::Config::DEFAULT.match_paths()),
+            preview: true,
         };
         p.refilter();
         p
@@ -144,7 +151,7 @@ impl Picker {
     }
 
     /// Where the picker and its preview go: 90% of the screen above the bottom two rows.
-    pub fn areas(screen: Rect) -> (Rect, Option<Rect>) {
+    pub fn areas(&self, screen: Rect) -> (Rect, Option<Rect>) {
         let avail = Rect {
             height: screen.height.saturating_sub(2),
             ..screen
@@ -156,7 +163,7 @@ impl Picker {
             w,
             h,
         );
-        if area.width > MIN_WIDTH_FOR_PREVIEW {
+        if self.preview && area.width > MIN_WIDTH_FOR_PREVIEW {
             let half = area.width / 2;
             (
                 Rect {
