@@ -27,14 +27,17 @@ pub struct Ctx<'a> {
     /// Select mode: motions extend the selection.
     pub extend: bool,
     pub hunks: &'a [Hunk],
-    /// The first line shown, and how many lines fit.
+    /// The first line and column shown, and how many lines fit.
     pub top: usize,
+    pub left: usize,
     pub height: usize,
     pub fmt: TextFormat,
     /// A message for the command line; `true` for an error.
     pub status: Option<(String, bool)>,
     /// Centre the cursor if it ends up outside the view (Helix's `ensure_cursor_in_view_center`).
     pub center: bool,
+    /// The command placed the view itself (`zz`…): don't scroll to the cursor afterwards.
+    pub keep_top: bool,
 }
 
 /// Lines kept between the cursor and the edge of the view, as Helix's default `scrolloff`.
@@ -218,20 +221,34 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
         cx.transform(|r| movement::move_vertically_visual(text, r, dir, offset, behaviour, &fmt, &mut annotations));
         return;
     }
+    // Otherwise only the primary cursor moves, to the edge of the scrolloff zone if it fell
+    // outside (Helix's `scroll`).
     let scrolloff = cx.scrolloff();
-    let (text, extend) = (cx.text.slice(..), cx.extend);
-    let lo = (cx.top + scrolloff).min(last);
-    let hi = (cx.top + cx.height.saturating_sub(1 + scrolloff)).min(last).max(lo);
-    cx.transform(|r| {
-        let line = r.cursor_line(text);
-        if line < lo {
-            r.put_cursor(text, text.line_to_char(lo), extend)
-        } else if line > hi {
-            r.put_cursor(text, text.line_to_char(hi), extend)
-        } else {
-            r
+    let text = cx.text.slice(..);
+    let annotations = TextAnnotations::default();
+    let anchor = text.line_to_char(cx.top);
+    let range = cx.sel.primary();
+    let cursor = range.cursor(text);
+    let head = match dir {
+        Direction::Forward => {
+            let (head, off) = helix_core::char_idx_at_visual_offset(text, anchor, scrolloff as isize, 0, &cx.fmt, &annotations);
+            let head = head + (off != 0) as usize;
+            if head <= cursor {
+                return;
+            }
+            head
         }
-    });
+        Direction::Backward => {
+            let row = cx.height.saturating_sub(scrolloff + 1) as isize;
+            let (head, _) = helix_core::char_idx_at_visual_offset(text, anchor, row, 0, &cx.fmt, &annotations);
+            if head >= cursor {
+                return;
+            }
+            head
+        }
+    };
+    let anchor = if cx.extend { range.anchor } else { head };
+    cx.sel = cx.sel.clone().replace(cx.sel.primary_index(), Range::new(anchor, head));
 }
 
 /// The mouse wheel: the view moves, and the cursor only as far as it must to stay in view.
@@ -449,6 +466,255 @@ pub fn goto_last_change(cx: &mut Ctx) {
     goto_nth_change(cx, usize::MAX)
 }
 
+pub fn move_line_up(cx: &mut Ctx) {
+    move_impl(cx, movement::move_vertically, Direction::Backward)
+}
+pub fn move_line_down(cx: &mut Ctx) {
+    move_impl(cx, movement::move_vertically, Direction::Forward)
+}
+
+/// `g|`: column `count` on the line.
+pub fn goto_column(cx: &mut Ctx) {
+    let (text, count, extend) = (cx.text.slice(..), cx.count(), cx.extend);
+    cx.transform(|r| {
+        let line = r.cursor_line(text);
+        let start = text.line_to_char(line);
+        let pos = graphemes::nth_next_grapheme_boundary(text, start, count - 1).min(line_end_char_index(&text, line));
+        r.put_cursor(text, pos, extend)
+    });
+}
+
+fn para_impl(cx: &mut Ctx, f: fn(helix_core::RopeSlice, Range, usize, Movement) -> Range) {
+    let (text, count, behaviour) = (cx.text.slice(..), cx.count(), cx.movement());
+    cx.transform(|r| f(text, r, count, behaviour));
+}
+pub fn goto_next_paragraph(cx: &mut Ctx) {
+    para_impl(cx, movement::move_next_paragraph)
+}
+pub fn goto_prev_paragraph(cx: &mut Ctx) {
+    para_impl(cx, movement::move_prev_paragraph)
+}
+
+/// `C` / `A-C`: copies each selection to the next (or previous) line where it fits. Helix
+/// itself still uses these deprecated column helpers here.
+#[allow(deprecated)]
+fn copy_selection_on_line(cx: &mut Ctx, dir: Direction) {
+    use helix_core::{Position, pos_at_visual_coords, visual_coords_at_pos};
+    let (text, count, tab) = (cx.text.slice(..), cx.count(), cx.fmt.tab_width as usize);
+    let sel = &cx.sel;
+    let mut ranges: Vec<Range> = sel.ranges().to_vec();
+    let mut primary_index = 0;
+    for range in sel.iter() {
+        let is_primary = *range == sel.primary();
+        // The range is always head exclusive.
+        let (head, anchor) =
+            if range.anchor < range.head { (range.head - 1, range.anchor) } else { (range.head, range.anchor.saturating_sub(1)) };
+        let (head_pos, anchor_pos) = (visual_coords_at_pos(text, head, tab), visual_coords_at_pos(text, anchor, tab));
+        let height = head_pos.row.max(anchor_pos.row) - head_pos.row.min(anchor_pos.row) + 1;
+        if is_primary {
+            primary_index = ranges.len();
+        }
+        ranges.push(*range);
+        let (mut sels, mut i) = (0, 0);
+        while sels < count {
+            let offset = (i + 1) * height;
+            let (anchor_row, head_row) = match dir {
+                Direction::Forward => (anchor_pos.row + offset, head_pos.row + offset),
+                Direction::Backward => (anchor_pos.row.saturating_sub(offset), head_pos.row.saturating_sub(offset)),
+            };
+            if anchor_row >= text.len_lines() || head_row >= text.len_lines() {
+                break;
+            }
+            let (a, h) = (
+                pos_at_visual_coords(text, Position::new(anchor_row, anchor_pos.col), tab),
+                pos_at_visual_coords(text, Position::new(head_row, head_pos.col), tab),
+            );
+            // Skip lines that are too short.
+            if visual_coords_at_pos(text, a, tab).col == anchor_pos.col && visual_coords_at_pos(text, h, tab).col == head_pos.col {
+                if is_primary {
+                    primary_index = ranges.len();
+                }
+                ranges.push(Range::point(a).put_cursor(text, h, true));
+                sels += 1;
+            }
+            if anchor_row == 0 && head_row == 0 {
+                break;
+            }
+            i += 1;
+        }
+    }
+    cx.sel = Selection::new(ranges.into(), primary_index);
+}
+pub fn copy_selection_on_next_line(cx: &mut Ctx) {
+    copy_selection_on_line(cx, Direction::Forward)
+}
+pub fn copy_selection_on_prev_line(cx: &mut Ctx) {
+    copy_selection_on_line(cx, Direction::Backward)
+}
+
+pub fn trim_selections(cx: &mut Ctx) {
+    let text = cx.text.slice(..);
+    let ranges: Vec<Range> = cx
+        .sel
+        .iter()
+        .filter_map(|r| {
+            if r.is_empty() || r.slice(text).chars().all(char::is_whitespace) {
+                return None;
+            }
+            let start = movement::skip_while(text, r.from(), |c| c.is_whitespace()).unwrap_or(r.from());
+            let end = movement::backwards_skip_while(text, r.to(), |c| c.is_whitespace()).unwrap_or(r.to());
+            Some(Range::new(start, end).with_direction(r.direction()))
+        })
+        .collect();
+    if ranges.is_empty() {
+        collapse_selection(cx);
+        keep_primary_selection(cx);
+    } else {
+        let primary = cx.sel.primary();
+        let idx = ranges.iter().position(|r| r.overlaps(&primary)).unwrap_or(ranges.len() - 1);
+        cx.sel = Selection::new(ranges.into(), idx);
+    }
+}
+
+fn rotate_selections(cx: &mut Ctx, dir: Direction) {
+    let (count, len, index) = (cx.count(), cx.sel.len(), cx.sel.primary_index());
+    cx.sel.set_primary_index(match dir {
+        Direction::Forward => (index + count) % len,
+        Direction::Backward => (index + (len.saturating_sub(count) % len)) % len,
+    });
+}
+pub fn rotate_selections_forward(cx: &mut Ctx) {
+    rotate_selections(cx, Direction::Forward)
+}
+pub fn rotate_selections_backward(cx: &mut Ctx) {
+    rotate_selections(cx, Direction::Backward)
+}
+
+pub fn merge_selections(cx: &mut Ctx) {
+    cx.sel = cx.sel.clone().merge_ranges();
+}
+pub fn merge_consecutive_selections(cx: &mut Ctx) {
+    cx.sel = cx.sel.clone().merge_consecutive_ranges();
+}
+pub fn ensure_selections_forward(cx: &mut Ctx) {
+    cx.transform(|r| r.with_direction(Direction::Forward));
+}
+
+pub fn shrink_to_line_bounds(cx: &mut Ctx) {
+    let text = cx.text;
+    cx.transform(|r| {
+        let (start_line, end_line) = r.line_range(text.slice(..));
+        // Within one line there's nothing to shrink.
+        if start_line == end_line {
+            return r;
+        }
+        let mut start = text.line_to_char(start_line);
+        let mut end = text.line_to_char((end_line + 1).min(text.len_lines()));
+        if start != r.from() {
+            start = text.line_to_char((start_line + 1).min(text.len_lines()));
+        }
+        if end != r.to() {
+            end = text.line_to_char(end_line);
+        }
+        Range::new(start, end).with_direction(r.direction())
+    });
+}
+
+pub fn remove_primary_selection(cx: &mut Ctx) {
+    if cx.sel.len() == 1 {
+        cx.status = Some(("no selections remaining".into(), true));
+        return;
+    }
+    cx.sel = cx.sel.clone().remove(cx.sel.primary_index());
+}
+
+pub fn split_selection_on_newline(cx: &mut Ctx) {
+    cx.sel = helix_core::selection::split_on_newline(cx.text.slice(..), &cx.sel);
+}
+
+/// What a regex prompt (`s`, `S`, `K`, `A-K`) does with the selections.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RegexAction {
+    Select,
+    Split,
+    Keep,
+    Remove,
+}
+
+impl RegexAction {
+    pub fn prompt(self) -> &'static str {
+        match self {
+            RegexAction::Select => "select:",
+            RegexAction::Split => "split:",
+            RegexAction::Keep => "keep:",
+            RegexAction::Remove => "remove:",
+        }
+    }
+}
+
+/// Helix's `select_regex`, `split_selection` and `keep_or_remove_selections_impl`.
+pub fn regex_selections(cx: &mut Ctx, action: RegexAction, regex: &helix_stdx::rope::Regex) {
+    use helix_core::selection;
+    let text = cx.text.slice(..);
+    let result = match action {
+        RegexAction::Select => selection::select_on_matches(text, &cx.sel, regex).ok_or("nothing selected"),
+        RegexAction::Split => Ok(selection::split_on_matches(text, &cx.sel, regex)),
+        RegexAction::Keep | RegexAction::Remove => {
+            selection::keep_or_remove_matches(text, &cx.sel, regex, action == RegexAction::Remove)
+                .ok_or("no selections remaining")
+        }
+    };
+    match result {
+        Ok(sel) => cx.sel = sel,
+        Err(e) => cx.status = Some((e.into(), true)),
+    }
+}
+
+/// `zz`, `zt`, `zb`: puts the cursor's line at the centre, top or bottom of the view.
+fn align_view(cx: &mut Ctx, align: Align) {
+    let text = cx.text.slice(..);
+    let cursor = cx.sel.primary().cursor(text);
+    let last = cx.height.saturating_sub(1);
+    let relative = match align {
+        Align::Center => last / 2,
+        Align::Top => 0,
+        Align::Bottom => last,
+    };
+    let (anchor, _) = helix_core::char_idx_at_visual_offset(
+        text, cursor, -(relative as isize), 0, &cx.fmt, &TextAnnotations::default(),
+    );
+    cx.top = text.char_to_line(anchor);
+    cx.keep_top = true;
+}
+/// `zm`: the cursor's column to the middle of the view (no soft wrap only).
+pub fn align_view_middle(cx: &mut Ctx) {
+    if cx.fmt.soft_wrap {
+        return;
+    }
+    let text = cx.text.slice(..);
+    let col = super::view::visual_col(text, cx.sel.primary().cursor(text), cx.fmt.tab_width as usize);
+    cx.left = col.saturating_sub(cx.fmt.viewport_width as usize / 2);
+    cx.keep_top = true;
+}
+
+pub fn align_view_center(cx: &mut Ctx) {
+    align_view(cx, Align::Center)
+}
+pub fn align_view_top(cx: &mut Ctx) {
+    align_view(cx, Align::Top)
+}
+pub fn align_view_bottom(cx: &mut Ctx) {
+    align_view(cx, Align::Bottom)
+}
+
+/// `zk` / `zj`: scroll by `count` lines, keeping the cursor in view.
+pub fn scroll_up(cx: &mut Ctx) {
+    scroll(cx, cx.count(), Direction::Backward, false)
+}
+pub fn scroll_down(cx: &mut Ctx) {
+    scroll(cx, cx.count(), Direction::Forward, false)
+}
+
 /// The search regex for `query`, with Helix's smart case: case-insensitive unless the query has
 /// an uppercase letter.
 pub fn search_regex(query: &str) -> Option<helix_stdx::rope::Regex> {
@@ -552,10 +818,12 @@ mod tests {
             extend,
             hunks,
             top: 0,
+            left: 0,
             height: 40,
             fmt: TextFormat::default(),
             status: None,
             center: false,
+            keep_top: false,
         };
         for c in cmds {
             c(&mut cx);
@@ -676,12 +944,35 @@ mod tests {
         let (text, sel) = print("#[foo|]# foobar a.b");
         let rope = Rope::from(text);
         let mut cx = Ctx {
-            text: &rope, sel, count: None, extend: false, hunks: &[], top: 0, height: 10,
-            fmt: TextFormat::default(), status: None, center: false,
+            text: &rope, sel, count: None, extend: false, hunks: &[], top: 0, left: 0, height: 10,
+            fmt: TextFormat::default(), status: None, center: false, keep_top: false,
         };
         assert_eq!(search_selection(&mut cx, true), "\\bfoo\\b");
         assert_eq!(search_selection(&mut cx, false), "foo");
         cx.sel = Selection::single(11, 14);
         assert_eq!(search_selection(&mut cx, true), "\\ba\\.b");
+    }
+
+    #[test]
+    fn selection_manipulation() {
+        assert_eq!(run("#[a|]#b\ncd\n", &[&copy_selection_on_next_line]), "#(a|)#b\n#[c|]#d\n");
+        assert_eq!(run("#[  ab  |]#", &[&trim_selections]), "  #[ab|]#  ");
+        assert_eq!(run("#[a|]# #(b|)#", &[&rotate_selections_forward]), "#(a|)# #[b|]#");
+        assert_eq!(run("#[a|]##(b|)#", &[&merge_consecutive_selections]), "#[ab|]#");
+        assert_eq!(run("#[|ab]#", &[&ensure_selections_forward]), "#[ab|]#");
+        assert_eq!(run("#[a|]# #(b|)#", &[&remove_primary_selection]), "a #[b|]#");
+        assert_eq!(run("#[ab\ncd|]#", &[&split_selection_on_newline]), "#[ab|]#\n#(cd|)#");
+        let re = helix_stdx::rope::Regex::new("b").unwrap();
+        assert_eq!(run("#[abab|]#", &[&|cx| regex_selections(cx, RegexAction::Select, &re)]), "a#[b|]#a#(b|)#");
+        assert_eq!(run("#[a|]# #(b|)#", &[&|cx| regex_selections(cx, RegexAction::Keep, &re)]), "a #[b|]#");
+        assert_eq!(run("#[a|]# #(b|)#", &[&|cx| regex_selections(cx, RegexAction::Remove, &re)]), "#[a|]# b");
+    }
+
+    #[test]
+    fn lines_columns_paragraphs() {
+        assert_eq!(run("#[a|]#bc", &[&counted(3, goto_column)]), "ab#[c|]#");
+        assert_eq!(run("#[a|]#\nb\n\nc\n", &[&goto_next_paragraph]), "#[a\nb\n\n|]#c\n");
+        // The column is kept, so a shorter line puts the cursor on its end, as in Helix.
+        assert_eq!(run("ab#[c|]#\nd\n", &[&move_line_down]), "abc\nd#[\n|]#");
     }
 }
