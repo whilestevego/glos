@@ -56,8 +56,9 @@ for output a program can read.
 
 1. The agent finishes its work and asks for a review. If glos is already open, you'll see the
    request at the bottom of the screen. If not, run `glos` in the project folder.
-2. Read through the changes. Changed lines are marked in the gutter. `]g` jumps to the next
-   change and `gn` to the next file. The file tree on the left shows every changed file.
+2. Read through the changes. Unchanged code is folded away, leaving three lines around each
+   change. Changed lines are marked in the gutter. `]g` jumps to the next change and `gn` to the
+   next file. The file tree on the left shows every changed file.
 3. To comment, put the cursor on a line (or select a few with `x`) and press `space c`. Type your
    comment, press `esc`, then `enter` to save it. You can't lose a comment: everything is saved
    as you type, even if you quit or glos crashes.
@@ -96,7 +97,31 @@ and the rest. On top of those, it adds keys for reviewing:
 | `]d` `[d` | Next or previous thread |
 | `]u` `[u` | Next or previous unread reply |
 | `gn` `gp` | Next or previous changed file |
-| `enter` | Open or collapse the thread under the cursor |
+| `enter` | Open or collapse the thread under the cursor, or open a fold |
+
+### Folding
+
+Lines far from any change are folded into one line, like `⋯ 40 unchanged lines`. Lines with a
+comment on them are never folded. Press `enter` on a fold, or click it, to open it. The rest of
+the folding keys are under `z`, as in Vim:
+
+| Key | What it does |
+|---|---|
+| `zo` | Open the fold under the cursor |
+| `za` | Open or close the fold under the cursor |
+| `zR` | Open every fold in the file |
+| `zM` | Fold everything again |
+| `z+` `z-` | Show one more or one fewer line around each change |
+| `zf` | Fold the selected lines yourself |
+| `zd` | Remove a fold you made |
+
+A fold you make can hide anything, even changes and comments, and it says what it's hiding:
+`⋯ 12 lines · 3 changed · 1 thread`. Jumping to something inside it (`]g`, `]d`, a picker)
+opens it again.
+
+To fold a whole function, select it with `maf` and press `zf`. glos has Helix's syntax-aware
+selections: `maf` and `mif` for a function, `mat` for a type, `mac` for a comment, `maa` for an
+argument, and `]f`, `[f`, `]t` and so on to jump between them.
 
 You don't need to remember these. Press `space` (or `g`, `]`, and so on) and wait, and a panel
 lists the keys that can follow. Press **`Ctrl-G` anywhere** to see every key that works where you
@@ -125,6 +150,7 @@ open-command = "tmux split-window -h"
 [editor]
 mouse = true          # set to false to turn the mouse off
 file-tree = true      # show the file tree when glos starts
+diff-context = 3      # unchanged lines shown around each change; the rest are folded
 
 [editor.soft-wrap]
 enable = false        # wrap long lines

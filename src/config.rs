@@ -24,6 +24,9 @@ pub struct Editor {
     pub soft_wrap: SoftWrap,
     /// glos's: the file tree is open when glos starts (`space e` focuses it, `q` closes it).
     pub file_tree: bool,
+    /// glos's: unchanged lines kept around each change; the rest are folded. `z+` and `z-`
+    /// change it while glos runs.
+    pub diff_context: usize,
 }
 
 /// Helix's `[editor.soft-wrap]`: off by default, as in Helix.
@@ -49,6 +52,7 @@ impl Default for Editor {
             mouse: true,
             soft_wrap: SoftWrap::default(),
             file_tree: true,
+            diff_context: 3,
         }
     }
 }
@@ -119,6 +123,15 @@ mod tests {
                 .editor
                 .file_tree
         );
+    }
+
+    #[test]
+    fn diff_context_defaults_to_three() {
+        assert_eq!(Config::default().editor.diff_context, 3);
+        let c = parse("[editor]\ndiff-context = 0\n").unwrap();
+        assert_eq!(c.editor.diff_context, 0);
+        assert!(parse("[editor]\ndiff-context = -1\n").is_err());
+        assert!(parse("[editor]\ndiff-context = \"3\"\n").is_err());
     }
 
     #[test]

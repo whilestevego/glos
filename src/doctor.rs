@@ -71,6 +71,10 @@ fn report(db: &Path, log: Option<&Path>) -> String {
         "Mouse: {}",
         if cfg.editor.mouse { "on" } else { "off" }
     ));
+    line(format!(
+        "Folding: {} lines of context around changes (diff-context)",
+        cfg.editor.diff_context
+    ));
 
     match Loader::new(theme.scopes()) {
         Ok(loader) => {
@@ -129,6 +133,7 @@ mod tests {
             "Log: unavailable",
             "Clipboard:",
             "Terminal:",
+            "Folding: 3 lines of context",
             "Languages (20):",
             "rust",
             "MCP: 0 agent sessions attached",
