@@ -1,5 +1,8 @@
+mod embedded;
 mod source;
 mod store;
+mod syntax;
+mod theme;
 
 use std::path::PathBuf;
 

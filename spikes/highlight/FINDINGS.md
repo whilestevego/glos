@@ -56,3 +56,10 @@ checks query inherits and theme inherits.
   upgrade; acceptable, or keep vendor/ out of git and run fetch.py in CI/`build.rs` (needs network
   at build time — worse for crates.io publishing). Leaning: commit it.
 - Lazy per-language query compilation from day one.
+
+## After the spike
+
+`helix/`, `vendor/`, `build.rs` and `scripts/fetch.py` moved to the repo root for M1 (this crate no
+longer builds on its own). Correction: Helix's lock pins tree-house-bindings 0.2.1, which has no
+`tree-sitter-language` feature; glos needs 0.2.4, still one copy of tree-sitter under tree-house
+0.3.0.
