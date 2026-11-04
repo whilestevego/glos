@@ -138,6 +138,19 @@ impl Picker {
         }
     }
 
+    /// The item drawn at a screen cell, for mouse clicks.
+    pub fn target_at(&self, area: Rect, x: u16, y: u16) -> Option<Target> {
+        let header = (self.columns.len() > 1) as u16;
+        let first = area.y + 1 + 2 + header;
+        if x <= area.x || x + 1 >= area.right() || y < first || y + 1 >= area.bottom() {
+            return None;
+        }
+        let rows = self.page(area);
+        let offset = self.cursor - self.cursor % rows;
+        let i = *self.matched.get(offset + (y - first) as usize)?;
+        Some(self.items[i as usize].target.clone())
+    }
+
     /// Rows of items that fit, for paging.
     pub fn page(&self, area: Rect) -> usize {
         let header = (self.columns.len() > 1) as u16;

@@ -271,6 +271,25 @@ pub fn visual_col(text: RopeSlice, pos: usize, tab_width: usize) -> usize {
     col
 }
 
+/// The character at display column `col` on `line`, or the line's end.
+pub fn pos_at_col(text: RopeSlice, line: usize, col: usize, tab_width: usize) -> usize {
+    let mut c = 0;
+    let mut pos = text.line_to_char(line);
+    for g in text.line(line).graphemes() {
+        let g: Cow<str> = g.into();
+        if g.ends_with('\n') {
+            break;
+        }
+        let w = if g == "\t" { tab_width - c % tab_width } else { clean(&g).width().max(1) };
+        if col < c + w {
+            return pos;
+        }
+        c += w;
+        pos += g.chars().count();
+    }
+    pos
+}
+
 /// Untrusted text is never drawn raw: control characters become visible symbols, so escape
 /// sequences in code or agent comments can't reach the terminal.
 pub fn clean(s: &str) -> Cow<'_, str> {
@@ -313,5 +332,8 @@ mod tests {
         assert_eq!(visual_col(t.slice(..), 1, 4), 4);
         assert_eq!(visual_col(t.slice(..), 4, 4), 8);
         assert_eq!(visual_col(t.slice(..), 5, 4), 9);
+        assert_eq!(pos_at_col(t.slice(..), 0, 2, 4), 0); // inside the tab
+        assert_eq!(pos_at_col(t.slice(..), 0, 7, 4), 3); // the second half of 漢
+        assert_eq!(pos_at_col(t.slice(..), 0, 50, 4), 5);
     }
 }

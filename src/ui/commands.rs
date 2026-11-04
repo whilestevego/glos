@@ -234,6 +234,12 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
     });
 }
 
+/// The mouse wheel: the view moves, and the cursor only as far as it must to stay in view.
+pub fn scroll_lines(cx: &mut Ctx, lines: usize, down: bool) {
+    let dir = if down { Direction::Forward } else { Direction::Backward };
+    scroll(cx, lines, dir, false)
+}
+
 pub fn page_down(cx: &mut Ctx) {
     scroll(cx, cx.height, Direction::Forward, false)
 }

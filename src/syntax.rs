@@ -67,7 +67,10 @@ impl Loader {
                 loader.by_shebang.insert(s.clone(), lang);
             }
             let name = config.grammar.as_deref().unwrap_or(&config.language_id);
-            let grammar = embedded::GRAMMARS.iter().find(|(g, _)| *g == name).map(|(_, f)| *f);
+            // Only the languages whose queries are vendored: others sharing a compiled grammar
+            // (jsx, starlark…) would parse but highlight nothing.
+            let has_query = embedded::QUERIES.iter().any(|(l, f, _)| *l == config.language_id && *f == "highlights.scm");
+            let grammar = embedded::GRAMMARS.iter().find(|(g, _)| *g == name).map(|(_, f)| *f).filter(|_| has_query);
             loader.langs.push(LangData { config, grammar, compiled: OnceLock::new() });
         }
         loader.globs = globs.build()?;
@@ -105,6 +108,17 @@ impl Loader {
     fn language_for_name(&self, name: &str) -> Option<Language> {
         let i = self.langs.iter().position(|l| l.config.language_id == name)?;
         Some(Language::new(i as u32))
+    }
+
+    /// Each language with a compiled grammar, and whether its highlight query compiles: for
+    /// `glos doctor`, like `hx --health`.
+    pub fn health(&self) -> Vec<(&str, bool)> {
+        self.langs
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.grammar.is_some())
+            .map(|(i, l)| (l.config.language_id.as_str(), self.get_config(Language::new(i as u32)).is_some()))
+            .collect()
     }
 
     pub fn name(&self, lang: Language) -> &str {

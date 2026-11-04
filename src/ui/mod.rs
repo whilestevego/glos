@@ -9,7 +9,7 @@ mod view;
 use std::{collections::HashMap, num::NonZeroUsize};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use helix_core::{Selection, doc_formatter::TextFormat};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -21,6 +21,8 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
+    clipboard,
+    config::Config,
     source::{Kind, Source},
     syntax::Loader,
     theme::{ColorSupport, Theme},
@@ -78,6 +80,8 @@ pub struct App {
     picker: Option<Picker>,
     /// Helix's `/` register: the last search.
     last_search: Option<String>,
+    /// Helix's `"` register: the last yank.
+    yanked: Vec<String>,
     status: Option<(String, bool)>,
     /// The screen and text area from the last draw, for commands that page or align the view.
     screen: Rect,
@@ -85,8 +89,14 @@ pub struct App {
     quit: bool,
 }
 
-pub fn run(source: Source, theme: &str) -> Result<()> {
-    let theme = Theme::load(theme, ColorSupport::detect())?;
+pub fn run(source: Source, config: &Config) -> Result<()> {
+    let theme = match Theme::load(&config.theme, ColorSupport::detect()) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("{e}; using the default theme");
+            Theme::load("default", ColorSupport::detect())?
+        }
+    };
     let loader = Loader::new(&theme)?;
     let mut app = App {
         files: (0..source.changes.len()).map(|_| None).collect(),
@@ -103,6 +113,7 @@ pub fn run(source: Source, theme: &str) -> Result<()> {
         prompt: None,
         picker: None,
         last_search: None,
+        yanked: vec![],
         status: None,
         screen: Rect::default(),
         view: Rect::default(),
@@ -110,7 +121,13 @@ pub fn run(source: Source, theme: &str) -> Result<()> {
     };
     // Raw mode and the alternate screen; the terminal is restored on a panic too.
     let mut terminal = ratatui::init();
+    if config.editor.mouse {
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+    }
     let result = app.event_loop(&mut terminal);
+    if config.editor.mouse {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }
@@ -130,6 +147,7 @@ impl App {
                         suspend(terminal)?;
                     }
                 }
+                Event::Mouse(m) => self.mouse(m),
                 _ => {} // resizes and anything else just redraw
             }
         }
@@ -376,9 +394,96 @@ impl App {
                     file.collapsed = !file.collapsed;
                 }
             }
+            AppAction::Yank | AppAction::YankToClipboard { .. } => {
+                let file = self.file();
+                let text = file.text.slice(..);
+                let mut values: Vec<String> = file.sel.fragments(text).map(|f| f.into_owned()).collect();
+                if let AppAction::YankToClipboard { main_only: true } = action {
+                    values = vec![file.sel.primary().fragment(text).into_owned()];
+                }
+                let n = values.len();
+                let (register, result) = match action {
+                    AppAction::Yank => {
+                        self.yanked = values;
+                        ('"', Ok(()))
+                    }
+                    // Helix joins selections with newlines for the clipboard.
+                    _ => ('+', clipboard::copy(&values.join("\n"))),
+                };
+                self.status = Some(match result {
+                    Ok(()) => (format!("yanked {n} selection{} to register {register}", if n == 1 { "" } else { "s" }), false),
+                    Err(e) => (format!("{e:#}"), true),
+                });
+                self.mode = Mode::Normal; // as Helix, yanking leaves select mode
+            }
             AppAction::Suspend => return Some(AppAction::Suspend),
         }
         None
+    }
+
+    /// Click to move the cursor, drag to select, wheel to scroll; in the picker, the wheel moves
+    /// and a click opens.
+    fn mouse(&mut self, m: MouseEvent) {
+        if let Some(picker) = &mut self.picker {
+            let (list, _) = Picker::areas(self.screen);
+            match m.kind {
+                MouseEventKind::ScrollDown => {
+                    picker.key(Key { code: KeyCode::Down, mods: KeyModifiers::NONE }, 1);
+                }
+                MouseEventKind::ScrollUp => {
+                    picker.key(Key { code: KeyCode::Up, mods: KeyModifiers::NONE }, 1);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(t) = picker.target_at(list, m.column, m.row) {
+                        self.picker = None;
+                        self.open(t);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.prompt.is_some() {
+            return;
+        }
+        match m.kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                // Helix's editor.scroll-lines: 3, and the cursor stays in view.
+                let down = m.kind == MouseEventKind::ScrollDown;
+                self.doc_command(|cx| commands::scroll_lines(cx, 3, down));
+            }
+            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+                let Some(pos) = self.pos_at(m.column, m.row) else { return };
+                let drag = matches!(m.kind, MouseEventKind::Drag(_));
+                self.doc_command(|cx| {
+                    cx.sel = if drag {
+                        let text = cx.text.slice(..);
+                        let r = cx.sel.primary().put_cursor(text, pos, true);
+                        cx.sel.clone().replace(cx.sel.primary_index(), r)
+                    } else {
+                        Selection::single(pos, pos)
+                    };
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// The character under a screen cell in the file view.
+    fn pos_at(&self, x: u16, y: u16) -> Option<usize> {
+        let file = self.file();
+        let header = file.notices.len() as u16;
+        let gutter = file.gutter_width() as u16;
+        if y < self.view.y + header || y >= self.view.bottom() || x < self.view.x + gutter || file.collapsed || file.binary {
+            return None;
+        }
+        let text = file.text.slice(..);
+        let line = file.top + (y - self.view.y - header) as usize;
+        if line >= text.len_lines() {
+            return Some(text.len_chars());
+        }
+        let col = file.left + (x - self.view.x - gutter) as usize;
+        Some(view::pos_at_col(text, line, col, file.tab_width))
     }
 
     /// Helix's changed-file picker: a change column, then the path.

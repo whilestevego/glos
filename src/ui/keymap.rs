@@ -36,6 +36,10 @@ pub enum AppAction {
     FilePicker,
     ChangedFilePicker,
     ToggleCollapse,
+    /// `y`: the selections to glos's own register.
+    Yank,
+    /// `space y` / `space Y`: all selections, or only the primary, to the system clipboard.
+    YankToClipboard { main_only: bool },
 }
 
 pub struct Command {
@@ -111,6 +115,9 @@ commands! {
     file_picker, "Open file picker", App(AppAction::FilePicker);
     changed_file_picker, "Open changed file picker", App(AppAction::ChangedFilePicker);
     toggle_collapse, "Expand or collapse the file", App(AppAction::ToggleCollapse);
+    yank, "Yank selection", App(AppAction::Yank);
+    yank_to_clipboard, "Yank selections to clipboard", App(AppAction::YankToClipboard { main_only: false });
+    yank_main_selection_to_clipboard, "Yank main selection to clipboard", App(AppAction::YankToClipboard { main_only: true });
     suspend, "Suspend and return to shell", App(AppAction::Suspend);
 }
 
@@ -339,9 +346,12 @@ fn normal_defs() -> Vec<Def> {
         cmd("A-*", "search_selection"),
         // glos: expand or collapse a generated file.
         cmd("ret", "toggle_collapse"),
+        cmd("y", "yank"),
         menu("space", "Space", vec![
             cmd("f", "file_picker"),
             cmd("g", "changed_file_picker"),
+            cmd("y", "yank_to_clipboard"),
+            cmd("Y", "yank_main_selection_to_clipboard"),
         ]),
         cmd("C-b|pageup", "page_up"),
         cmd("C-f|pagedown", "page_down"),
