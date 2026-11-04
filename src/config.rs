@@ -18,6 +18,8 @@ pub struct Editor {
     /// Helix's `editor.mouse`: on unless turned off.
     pub mouse: bool,
     pub soft_wrap: SoftWrap,
+    /// glos's: the file tree is open when glos starts (`space e` focuses it, `q` closes it).
+    pub file_tree: bool,
 }
 
 /// Helix's `[editor.soft-wrap]`: off by default, as in Helix.
@@ -41,6 +43,7 @@ impl Default for Editor {
         Editor {
             mouse: true,
             soft_wrap: SoftWrap::default(),
+            file_tree: true,
         }
     }
 }
@@ -93,6 +96,17 @@ mod tests {
         );
         // Typos are errors, as in Helix, so they don't pass silently.
         assert!(parse("[editor]\nmose = false\n").is_err());
+    }
+
+    #[test]
+    fn the_file_tree_can_be_off() {
+        assert!(Config::default().editor.file_tree);
+        assert!(
+            !parse("[editor]\nfile-tree = false\n")
+                .unwrap()
+                .editor
+                .file_tree
+        );
     }
 
     #[test]
