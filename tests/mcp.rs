@@ -103,6 +103,7 @@ fn request_submit_and_wait() {
         [
             "annotate",
             "get_review",
+            "open_review",
             "reopen",
             "reply",
             "request_review",
@@ -118,9 +119,28 @@ fn request_submit_and_wait() {
             .unwrap()
             .to_string()
     };
+    // Every tool but open_review needs a review id: none is guessed from the folder.
     let r = call(
         "tools/call",
         json!({ "name": "request_review", "arguments": { "note": "added todo" } }),
+    );
+    assert!(
+        r["error"].is_object() || r["result"]["isError"] == true,
+        "{r}"
+    );
+    let folder = repo.canonicalize().unwrap().to_string_lossy().into_owned();
+    let r = call(
+        "tools/call",
+        json!({ "name": "open_review", "arguments": {
+            "target": { "git": { "folder": folder, "branch": "topic", "base": "main" } }
+        } }),
+    );
+    let opened = text(&r);
+    assert!(opened.contains("of branch topic (vs main)"), "{r}");
+    let id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let r = call(
+        "tools/call",
+        json!({ "name": "request_review", "arguments": { "review_id": id, "note": "added todo" } }),
     );
     assert!(
         text(&r).contains("Review requested for branch topic (vs main)"),
@@ -130,13 +150,13 @@ fn request_submit_and_wait() {
     // Nothing submitted: a short wait says so.
     let r = call(
         "tools/call",
-        json!({ "name": "wait_for_review", "arguments": { "timeout_secs": 1 } }),
+        json!({ "name": "wait_for_review", "arguments": { "review_id": id, "timeout_secs": 1 } }),
     );
     assert!(text(&r).contains("hasn't submitted"), "{r}");
 
     // The user approves from the CLI; the waiting agent gets it.
     let out = glos(dir.path(), &repo)
-        .args(["submit", "approve"])
+        .args(["submit", "approve", "--review", &id])
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -146,19 +166,19 @@ fn request_submit_and_wait() {
     );
     let r = call(
         "tools/call",
-        json!({ "name": "wait_for_review", "arguments": { "timeout_secs": 10 } }),
+        json!({ "name": "wait_for_review", "arguments": { "review_id": id, "timeout_secs": 10 } }),
     );
     assert!(text(&r).contains("(round 1): approved"), "{r}");
 
     let r = call(
         "tools/call",
-        json!({ "name": "get_review", "arguments": {} }),
+        json!({ "name": "get_review", "arguments": { "review_id": id } }),
     );
     assert!(text(&r).contains("- a.rs (Modified)"), "{r}");
 
     // The CLI shows who received it.
     let out = glos(dir.path(), &repo)
-        .args(["show", "--json"])
+        .args(["show", "--json", "--review", &id])
         .output()
         .unwrap();
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();

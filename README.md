@@ -42,11 +42,15 @@ claude mcp add glos -- glos mcp
 ```
 
 After that, your agent can ask you for a review when it's done, wait for your comments, reply to
-them, and mark threads as resolved. It can also leave its own notes on its changes before you
+them, and mark threads as resolved. glos never guesses what the agent wants reviewed: the agent
+says exactly which branch (and which base), or which two files or folders, and gets back a review
+id that it uses from then on. It can also leave its own notes on its changes before you
 start ("I wasn't sure about this part"), and point you at a line it wants you to look at.
 
-Agents without MCP can do the same things from the command line: `glos reply`, `glos resolve`,
-`glos annotate`, `glos show` and so on. Add `--json` to any of them for output a program can read.
+Agents without MCP can do the same things from the command line. `glos open-review git . topic
+main` (or `glos open-review diff old new`) prints a review's id, and `glos reply`, `glos resolve`,
+`glos annotate`, `glos show` and the rest take it as `--review <id>`. Add `--json` to any of them
+for output a program can read.
 
 ## A review, start to finish
 
@@ -137,9 +141,9 @@ You can put your own themes in `~/.config/glos/themes/`, in Helix's format.
 | Command | What it does |
 |---|---|
 | `glos list` | List open reviews (`--all` includes closed ones) |
-| `glos show` | Print a review's comments and replies |
-| `glos open` | Open glos on this folder's review, using your `open-command` |
-| `glos close` | Close a review |
+| `glos show --review <id>` | Print a review's comments and replies |
+| `glos open --review <id>` | Open glos on a review, using your `open-command` |
+| `glos close --review <id>` | Close a review |
 | `glos gc` | Clean out old, finished reviews |
 | `glos completions zsh` | Shell completions (also `bash`, `fish` and others) |
 | `glos doctor` | Check your setup |
