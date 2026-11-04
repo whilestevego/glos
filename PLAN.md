@@ -297,7 +297,8 @@ selection needs a modifier (usually shift), so `space y` yanks to the system cli
 
 ## Helix fidelity
 
-Everything glos takes from Helix is compiled into the binary from a pinned Helix release. glos
+Everything glos takes from Helix is compiled into the binary from a pinned Helix release
+(25.07.1). glos
 never reads Helix's files or config at run time, and works the same whether Helix is installed or
 not.
 
@@ -310,8 +311,11 @@ not.
 - **Syntax highlighting:** tree-sitter, with the grammars compiled into glos. A script takes from a
   pinned Helix release its `languages.toml` (which maps files to languages and pins each grammar's
   source and revision), the highlight queries and the themes. It fetches each grammar's source at
-  the revision Helix pins and vendors it in the repo. `build.rs` compiles the grammars with `cc`,
-  and the queries, themes and `languages.toml` are embedded with `include_str!`. Using Helix's
+  the revision Helix pins and vendors it in the repo (committed: about 5 MB of git history per
+  Helix upgrade, and builds never fetch). `build.rs` compiles the grammars with `cc` and links them
+  statically into `tree-house`, Helix's highlighter; the queries, themes and `languages.toml` are
+  embedded with `include_str!`. Each language's queries are compiled the first time it's needed,
+  off the UI thread: compiling all of them takes about 260 ms, too slow for the first screen. Using Helix's
   pinned revisions keeps queries and grammars matching. Queries that build on another language's
   (`; inherits:`) are followed as Helix does. Moving to a new Helix release means rerunning the
   script.
@@ -322,8 +326,9 @@ not.
   their notice, in their own folder. Grammars keep their own licences (mostly MIT).
 - **Movement and selections come from Helix itself.** `helix-core` (plain functions over a ropey
   buffer, with no UI) provides motions, selections, multiple cursors and text objects. It's a git
-  dependency pinned to the same Helix release as the grammars; if it pulls in too much, its
-  movement, selection and text-object files are copied in instead, under MPL-2.0. glos never
+  dependency pinned to the same Helix release as the grammars, with glos's `Cargo.lock` seeded
+  from Helix's at that tag. The keymap layer (counts, modes, `x`, `f`/`t`, `m`) lives in
+  helix-term, not helix-core, so its thin wrappers are ported into one MPL-2.0 file. glos never
   rewrites this behaviour, so `w`, `x`, `%`, `mi(` and counts behave exactly as in Helix, and
   Helix's own unit tests come with them.
 - **Editing (after the MVP):** the same `helix-core` model with `insert`/`normal`/`select` modes.
@@ -356,7 +361,10 @@ not.
 
 **Channel push.** When you submit, the MCP server attached to that review's agent session sees the
 submit in the database and pushes the review into the session as a channel message (Claude Code
-channels: the server declares the channel capability and sends a notification). The message holds
+channels: the server declares the `claude/channel` experimental capability and sends
+`notifications/claude/channel`, with the review in `content` and ids in `meta`). The server caps
+its MCP protocol at revision 2025-11-25: the newer 2026-07-28 drops the handshake and can't carry
+channel messages. The message holds
 the verdict and every new or edited comment with its file, lines and thread id, and tells the
 agent to answer each one with `reply`/`resolve`. This needs checking first (see M0): if channels
 aren't available or behave differently, `wait_for_review` covers it inside glos, and the separate
@@ -371,7 +379,10 @@ servers whose process is gone are removed. With none attached, the review waits 
 when one attaches.
 
 **Setting it up:** `claude mcp add glos -- glos mcp` registers glos with Claude Code; `glos doctor`
-checks that it worked.
+checks that it worked. Channels are a research preview: until glos ships as a plugin, a session
+must be started with `claude --dangerously-load-development-channels server:glos` to receive
+pushes, and Team and Enterprise organisations must enable channels. Without that, pushes are
+dropped silently, so `wait_for_review` stays.
 
 ## The CLI
 
@@ -431,7 +442,7 @@ Picked for being widely used and maintained. Versions are fixed when the project
 | Terminal UI | `ratatui`, `crossterm` (mouse, bracketed paste, focus events) |
 | Text buffer | `ropey` |
 | Motions, selections, text objects | `helix-core` (git dependency at the pinned Helix release) |
-| Syntax highlighting | `tree-sitter`, plus Helix's highlighter crate `tree-house` if its API suits; `tree-sitter-highlight` otherwise; `cc` in `build.rs` to compile the grammars |
+| Syntax highlighting | `tree-house` 0.3.0 (Helix's highlighter, the version helix-core uses, so one copy of tree-sitter), with `tree-house-bindings`' `tree-sitter-language` feature for statically linked grammars; `cc` in `build.rs` to compile them |
 | Fuzzy matching | `nucleo` (Helix's own matcher) |
 | Git (git sources only) | `gix` |
 | Line diff | `imara-diff` (used by Helix and gix) |
@@ -452,7 +463,9 @@ Picked for being widely used and maintained. Versions are fixed when the project
 The MVP is M0 through M5: reading and commenting, threads in both directions, all three views and
 the dashboard.
 
-- **M0, spikes.** Prove the four risky pieces before building around them:
+- **M0, spikes (done; see `spikes/*/FINDINGS.md`).** Prove the four risky pieces before building
+  around them. All four work. The channel push reaches the real Claude Code handshake, but
+  delivery is unproven: this Team account's org policy blocks channels.
   1. A Claude Code channel push from an `rmcp` server reaches a session as a message.
   2. A grammar compiled into glos at Helix's pinned revision, with Helix's embedded queries,
      highlights a file through `tree-house` or `tree-sitter-highlight`. Test a language whose
@@ -489,10 +502,9 @@ largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be
 
 ## Open questions
 
-- **Channels:** how stable Claude Code channels are, whether they need a launch flag, and what they
-  allow, decided by the M0 spike.
-- **`tree-house`:** whether Helix's highlighter crate is usable outside Helix, or
-  `tree-sitter-highlight` is needed instead (M0).
+- **Channels:** whether a push reaches a live session end to end. The server side and the
+  handshake with Claude Code are proven; delivery needs an org with channels enabled or a personal
+  account. Until then, `wait_for_review` is the path to rely on, so it moves up to M2 with submit.
 - **Re-anchoring rules:** how far to search for moved text before calling a thread outdated.
 - **Branch renames and detached HEAD:** how a review follows a renamed branch, and what a review
   made in detached HEAD is keyed by.
