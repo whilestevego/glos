@@ -1,6 +1,6 @@
 # Decisions
 
-Each decision made while planning loupe on 2026-11-03: the options considered, what was chosen, and
+Each decision made while planning glos on 2026-11-03: the options considered, what was chosen, and
 why. The design itself is in [PLAN.md](PLAN.md).
 
 ## Why build it at all
@@ -16,7 +16,7 @@ why. The design itself is in [PLAN.md](PLAN.md).
 
 - **Options:** MCP server; event hooks; CLI + JSON; local socket/RPC.
 - **Chosen:** MCP server, CLI + JSON, and a local socket.
-- **Why:** MCP lets any agent use loupe natively; the CLI serves scripts and agents without MCP; the
+- **Why:** MCP lets any agent use glos natively; the CLI serves scripts and agents without MCP; the
   socket lets replies appear live in an open UI.
 
 ## Delivering a submitted review
@@ -133,10 +133,14 @@ why. The design itself is in [PLAN.md](PLAN.md).
 
 ## Name
 
-- **Options:** helm; vetr; hxr; loupe.
-- **Chosen:** loupe, a jeweller's magnifier for close inspection.
-- **Caveat:** it clashes with GNOME's image viewer and an existing crate (see PLAN.md, Open
-  questions).
+- **First pick:** loupe (a jeweller's magnifier), dropped because it clashes with GNOME's image
+  viewer (its command is `glos` on many Linux desktops) and an existing crate.
+- **Then:** about 100 names were checked against crates.io, Homebrew, Linux distro packages
+  (Repology), commands on the PATH and GitHub. Long names (kibitzer, obelus, margent, scholion)
+  were rejected as too long; most short words (stet, gloss, lgtm, ptal, nits, quirk) were taken.
+- **Chosen:** glos, from *gloss*: a note written in the margin of a text. Four letters; free on
+  crates.io, Homebrew and Linux distros, with no notable GitHub project of that name (checked
+  2026-11-03). Trademarks and domains were not checked.
 
 ## The plan folder
 
