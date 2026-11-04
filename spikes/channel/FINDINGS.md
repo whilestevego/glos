@@ -46,4 +46,14 @@ Pass: both messages appear in the session as `<channel source="glos-spike" kind=
 answers them without being prompted. `spike.log` shows the negotiated protocol and each push.
 If nothing arrives, retry with `MCP_PROTOCOL_NEGOTIATION=legacy` set.
 
-Result: _pending_.
+Result (2026-11-04, Claude Code 2.1.318, Claude Team account): **blocked by org policy.** At
+startup Claude Code says "--dangerously-load-development-channels blocked by org policy
+(server:glos-spike). Inbound messages will be silently dropped. Have an administrator set
+channelsEnabled: true in managed settings to enable". What it did confirm against the real client:
+it spawns the server, sends `clientInfo` (`claude-code`, title "Claude Code") and settles on
+protocol 2025-11-25 without `MCP_PROTOCOL_NEGOTIATION=legacy`, so the version cap is enough.
+Delivery is still unproven; it needs an org Owner to enable channels, or a personal Pro/Max
+account. Until then, `wait_for_review` is the delivery path glos can rely on.
+
+Automated with a pty driver (no tmux):
+`claude --mcp-config .mcp.json --strict-mcp-config --dangerously-load-development-channels server:glos-spike`.

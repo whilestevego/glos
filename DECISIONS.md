@@ -231,6 +231,20 @@ PLAN.md:
   crates.io, Homebrew and Linux distros, with no notable GitHub project of that name (checked
   2026-11-03). Trademarks and domains were not checked.
 
+## M0 spikes (2026-11-04)
+
+- **Helix release:** pinned to 25.07.1, the newest.
+- **Highlighting:** `tree-house` 0.3.0, not `tree-sitter-highlight`. It's the version helix-core
+  already links, so there's one tree-sitter runtime, and it takes statically linked grammars.
+- **Vendored grammars:** committed, not fetched at build time. Costs about 5 MB of git history per
+  Helix upgrade; builds never need the network.
+- **helix-core:** kept as a git dependency, not copied in. It brings only helix-loader,
+  helix-stdx and helix-parsec. The keymap wrappers from helix-term are ported into one MPL file.
+- **gix:** one `status()` pass with the merge-base as its head tree covers committed, staged,
+  unstaged and untracked changes and renames. No fallback to the git command needed.
+- **Channels:** declared through rmcp's experimental capabilities; the protocol is capped at
+  2025-11-25 so pushes can be delivered. Needs a launch flag while channels are in preview.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
