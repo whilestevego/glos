@@ -41,4 +41,40 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn edges() {
+        assert!(hunks("", "").is_empty());
+        assert!(hunks("same\n", "same\n").is_empty());
+        assert_eq!(
+            hunks("", "a\nb\n"),
+            [Hunk {
+                before: 0..0,
+                after: 0..2
+            }]
+        );
+        assert_eq!(
+            hunks("a\nb\n", ""),
+            [Hunk {
+                before: 0..2,
+                after: 0..0
+            }]
+        );
+        // A missing final newline changes the last line.
+        assert_eq!(
+            hunks("a\nb", "a\nb\n"),
+            [Hunk {
+                before: 1..2,
+                after: 1..2
+            }]
+        );
+        // CRLF against LF is a change on every line, as git sees it.
+        assert_eq!(
+            hunks("a\r\nb\r\n", "a\nb\n"),
+            [Hunk {
+                before: 0..2,
+                after: 0..2
+            }]
+        );
+    }
 }

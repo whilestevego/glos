@@ -1,7 +1,10 @@
 //! Helix themes: the embedded ones and the user's own in `~/.config/glos/themes/`, resolved as
 //! helix-view does (`inherits`, `[palette]`, scope fallback).
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, anyhow};
 use ratatui::style::{Color, Modifier, Style};
@@ -37,7 +40,12 @@ impl ColorSupport {
 
 impl Theme {
     pub fn load(name: &str, colors: ColorSupport) -> Result<Theme> {
-        let mut table = resolve(name, 0)?;
+        Self::load_from(name, colors, user_dir().as_deref())
+    }
+
+    /// Loads a theme, looking in `user_dir` before the embedded ones.
+    pub fn load_from(name: &str, colors: ColorSupport, user_dir: Option<&Path>) -> Result<Theme> {
+        let mut table = resolve(name, user_dir, &mut HashSet::new())?;
         let palette = palette(table.remove("palette"));
         table.remove("inherits");
         let mut styles = HashMap::new();
@@ -74,32 +82,69 @@ impl Theme {
     }
 }
 
-fn user_theme(name: &str) -> Option<String> {
-    let dir: PathBuf = etcetera::base_strategy::Xdg::new().ok().map(|x| {
-        use etcetera::BaseStrategy;
-        x.config_dir().join("glos/themes")
-    })?;
-    std::fs::read_to_string(dir.join(format!("{name}.toml"))).ok()
+fn user_dir() -> Option<PathBuf> {
+    use etcetera::BaseStrategy;
+    Some(
+        etcetera::base_strategy::Xdg::new()
+            .ok()?
+            .config_dir()
+            .join("glos/themes"),
+    )
 }
 
-/// The user's theme of that name wins over the embedded one, as in Helix.
-fn resolve(name: &str, depth: usize) -> Result<Table> {
-    anyhow::ensure!(
-        depth < 10,
-        "theme {name}: `inherits` goes round in a circle"
-    );
-    let text = match user_theme(name) {
-        Some(t) => t,
-        None => THEMES
+/// Finds and merges a theme as helix-view's `load_theme` does: the user's folder first, then
+/// the embedded themes. A theme already visited is skipped, so a user theme can inherit the
+/// built-in theme of the same name; a real cycle is an error. `default` is always the built-in.
+fn resolve(
+    name: &str,
+    user_dir: Option<&Path>,
+    visited: &mut HashSet<(bool, String)>,
+) -> Result<Table> {
+    let embedded = |n: &str| {
+        THEMES
             .iter()
-            .find(|(n, _)| *n == name)
+            .find(|(t, _)| *t == n)
             .map(|(_, t)| t.to_string())
-            .ok_or_else(|| anyhow!("no theme named {name}"))?,
     };
+    let mut cycle = false;
+    let text = [true, false]
+        .into_iter()
+        .find_map(|user| {
+            let text = if user {
+                std::fs::read_to_string(user_dir?.join(format!("{name}.toml"))).ok()?
+            } else {
+                embedded(name)?
+            };
+            if !visited.insert((user, name.to_string())) {
+                cycle = true;
+                return None;
+            }
+            Some(text)
+        })
+        .ok_or_else(|| {
+            if cycle {
+                anyhow!("theme {name}: cycle found in inheriting")
+            } else {
+                anyhow!("no theme named {name}")
+            }
+        })?;
     let theme: Table = text.parse().map_err(|e| anyhow!("theme {name}: {e}"))?;
-    match theme.get("inherits").and_then(Value::as_str) {
-        Some(parent) => Ok(merge_themes(resolve(parent, depth + 1)?, theme)),
+    match theme.get("inherits") {
         None => Ok(theme),
+        Some(Value::String(parent)) => {
+            let parent = if parent == "default" {
+                embedded("default")
+                    .unwrap_or_default()
+                    .parse()
+                    .map_err(|e| anyhow!("default theme: {e}"))?
+            } else {
+                resolve(parent, user_dir, visited)?
+            };
+            Ok(merge_themes(parent, theme))
+        }
+        Some(other) => Err(anyhow!(
+            "theme {name}: expected 'inherits' to be a string: {other}"
+        )),
     }
 }
 
@@ -326,5 +371,84 @@ mod tests {
         assert_eq!(nearest_256(255, 255, 255), 231);
         assert_eq!(nearest_256(255, 0, 0), 196);
         assert_eq!(nearest_256(128, 128, 128), 244);
+    }
+
+    fn user(themes: &[(&str, &str)]) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        for (n, t) in themes {
+            std::fs::write(d.path().join(format!("{n}.toml")), t).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn user_themes_win_and_can_extend_a_built_in_of_the_same_name() {
+        let d = user(&[
+            ("mine", "keyword = \"#010203\"\n"),
+            ("default", "inherits = \"default\"\nkeyword = \"#0a0b0c\"\n"),
+        ]);
+        let mine = Theme::load_from("mine", ColorSupport::TrueColor, Some(d.path())).unwrap();
+        assert_eq!(mine.get("keyword").fg, Some(Color::Rgb(1, 2, 3)));
+        // The user's `default` inherits the built-in one, then overrides a key.
+        let def = Theme::load_from("default", ColorSupport::TrueColor, Some(d.path())).unwrap();
+        let builtin = Theme::load_from("default", ColorSupport::TrueColor, None).unwrap();
+        assert_eq!(def.get("keyword").fg, Some(Color::Rgb(10, 11, 12)));
+        assert_eq!(def.get("ui.linenr"), builtin.get("ui.linenr"));
+    }
+
+    #[test]
+    fn theme_errors() {
+        let d = user(&[
+            ("a", "inherits = \"b\"\n"),
+            ("b", "inherits = \"a\"\n"),
+            ("bad", "this is not toml ="),
+            ("num", "inherits = 3\n"),
+        ]);
+        let err = |n| {
+            Theme::load_from(n, ColorSupport::TrueColor, Some(d.path()))
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        assert!(err("a").contains("cycle"), "{}", err("a"));
+        assert!(err("bad").contains("theme bad"), "{}", err("bad"));
+        assert!(err("num").contains("expected 'inherits' to be a string"));
+        assert!(err("missing").contains("no theme named missing"));
+    }
+
+    #[test]
+    fn style_parsing() {
+        let d = user(&[(
+            "t",
+            r##"
+"a" = "red"
+"b" = { fg = 33, bg = "#102030", modifiers = ["bold", "italic", "crossed_out", "unknown"] }
+"c" = { fg = "accent", underline = { color = "red", style = "curl" } }
+"d" = "light-gray"
+[palette]
+accent = "#abcdef"
+"##,
+        )]);
+        let t = Theme::load_from("t", ColorSupport::TrueColor, Some(d.path())).unwrap();
+        assert_eq!(t.get("a").fg, Some(Color::Red));
+        let b = t.get("b");
+        assert_eq!(
+            (b.fg, b.bg),
+            (Some(Color::Indexed(33)), Some(Color::Rgb(0x10, 0x20, 0x30)))
+        );
+        assert!(
+            b.add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC | Modifier::CROSSED_OUT)
+        );
+        let c = t.get("c");
+        assert_eq!(c.fg, Some(Color::Rgb(0xab, 0xcd, 0xef)));
+        assert_eq!(c.underline_color, Some(Color::Red));
+        assert!(c.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(
+            t.get("d").fg,
+            Some(Color::Gray),
+            "Helix's light-gray is terminal colour 7"
+        );
+        assert_eq!(t.get("nothing"), Style::default());
     }
 }

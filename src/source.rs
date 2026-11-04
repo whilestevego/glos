@@ -696,4 +696,201 @@ mod tests {
         assert!(is_binary(b"\x89PNG\0\0"));
         assert!(!is_binary("héllo\n".as_bytes()));
     }
+
+    /// A repo on `main` with one commit, then `feature` checked out.
+    fn repo() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        git(r, &["init", "-q"]);
+        write(&r.join("a.txt"), "a\n");
+        git(r, &["add", "."]);
+        git(r, &["commit", "-qm", "base"]);
+        git(r, &["switch", "-qc", "feature"]);
+        d
+    }
+
+    #[test]
+    fn git_nothing_to_review() {
+        let d = repo();
+        assert!(Source::git(d.path(), None).unwrap().changes.is_empty());
+        // Changed and then changed back is nothing, too.
+        write(&d.path().join("a.txt"), "x\n");
+        write(&d.path().join("a.txt"), "a\n");
+        assert!(Source::git(d.path(), None).unwrap().changes.is_empty());
+    }
+
+    #[test]
+    fn git_added_then_deleted_and_staged_then_reverted() {
+        let d = repo();
+        let r = d.path();
+        write(&r.join("tmp.txt"), "t\n");
+        git(r, &["add", "tmp.txt"]);
+        fs::remove_file(r.join("tmp.txt")).unwrap();
+        write(&r.join("a.txt"), "staged\n");
+        git(r, &["add", "a.txt"]);
+        write(&r.join("a.txt"), "a\n");
+        assert_eq!(
+            summary(&Source::git(r, None).unwrap()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn git_from_a_subfolder_and_paths_relative_to_the_worktree() {
+        let d = repo();
+        let r = d.path();
+        write(&r.join("sub/deep/x.rs"), "x\n");
+        let s = Source::git(&r.join("sub/deep"), None).unwrap();
+        assert_eq!(summary(&s), ["Added sub/deep/x.rs"]);
+        assert_eq!(s.root, r.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn git_base_choice() {
+        let d = repo();
+        let r = d.path();
+        git(r, &["commit", "-q", "--allow-empty", "-m", "second"]);
+        git(r, &["branch", "-q", "other"]);
+        write(&r.join("b.txt"), "b\n");
+        git(r, &["add", "."]);
+        git(r, &["commit", "-qm", "third"]);
+        // Default base: main.
+        assert_eq!(summary(&Source::git(r, None).unwrap()), ["Added b.txt"]);
+        // A given base wins.
+        let s = Source::git(r, Some("other")).unwrap();
+        assert_eq!(s.git.as_ref().unwrap().base, "other");
+        assert_eq!(summary(&s), ["Added b.txt"]);
+        // A base that doesn't exist is an error naming it.
+        let err = Source::git(r, Some("nope")).err().unwrap().to_string();
+        assert!(err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn git_prefers_origins_default_branch() {
+        let up = repo();
+        git(up.path(), &["switch", "-q", "main"]);
+        git(up.path(), &["branch", "-qm", "main", "trunk"]);
+        let d = tempfile::tempdir().unwrap();
+        let clone = d.path().join("c");
+        git(d.path(), &["clone", "-q", up.path().to_str().unwrap(), "c"]);
+        git(&clone, &["switch", "-qc", "work"]);
+        write(&clone.join("n.txt"), "n\n");
+        let s = Source::git(&clone, None).unwrap();
+        assert_eq!(s.git.as_ref().unwrap().base, "origin/trunk");
+        assert_eq!(summary(&s), ["Added n.txt"]);
+    }
+
+    #[test]
+    fn git_detached_head_and_no_shared_history() {
+        let d = repo();
+        let r = d.path();
+        git(r, &["checkout", "-q", "--detach"]);
+        write(&r.join("d.txt"), "d\n");
+        let s = Source::git(r, None).unwrap();
+        assert_eq!(s.git.as_ref().unwrap().branch, None);
+        assert_eq!(summary(&s), ["Added d.txt"]);
+        // An orphan branch shares no history with main.
+        git(r, &["checkout", "-q", "--orphan", "lonely"]);
+        git(r, &["commit", "-qm", "alone"]);
+        let err = Source::git(r, None).err().unwrap().to_string();
+        assert!(err.contains("shares no history"), "{err}");
+    }
+
+    #[test]
+    fn git_symlinks_binary_and_ignored_dirs() {
+        let d = repo();
+        let r = d.path();
+        std::os::unix::fs::symlink("a.txt", r.join("link")).unwrap();
+        fs::write(r.join("img.bin"), b"\x00\x01\x02").unwrap();
+        write(&r.join(".gitignore"), "build/\n");
+        write(&r.join("build/out.o"), "o\n");
+        let s = Source::git(r, None).unwrap();
+        assert_eq!(
+            summary(&s),
+            ["Added .gitignore", "Added img.bin", "Added link"]
+        );
+        let link = s.changes.iter().find(|c| c.path == "link").unwrap();
+        assert_eq!(link.new_mode, Some(Mode::Symlink));
+        assert_eq!(s.read(&link.new).unwrap().unwrap(), b"a.txt");
+        let bin = s.changes.iter().find(|c| c.path == "img.bin").unwrap();
+        assert!(is_binary(&s.read(&bin.new).unwrap().unwrap()));
+    }
+
+    #[test]
+    fn git_outside_a_repo() {
+        let d = tempfile::tempdir().unwrap();
+        let err = Source::git(d.path(), None).err().unwrap().to_string();
+        assert!(err.contains("not in a git repository"), "{err}");
+    }
+
+    #[test]
+    fn folders_edge_cases() {
+        let d = tempfile::tempdir().unwrap();
+        let (old, new) = (d.path().join("old"), d.path().join("new"));
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        // Identical folders: nothing.
+        assert!(Source::diff(&old, &new).unwrap().changes.is_empty());
+        // Two deleted files with the same content and one added: one rename, one deletion.
+        write(&old.join("x1"), "same\n");
+        write(&old.join("x2"), "same\n");
+        write(&new.join("y"), "same\n");
+        // Empty folders aren't changes; a nested .gitignore applies below it.
+        fs::create_dir_all(new.join("empty")).unwrap();
+        write(&new.join("sub/.gitignore"), "*.tmp\n");
+        write(&new.join("sub/keep.rs"), "k\n");
+        write(&new.join("sub/skip.tmp"), "s\n");
+        let s = Source::diff(&old, &new).unwrap();
+        let got = summary(&s);
+        assert_eq!(got.len(), 4, "{got:?}");
+        assert!(got.contains(&"Added sub/.gitignore".to_string()));
+        assert!(got.contains(&"Added sub/keep.rs".to_string()));
+        assert_eq!(
+            got.iter()
+                .filter(|g| g.starts_with("Renamed y <- x"))
+                .count(),
+            1,
+            "{got:?}"
+        );
+        assert_eq!(
+            got.iter().filter(|g| g.starts_with("Deleted x")).count(),
+            1,
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn diff_needs_two_paths_of_the_same_kind() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("f");
+        write(&f, "x\n");
+        assert!(Source::diff(&f, &d.path().join("missing")).is_err());
+        let err = Source::diff(&f, d.path()).err().unwrap().to_string();
+        assert!(err.contains("two files or two folders"), "{err}");
+    }
+
+    #[test]
+    fn generated_files() {
+        let c = |p: &str| Change {
+            path: p.into(),
+            old_path: None,
+            old: Content::None,
+            new: Content::None,
+            old_mode: None,
+            new_mode: None,
+            same_content: false,
+        };
+        for p in [
+            "Cargo.lock",
+            "web/package-lock.json",
+            "go.sum",
+            "a/b/app.min.js",
+            "x.css.map",
+        ] {
+            assert!(c(p).looks_generated(), "{p}");
+        }
+        for p in ["Cargo.toml", "lock.rs", "min.js", "src/main.rs"] {
+            assert!(!c(p).looks_generated(), "{p}");
+        }
+    }
 }

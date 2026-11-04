@@ -94,4 +94,20 @@ mod tests {
         // Typos are errors, as in Helix, so they don't pass silently.
         assert!(parse("[editor]\nmose = false\n").is_err());
     }
+
+    #[test]
+    fn errors_name_the_problem() {
+        let e = parse("theme = 3\n").unwrap_err().to_string();
+        assert!(e.contains("theme"), "{e}");
+        let e = parse("[editor.soft-wrap]\nenable = \"yes\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("enable"), "{e}");
+        let e = parse("[keys.normal]\nx = \"y\"\n").unwrap_err().to_string();
+        assert!(e.contains("keys"), "{e}");
+        assert!(
+            parse("theme = \"x\"\ntheme = \"y\"\n").is_err(),
+            "duplicate keys"
+        );
+    }
 }

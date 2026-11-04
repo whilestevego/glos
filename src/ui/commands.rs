@@ -1275,4 +1275,202 @@ mod tests {
         // The column is kept, so a shorter line puts the cursor on its end, as in Helix.
         assert_eq!(run("ab#[c|]#\nd\n", &[&move_line_down]), "abc\nd#[\n|]#");
     }
+
+    /// Runs one command over a view starting at line `top`, `height` lines tall; returns the
+    /// selection and the new top.
+    fn in_view(input: &str, top: usize, height: usize, f: fn(&mut Ctx)) -> (String, usize) {
+        let (text, sel) = print(input);
+        let rope = Rope::from(text);
+        let mut cx = Ctx {
+            text: &rope,
+            sel,
+            count: None,
+            extend: false,
+            hunks: &[],
+            top,
+            left: 0,
+            height,
+            fmt: TextFormat::default(),
+            status: None,
+            center: false,
+            keep_top: false,
+        };
+        f(&mut cx);
+        let top = cx.top;
+        (
+            plain(rope.clone(), &cx.sel.ensure_invariants(rope.slice(..))),
+            top,
+        )
+    }
+
+    /// Lines `0` to `n - 1`, with a one-character cursor at the start of line `cursor`.
+    fn numbered(n: usize, cursor: usize) -> String {
+        (0..n)
+            .map(|i| {
+                let s = i.to_string();
+                if i == cursor {
+                    format!("#[{}|]#{}\n", &s[..1], &s[1..])
+                } else {
+                    format!("{s}\n")
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn window_motions_respect_scrolloff() {
+        // A 20-line view from line 10: gt goes 5 below the top, gb 5 above the bottom.
+        let (sel, _) = in_view(&numbered(100, 50), 10, 20, goto_window_top);
+        assert_eq!(sel, numbered(100, 15));
+        let (sel, _) = in_view(&numbered(100, 50), 10, 20, goto_window_bottom);
+        assert_eq!(sel, numbered(100, 24));
+        let (sel, _) = in_view(&numbered(100, 50), 10, 20, goto_window_center);
+        assert_eq!(sel, numbered(100, 19));
+        // Near the end of the file the bottom is the last line, less scrolloff.
+        let (sel, _) = in_view(&numbered(12, 0), 0, 20, goto_window_bottom);
+        assert!(sel.contains("#[7|]#"), "{sel}");
+    }
+
+    #[test]
+    fn paging() {
+        let (sel, top) = in_view(&numbered(100, 0), 0, 20, page_down);
+        assert_eq!(top, 20);
+        assert_eq!(
+            sel,
+            numbered(100, 25),
+            "the cursor lands scrolloff below the new top"
+        );
+        let (sel, top) = in_view(&numbered(100, 50), 40, 20, page_up);
+        assert_eq!(top, 20);
+        assert_eq!(sel, numbered(100, 34));
+        let (sel, top) = in_view(&numbered(100, 0), 0, 20, page_cursor_half_down);
+        assert_eq!((top, sel), (10, numbered(100, 10)));
+        // Paging up from the top stays put.
+        let (_, top) = in_view(&numbered(100, 3), 0, 20, page_up);
+        assert_eq!(top, 0);
+        // The view doesn't go past the last line: the empty one after the final newline.
+        let (_, top) = in_view(&numbered(30, 0), 25, 20, page_down);
+        assert_eq!(top, 30);
+    }
+
+    #[test]
+    fn aligning_the_view() {
+        let (_, top) = in_view(&numbered(100, 50), 0, 20, align_view_top);
+        assert_eq!(top, 50);
+        let (_, top) = in_view(&numbered(100, 50), 0, 20, align_view_bottom);
+        assert_eq!(top, 31);
+        let (_, top) = in_view(&numbered(100, 50), 0, 20, align_view_center);
+        assert_eq!(top, 41);
+        let (_, top) = in_view(&numbered(100, 2), 0, 20, align_view_center);
+        assert_eq!(top, 0, "can't scroll above the first line");
+    }
+
+    #[test]
+    fn edges_of_the_file_and_line() {
+        // h at the start stays; l can step onto the end of a file with no final newline, as
+        // in Helix.
+        assert_eq!(run("#[a|]#b", &[&move_char_left]), "#[a|]#b");
+        assert_eq!(run("a#[b|]#", &[&move_char_right]), "ab#[|]#");
+        // x on the last line without a newline selects to the end.
+        assert_eq!(
+            run("a\n#[b|]#", &[&extend_line_below, &extend_line_below]),
+            "a\n#[b|]#"
+        );
+        // gl stops before a CRLF line ending.
+        assert_eq!(run("#[a|]#b\r\ncd", &[&goto_line_end]), "a#[b|]#\r\ncd");
+        // gs on a blank line stays.
+        assert_eq!(
+            run("a\n#[ |]# \n", &[&goto_first_nonwhitespace]),
+            "a\n#[ |]# \n"
+        );
+        // mm with no bracket under the cursor stays.
+        assert_eq!(run("#[a|]#(b)", &[&match_brackets]), "#[a|]#(b)");
+        // ge on a file without a trailing newline goes to its last line.
+        assert_eq!(run("#[a|]#\nb", &[&goto_last_line]), "a\n#[b|]#");
+        // A count past the end goes to the last line.
+        assert_eq!(
+            run("#[a|]#\nb\n", &[&counted(99, goto_line)]),
+            "a\n#[b|]#\n"
+        );
+    }
+
+    #[test]
+    fn paragraph_text_object_and_change_counts() {
+        assert_eq!(
+            run(
+                "a\n#[b|]#\n\nc\n",
+                &[&|cx| select_textobject(cx, false, 'p')]
+            ),
+            "#[a\nb\n|]#\nc\n"
+        );
+        // Text objects that need tree-sitter aren't supported: the selection stays.
+        assert_eq!(
+            run("#[a|]#", &[&|cx| select_textobject(cx, false, 'f')]),
+            "#[a|]#"
+        );
+        let hunks = [
+            Hunk {
+                before: 0..1,
+                after: 0..1,
+            },
+            Hunk {
+                before: 2..3,
+                after: 2..3,
+            },
+            Hunk {
+                before: 4..5,
+                after: 4..5,
+            },
+        ];
+        let t = "#[a|]#\nb\nc\nd\ne\n";
+        assert_eq!(
+            run_with(t, false, &hunks, &[&counted(2, goto_next_change)]),
+            "a\nb\nc\nd\n#[e\n|]#"
+        );
+        assert_eq!(
+            run_with(t, false, &hunks, &[&goto_first_change]),
+            "#[a\n|]#b\nc\nd\ne\n"
+        );
+        // No hunks: a message, and the cursor stays.
+        let (text, sel) = print("#[a|]#\n");
+        let rope = Rope::from(text);
+        let mut cx = Ctx {
+            text: &rope,
+            sel,
+            count: None,
+            extend: false,
+            hunks: &[],
+            top: 0,
+            left: 0,
+            height: 10,
+            fmt: TextFormat::default(),
+            status: None,
+            center: false,
+            keep_top: false,
+        };
+        goto_next_change(&mut cx);
+        assert_eq!(
+            cx.status.as_ref().map(|s| s.0.as_str()),
+            Some("No changes in this file")
+        );
+        goto_first_change(&mut cx);
+        assert_eq!(plain(rope.clone(), &cx.sel), "#[a|]#\n");
+    }
+
+    #[test]
+    fn select_mode_extends_every_motion_kind() {
+        let e = |input, f: &dyn Fn(&mut Ctx)| run_with(input, true, &[], &[f]);
+        assert_eq!(e("#[a|]#bc\nd", &goto_line_end), "#[abc|]#\nd");
+        assert_eq!(e("ab#[c|]#", &goto_line_start), "#[|abc]#");
+        assert_eq!(e("#[a|]#\nb\n", &goto_last_line), "#[a\nb|]#\n");
+        assert_eq!(e("#[a|]#bcb", &|cx| find_next_char(cx, 'b')), "#[ab|]#cb");
+        let hunks = [Hunk {
+            before: 2..2,
+            after: 2..3,
+        }];
+        assert_eq!(
+            run_with("#[a|]#\nb\nc\n", true, &hunks, &[&goto_next_change]),
+            "#[a\nb\nc\n|]#"
+        );
+    }
 }
