@@ -90,8 +90,9 @@ for lang in LANGS:
     dest = out_vendor / name
     srcdir = f"{sub}/src/" if sub else "src/"
     for rel, m in members(tar, ""):
-        if rel.startswith(srcdir) or rel.startswith("common/") or rel == "LICENSE":
-            if rel.endswith((".c", ".h", ".cc")) or rel == "LICENSE":
+        is_licence = rel in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
+        if rel.startswith(srcdir) or rel.startswith("common/") or is_licence:
+            if rel.endswith((".c", ".h", ".cc")) or is_licence:
                 extract(tar, rel, m, dest / rel)  # keep repo layout: scanners include ../../common
     (dest / "REV").write_text(f"{src['git']} {src['rev']} {sub}\n")
     print("vendored", name, file=sys.stderr)
