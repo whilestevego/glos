@@ -1,3 +1,4 @@
+mod source;
 mod store;
 
 use std::path::PathBuf;

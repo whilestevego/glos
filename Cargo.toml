@@ -7,7 +7,13 @@ edition = "2024"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 etcetera = "0.11.0"
+gix = "0.90.0"
+ignore = "0.4.34"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# gix is very slow unoptimised (a 1.2 s scan takes 24 s); optimise dependencies in dev builds.
+[profile.dev.package."*"]
+opt-level = 2
