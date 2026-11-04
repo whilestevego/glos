@@ -3,7 +3,12 @@
 
 use std::borrow::Cow;
 
-use helix_core::{Rope, RopeSlice, Selection};
+use helix_core::{
+    Rope, RopeSlice, Selection,
+    doc_formatter::{DocumentFormatter, TextFormat},
+    graphemes::Grapheme,
+    text_annotations::TextAnnotations,
+};
 use helix_stdx::rope::RopeSliceExt;
 use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 use unicode_width::UnicodeWidthStr;
@@ -128,14 +133,32 @@ impl File {
 /// How `draw` styles a selection: (selection, primary selection, cursor, primary cursor).
 pub type SelectionStyles = (Style, Style, Style, Style);
 
+/// The text layout for a view `width` columns wide, with Helix's soft-wrap defaults
+/// (helix-view `Document::text_format`): wrap indicator `↪ `, max-wrap 20, max-indent-retain 40.
+pub fn text_format(file: &File, width: u16, wrap: bool) -> TextFormat {
+    TextFormat {
+        soft_wrap: wrap && width > 10,
+        tab_width: file.tab_width as u16,
+        max_wrap: 20.min(width / 4),
+        max_indent_retain: 40.min(width * 2 / 5),
+        wrap_indicator: "↪ ".into(),
+        wrap_indicator_highlight: None,
+        viewport_width: width,
+        soft_wrap_at_text_width: false,
+    }
+}
+
 /// Draws `file`'s notices and text into `area`, from line `top`: with the gutter and the
-/// selection for the main view, without them for a preview.
+/// selection for the main view, without them for a preview. Lines are laid out by helix-core's
+/// `DocumentFormatter`, so tabs, wide characters and soft wrap fall where Helix puts them.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     buf: &mut Buffer,
     area: Rect,
     file: &File,
     top: usize,
     left: usize,
+    wrap: bool,
     loader: &Loader,
     theme: &Theme,
     main: Option<SelectionStyles>,
@@ -170,44 +193,81 @@ pub fn draw(
         None => vec![],
     };
     let text_style = theme.get("ui.text");
+    let wrap_style = theme.get("ui.virtual.wrap");
     let (sel_style, sel_primary, cursor, cursor_primary) = main.unwrap_or_default();
     let (added, deleted, modified) =
         (theme.get("diff.plus.gutter"), theme.get("diff.minus.gutter"), theme.get("diff.delta.gutter"));
 
     let x0 = area.x + gutter;
-    let width = area.width.saturating_sub(gutter) as usize;
+    let width = area.width.saturating_sub(gutter);
+    let fmt = text_format(file, width, wrap);
+    let left = if fmt.soft_wrap { 0 } else { left };
+    let annotations = TextAnnotations::default();
+    let bottom = area.bottom();
     let mut hunk_i = 0;
-    for line in top..last {
-        if main.is_some() {
-            // The line number, then the diff sign as Helix's diff gutter draws it.
-            let selected = cursor_lines.contains(&line);
-            let nr_style = theme.get(if selected { "ui.linenr.selected" } else { "ui.linenr" });
-            buf.set_string(area.x + 2, y, format!("{:>digits$}", line + 1), nr_style);
-            let l = line as u32;
-            while let Some(h) = file.hunks.get(hunk_i) {
-                if h.after.end < l || (!h.after.is_empty() && l == h.after.end) {
-                    hunk_i += 1;
-                } else {
-                    break;
-                }
-            }
-            if let Some(h) = file.hunks.get(hunk_i).filter(|h| h.after.start <= l) {
-                let (sign, style) = if h.before.is_empty() {
-                    ("▍", added)
-                } else if h.after.is_empty() {
-                    ("▔", deleted)
-                } else {
-                    ("▍", modified)
-                };
-                buf.set_string(x0 - 1, y, sign, style);
+    let mut line = top;
+    while y < bottom && line < text.len_lines() {
+        // The diff sign for this line, as Helix's diff gutter picks it.
+        let l = line as u32;
+        while let Some(h) = file.hunks.get(hunk_i) {
+            if h.after.end < l || (!h.after.is_empty() && l == h.after.end) {
+                hunk_i += 1;
+            } else {
+                break;
             }
         }
-
-        let mut col = 0usize;
-        let mut ch = text.line_to_char(line);
-        for g in text.line(line).graphemes() {
-            let g: Cow<str> = g.into();
-            let newline = g.ends_with('\n');
+        let sign = file.hunks.get(hunk_i).filter(|h| h.after.start <= l).map(|h| {
+            if h.before.is_empty() {
+                ("▍", added, true)
+            } else if h.after.is_empty() {
+                ("▔", deleted, false) // a removal shows on the first row only
+            } else {
+                ("▍", modified, true)
+            }
+        });
+        let gutter_row = |buf: &mut Buffer, row: usize, y: u16| {
+            if main.is_none() {
+                return;
+            }
+            if row == 0 {
+                let selected = cursor_lines.contains(&line);
+                let nr_style = theme.get(if selected { "ui.linenr.selected" } else { "ui.linenr" });
+                buf.set_string(area.x + 2, y, format!("{:>digits$}", line + 1), nr_style);
+            }
+            if let Some((sign, style, every_row)) = sign {
+                if row == 0 || every_row {
+                    buf.set_string(x0 - 1, y, sign, style);
+                }
+            }
+        };
+        gutter_row(buf, 0, y);
+        let mut rows = 1;
+        let mut end_col = 0;
+        let mut end_char = text.line_to_char(line);
+        let start = end_char;
+        for g in DocumentFormatter::new_at_prev_checkpoint(text, &fmt, &annotations, start) {
+            if g.line_idx != line {
+                break;
+            }
+            let row = g.visual_pos.row;
+            let yy = y + row as u16;
+            if yy >= bottom {
+                break;
+            }
+            if row + 1 > rows {
+                gutter_row(buf, row, yy);
+                rows = row + 1;
+            }
+            let col = g.visual_pos.col;
+            let w = g.raw.width().max(1);
+            if g.is_virtual() {
+                // The wrap indicator.
+                if col >= left && col + w <= left + width as usize {
+                    buf.set_string(x0 + (col - left) as u16, yy, g.raw.to_string(), text_style.patch(wrap_style));
+                }
+                continue;
+            }
+            let ch = g.char_idx;
             let byte = text.char_to_byte(ch);
             while span + 1 < spans.len() && spans[span + 1].0 <= byte {
                 span += 1;
@@ -224,39 +284,38 @@ pub fn draw(
                     style = style.patch(if i == primary { cursor_primary } else { cursor });
                 }
             }
-            let (symbol, w): (Cow<str>, usize) = if newline {
-                (" ".into(), 1)
-            } else if g == "\t" {
-                (" ".into(), file.tab_width - col % file.tab_width)
-            } else {
-                let s = clean(&g);
-                let w = s.width().max(1);
-                (s, w)
-            };
-            if col >= left && col + w <= left + width {
+            if col >= left && col + w <= left + width as usize {
                 let x = x0 + (col - left) as u16;
-                if g == "\t" || newline {
-                    for i in 0..w as u16 {
-                        buf[(x + i, y)].set_symbol(" ").set_style(style);
+                match &g.raw {
+                    Grapheme::Other { g: s } => {
+                        buf[(x, yy)].set_symbol(&clean(s)).set_style(style);
+                        for i in 1..w as u16 {
+                            buf[(x + i, yy)].set_symbol("").set_style(style);
+                        }
                     }
-                } else {
-                    buf[(x, y)].set_symbol(&symbol).set_style(style);
-                    for i in 1..w as u16 {
-                        buf[(x + i, y)].set_symbol("").set_style(style);
+                    // Tabs and the newline (where the cursor can sit) draw as spaces.
+                    _ => {
+                        for i in 0..w as u16 {
+                            buf[(x + i, yy)].set_symbol(" ").set_style(style);
+                        }
                     }
                 }
             }
-            col += w;
-            ch += g.chars().count();
-            if newline || col >= left + width {
+            end_col = col + w;
+            end_char = ch + g.doc_chars();
+            if matches!(g.raw, Grapheme::Newline) {
                 break;
             }
         }
         // The cursor can sit at the very end of a file with no trailing newline.
-        if ch == text.len_chars() && ranges.iter().any(|r| r.2 == ch) && col >= left && col < left + width {
-            buf[(x0 + (col - left) as u16, y)].set_symbol(" ").set_style(cursor_primary);
+        if end_char == text.len_chars() && ranges.iter().any(|r| r.2 == end_char) {
+            let row_y = y + rows as u16 - 1;
+            if end_col >= left && end_col < left + width as usize && row_y < bottom {
+                buf[(x0 + (end_col - left) as u16, row_y)].set_symbol(" ").set_style(cursor_primary);
+            }
         }
-        y += 1;
+        y += rows as u16;
+        line += 1;
     }
 }
 
@@ -269,25 +328,6 @@ pub fn visual_col(text: RopeSlice, pos: usize, tab_width: usize) -> usize {
         col += if g == "\t" { tab_width - col % tab_width } else { clean(&g).width().max(1) };
     }
     col
-}
-
-/// The character at display column `col` on `line`, or the line's end.
-pub fn pos_at_col(text: RopeSlice, line: usize, col: usize, tab_width: usize) -> usize {
-    let mut c = 0;
-    let mut pos = text.line_to_char(line);
-    for g in text.line(line).graphemes() {
-        let g: Cow<str> = g.into();
-        if g.ends_with('\n') {
-            break;
-        }
-        let w = if g == "\t" { tab_width - c % tab_width } else { clean(&g).width().max(1) };
-        if col < c + w {
-            return pos;
-        }
-        c += w;
-        pos += g.chars().count();
-    }
-    pos
 }
 
 /// Untrusted text is never drawn raw: control characters become visible symbols, so escape
@@ -332,8 +372,5 @@ mod tests {
         assert_eq!(visual_col(t.slice(..), 1, 4), 4);
         assert_eq!(visual_col(t.slice(..), 4, 4), 8);
         assert_eq!(visual_col(t.slice(..), 5, 4), 9);
-        assert_eq!(pos_at_col(t.slice(..), 0, 2, 4), 0); // inside the tab
-        assert_eq!(pos_at_col(t.slice(..), 0, 7, 4), 3); // the second half of 漢
-        assert_eq!(pos_at_col(t.slice(..), 0, 50, 4), 5);
     }
 }
