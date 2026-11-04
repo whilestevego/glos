@@ -15,9 +15,10 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
 - Work on any two files or folders. Git adds branches, commits and a base, but isn't required.
 - Feel like Helix: same modes, keys, pickers, themes and syntax highlighting.
 - Agents are first-class: they reply, resolve, pre-annotate their changes, ask for review and can
-  point you at a line, through MCP.
-- Nothing you write is ever lost: every comment is saved the moment you write it.
+  suggest a line for you to look at, through MCP.
+- Nothing you write is ever lost: every comment, and every draft as you type it, is saved at once.
 - Standalone: runs in any terminal, with no terminal-specific integration required.
+- Fast: the first screen appears before the diff is fully computed.
 - Lean on well-maintained crates; write only what's specific to reviewing.
 
 ## Non-goals
@@ -35,31 +36,40 @@ decision behind this plan, with the options considered, is in [DECISIONS.md](DEC
    there. If not, glos runs your `open_command` (a tmux or kitty split, for example) when you've
    set one; otherwise the agent asks you to run `glos`. In a git repo, glos shows the branch since
    it left `main`, uncommitted and untracked files included. You can also run `glos` yourself in
-   any repo, or `glos old new` on any two files or folders.
+   any repo, or `glos diff old new` on any two files or folders.
 2. The agent may already have left notes on its own changes, such as "why I did this" or "unsure
-   here". They're drawn in their own colour.
-3. You read the code in full-file view, with changed lines marked in the gutter. `]h` jumps to the
-   next hunk and `]f` to the next file. `space f` opens a fuzzy picker of changed files.
-4. Select lines the Helix way (`x`, `X`, `v`, or a mouse drag), then `space c` to comment. Each
-   comment saves instantly.
-5. `space s` submits. The review is pushed straight into the agent's Claude Code session through an
-   MCP channel. There's no prompt to paste.
-6. As the agent works, glos refreshes live: the diff changes, threads follow their lines, and
-   replies appear in place with a notice. A thread whose code is gone is marked outdated.
+   here". They're marked with the agent's name and drawn in their own colour.
+3. You read the code in full-file view, with changed lines marked in the gutter. `]g` jumps to the
+   next change and `gn` to the next file, as in Helix. `space g` opens a fuzzy picker of changed
+   files, and `space f` opens any file in the repo, read-only, when you need context.
+4. Select lines the Helix way (`x`, `X`, `v`, or a mouse drag), then `space c` to comment. A small
+   box opens in insert mode; `esc` then `enter` saves the comment. The draft is saved as you type.
+5. `space s` submits, with a verdict: approved, changes requested, or just comments. The review is
+   pushed straight into the agent's Claude Code session through an MCP channel. There's no prompt
+   to paste. Until you submit, the statusline shows how many comments the agent hasn't received.
+6. As the agent works, glos refreshes live without moving your view: the diff changes, threads
+   follow their lines, and replies appear in place, marked unread. `]u` jumps to the next unread
+   reply. A thread whose code is gone is marked outdated.
 7. Round 2: switch the scope to "since last review" to see only what changed in response to you,
-   with or without git. Reply, resolve, or reopen, then submit again.
+   with or without git. Reply, resolve, or reopen, then submit again. When you're done, approve and
+   close the review.
 8. With several agents on several branches or worktrees, the dashboard lists every review with
-   pending work and open threads, and you jump between them.
+   unsubmitted comments, unread replies and open threads, and you jump between them.
 
 ## What glos can review
 
-- **Two files:** `glos old.rs new.rs`. The most basic review; no git needed.
-- **Two folders:** `glos old/ new/`. Files are matched by relative path; `.gitignore` rules are
-  honoured if present.
+- **Two files:** `glos diff old.rs new.rs`. The most basic review; no git needed.
+- **Two folders:** `glos diff old/ new/`. Files are matched by relative path; `.gitignore` rules
+  are honoured if present.
 - **A git repo:** `glos` inside it. Branch vs base by default, plus per-commit scope.
 
-Each source becomes the same list of (path, old text, new text), and glos diffs it itself with
-imara-diff. Git is only one way to get the old side; everything after that is shared.
+Each source becomes the same list of changes, and glos diffs text itself with imara-diff. Git is
+only one way to get the old side; everything after that is shared.
+
+**Kinds of change.** Besides edited files, glos shows added and deleted files, renames (detected by
+gix for git; by identical content for folders), mode changes and symlinks, each as a one-line
+header. Binary files get a one-line notice instead of a diff. Lockfiles, minified files and files
+marked generated in `.gitattributes` (`linguist-generated`) start collapsed; `enter` expands them.
 
 ## Architecture
 
@@ -68,11 +78,11 @@ or reuse call for it.
 
 | Module | Job |
 |---|---|
-| `cli` | Entry point: `glos`, `glos <old> <new>`, `glos mcp`, `glos review …`, `glos dashboard`, `glos open` |
-| `core` | Review data model: reviews, rounds, snapshots, threads, comments, anchors, and re-anchoring |
-| `source` | Turns two files, two folders or a git repo into old/new pairs; git through gix |
-| `store` | The SQLite database in the user data dir, including snapshots |
-| `ui` | ratatui front end: views, keymap engine, key help panel, pickers, popups, themes, highlighting |
+| `cli` | Entry point and subcommands (see The CLI) |
+| `core` | Review data model: reviews, rounds, snapshots, threads, comments, drafts, anchors, and re-anchoring |
+| `source` | Turns two files, two folders or a git repo into changes; git through gix |
+| `store` | The SQLite database, its migrations, and snapshots |
+| `ui` | ratatui front end: views, keymap engine, key help panel, comment box, pickers, popups, themes, highlighting |
 | `mcp` | MCP server for agents, including the channel push |
 | `edit` | After the MVP: in-place editing on top of `helix-core` |
 
@@ -80,30 +90,34 @@ or reuse call for it.
 
 - **The UI** (`glos`) is the only process that draws.
 - **The MCP server** (`glos mcp`) is started by the agent host (Claude Code) over stdio, one per
-  agent session. It registers its session and the folder it was started in, and reads and writes
-  review state in the store. It's also the channel that pushes your submitted review into that
-  agent's session.
-- **The CLI** (`glos review …`) reads and writes the same state as JSON for scripts and for agents
-  without MCP.
+  agent session. It registers itself and the folder it was started in, and reads and writes review
+  state in the store. It's also the channel that pushes your submitted review into that agent's
+  session.
+- **The CLI** (`glos list`, `glos reply`, …) reads and writes the same state for scripts and for
+  agents without MCP.
 - All of them share one SQLite database, and that's the only channel between them: no socket and
   no daemon. Each process notices the others' changes by checking `PRAGMA data_version` about twice
   a second. That's how replies appear live in the UI, how an MCP server learns you submitted, and
-  how `focus` reaches an open view.
+  how an agent's suggestion reaches an open view.
 
 ### Data model (`core`)
 
 ```
 Review     id, source (two files | two folders | git repo + worktree + branch + base),
-           created/updated, rounds[], threads[]
-Round      n, submitted_at, snapshot
+           status (open | closed | archived), created/updated, rounds[], threads[]
+Round      n, submitted_at, verdict (approved | changes requested | comments), snapshot
 Snapshot   the content of every file in the review at that moment: path → content hash
            (git: also the head commit, for reference)
-Thread     id, anchor, status (open | resolved | outdated), comments[], created_round
+Thread     id, anchor, status (open | resolved | outdated), comments[], created_round,
+           last_seen_at (for unread replies)
 Anchor     file path, line range on the new side, the anchored lines' text, context lines
            (3 above, 3 below), hash of the file's content when the comment was made;
            or none for a review-level thread
-Comment    id, author (you | agent name), kind (comment | annotation), body, created_at
-Session    agent session id, folder it serves, process id, last seen
+Comment    id, author (you | agent name), kind (comment | annotation), body, created_at,
+           edited_at, submitted_in (round, or none while unsubmitted)
+Draft      the text in an open comment box and where it belongs, saved as you type
+Session    MCP server process id, agent name (from the MCP client's clientInfo), folder it
+           serves, last seen
 ```
 
 **Snapshots.** glos keeps its own copy of what you reviewed instead of relying on git: an agent's
@@ -116,7 +130,8 @@ files in the review.
 through the diff between the file's content when the thread was anchored and now (with imara-diff).
 If the anchored text is gone, glos searches the file for the same text near the old spot, using the
 context lines as a tie-break. If that fails, the thread becomes **outdated** and is shown against
-the code as it was. This is the riskiest logic in the project and gets the most tests.
+the code as it was. This is the riskiest logic in the project and gets the most tests. The same
+mapping keeps your cursor and scroll position on the same code when a file changes under you.
 
 While the agent is editing, a thread isn't marked outdated straight away. glos waits until the
 files have been quiet for a few seconds, or the round ends, so threads don't flicker between open
@@ -125,14 +140,23 @@ and outdated mid-edit. Once outdated, a thread stays outdated until you reopen o
 Comments go on the new side only. Comments on removed lines may come later, in the unified and
 side-by-side views.
 
+**A review's life.** A review is open until you close it (`:close`, usually after approving). glos
+archives it on its own when its branch is merged into the base or deleted. Closed and archived
+reviews leave the dashboard but stay searchable with `glos list --all`. `glos gc` deletes archived
+reviews older than a set age and any snapshot content nothing refers to any more.
+
 ### Storage (`store`)
 
-- One SQLite database (`rusqlite`, bundled), `glos.db`, in the user data dir from `etcetera`
-  (`~/.local/share/glos` on Linux; macOS uses its Application Support folder).
+- One SQLite database (`rusqlite`, bundled), `glos.db`. glos uses the XDG folders on macOS and
+  Linux alike, as Helix does: data in `$XDG_DATA_HOME/glos` (`~/.local/share/glos`), config in
+  `$XDG_CONFIG_HOME/glos` (`~/.config/glos`), logs in `$XDG_STATE_HOME/glos`
+  (`~/.local/state/glos`). `--db` or `GLOS_DB` points at another database, for tests and scripts.
 - Every action (a comment, a reply, a resolve) is one transaction, written the moment it happens.
-  There's no "save" step, and quitting never loses anything.
+  Comment drafts are saved as you type. There's no "save" step, and quitting never loses anything.
 - SQLite handles several processes writing at once (WAL mode with a busy timeout), so the UI, MCP
   servers and CLI never overwrite each other's changes.
+- The schema is versioned with `PRAGMA user_version`. Migrations run at startup, and the database
+  is copied to a backup first.
 - Reviews are keyed by their source: for git, the shared git dir (so worktrees of one repo sit
   together) plus the worktree and branch; for files and folders, their canonical paths.
 
@@ -152,57 +176,124 @@ Scopes, switched with `space o` or `:scope`, which you can combine with a files 
 - **Branch vs base** (default for git): the merge-base with `main` (or origin's default branch)
   against the worktree, uncommitted and untracked files included.
 - **Since last review** (any source): against the snapshot taken at your last submit.
-- **Per commit** (git only): step through the branch's commits with `]c` / `[c`.
+- **Per commit** (git only): step through the branch's commits with `]C` / `[C`.
 - **Files filter:** by path or glob, or only files with open threads.
 
-Navigation: the file picker (`space f`) is primary; `space e` toggles a file tree with change counts
-and thread badges. Threads are drawn inline under their lines as virtual text, collapsed to a
-one-line marker until you open them, like Helix's inline diagnostics.
+Navigation: the changed-file picker (`space g`) is primary; `gn` / `gp` step through changed files;
+`space f` opens any file in the repo, read-only, for context; `space e` toggles a file tree with
+change counts and thread badges. Threads are drawn inline under their lines as virtual text,
+collapsed to a one-line marker until you open them, like Helix's inline diagnostics.
+
+**Long lines.** Soft wrap is off by default, as in Helix, with horizontal scrolling;
+`:toggle soft-wrap` (and `[editor.soft-wrap]` in config) turns it on. Tab width follows
+`languages.toml`. Wide characters and emoji take their real width.
+
+## Writing comments
+
+`space c` opens the comment box under the selection; `space C` opens one for a review-level
+comment, and `space r` one for a reply.
+
+- The box is a small Helix-style buffer. It opens in insert mode; `esc` goes to normal mode, where
+  `enter` saves the comment and `q` closes the box. Motions and selections work as in the rest of
+  glos (`helix-core`).
+- The draft is saved as you type. Closing the box, quitting or a crash keeps it, and it comes back
+  when you reopen the box on that line.
+- `:editor` opens the draft in `$EDITOR` for long comments, and brings the result back.
+- Bodies are Markdown, shown as plain text with light styling (code spans, lists).
+- `space m` on a thread edits your latest comment in it. Until you submit, edits and deletes (an
+  empty save, after a confirmation) are silent. After a submit, an edit is marked as edited and the
+  agent is told in the next submit.
+
+**Unsubmitted comments** are always visible: the statusline shows their count (`3 unsent`), quitting
+with any reminds you once, and the dashboard lists them per review.
+
+## Submitting
+
+`space s` (or `:submit [approve|changes|comment]`) sends every unsubmitted comment as one round,
+with a verdict:
+
+- **Approve:** you're done; the agent may finish up (and you may `:close` the review).
+- **Changes requested:** the agent should address the threads and request review again.
+- **Comment:** questions or notes, without a verdict.
+
+The verdict goes to the agent with the comments. Submitting with no comments and an approval is
+allowed; that's an LGTM.
 
 ## Keymap (Helix first)
 
 glos follows Helix's keys wherever an action exists there: `hjkl`, `w`/`b`/`e`, `gg`/`ge`, `gh`/`gl`,
-`x`/`X`, `v` (select mode), `%`, `;`, `,`, `/` search, `:` commands, `space`-mode, and so on. `u`
-(undo) and the other editing keys come with in-place editing, after the MVP. Review actions are
-added where Helix leaves room:
+`x`/`X`, `v` (select mode), `%`, `;`, `,`, `/` search, `y`/`space y` (yank), `:` commands,
+`space`-mode, and so on. `u` (undo) and the other editing keys come with in-place editing, after
+the MVP. Review concepts map onto Helix's: changes are hunks (`]g`), threads are diagnostics (`]d`,
+`space d`), changed files are like buffers (`gn`, `gp`). Review actions are added where Helix leaves
+room:
 
 | Key | Action |
 |---|---|
 | `space c` | Comment on the selection (on the line when nothing is selected) |
 | `space C` | Review-level comment |
 | `space r` | Reply to the thread under the cursor |
+| `space m` | Edit (or delete) your latest comment on the thread under the cursor |
 | `space x` | Resolve or reopen the thread under the cursor |
-| `space s` | Submit the review to the agent |
+| `space s` | Submit the review to the agent, with a verdict |
 | `space v` | Switch view |
 | `space o` | Switch scope |
-| `space f` | Changed-file picker |
-| `space t` | Thread picker (open, outdated, by author) |
-| `space e` | Toggle file tree |
-| `space d` | Dashboard |
-| `]h` `[h` | Next / previous hunk |
-| `]t` `[t` | Next / previous thread |
-| `]f` `[f` | Next / previous file |
-| `]c` `[c` | Next / previous commit (per-commit scope) |
-| `enter` | Expand or collapse the thread under the cursor |
+| `space g` | Changed-file picker (as in Helix) |
+| `space f` | Any file in the repo, read-only (as in Helix) |
+| `space d` / `space D` | Thread picker: this file / the whole review (Helix's diagnostic pickers) |
+| `space e` | Toggle file tree (Helix's file explorer key) |
+| `space l` | Dashboard: the list of reviews |
+| `space n` | Jump to the line the agent suggested |
+| `space y` | Yank the selection to the system clipboard (as in Helix) |
+| `]g` `[g` | Next / previous change (as in Helix) |
+| `]d` `[d` | Next / previous thread (Helix's diagnostic motions) |
+| `]u` `[u` | Next / previous unread reply |
+| `gn` `gp` | Next / previous changed file (Helix's buffer motions) |
+| `]C` `[C` | Next / previous commit (per-commit scope) |
+| `enter` | Expand or collapse the thread, or collapsed file, under the cursor |
 | `i` `a` `o` … | After the MVP: edit in place on the new side (Helix insert mode); changes save on `:w` |
 
-Some of these keys mean something else in Helix: `space c` toggles comments, `space s` is the
-symbol picker, `space r` renames and `space d` is the diagnostics picker. Those need an LSP or
-editing, which glos doesn't have, so glos reuses the keys for review actions on purpose.
+Some of these keys mean something else in Helix: `space c` and `space C` toggle comments, `space s`
+is the symbol picker and `space r` renames. Those need an LSP or editing, which glos doesn't have,
+so glos reuses the keys for review actions on purpose. Helix's tree-sitter motions (`]f` function,
+`]t` type, `]c` comment, `]a` argument) keep their Helix meaning. Every key above is checked
+against the keymap checklist at the pinned Helix release.
 
-Every action is also a typable command (`:comment`, `:reply`, `:resolve`, `:submit`, `:view`,
-`:scope`, `:dashboard`), with completion. Keys can be remapped in `config.toml`, as in Helix.
+Every action is also a typable command (`:comment`, `:reply`, `:resolve`, `:submit`, `:close`,
+`:view`, `:scope`, `:dashboard`, `:editor`), with completion. Keys can be remapped in
+`config.toml`, as in Helix.
 
 **The key help panel** is essential, not an extra. As in Helix's infobox, pressing any key that
 starts a sequence (`space`, `g`, `]`, `[`, `m`, `z`, …) opens a panel listing the keys that can
 follow, each with a one-line description. glos goes one step further and lists only what applies
-where you are: thread actions when the cursor is on a thread, `]c`/`[c` only in per-commit scope,
+where you are: thread actions when the cursor is on a thread, `]C`/`[C` only in per-commit scope,
 submit only when there's something to submit. The panel is built from the live keymap, so remapped
 keys show their new bindings. It's part of the keymap engine in M1.
 
-**Mouse (full):** click to move the cursor, drag to select, wheel to scroll; click files in the tree
-and picker, click a thread marker to expand it, and click buttons in popups. The keyboard stays
-primary.
+**Mouse:** on by default, and `[editor] mouse = false` turns it off, as in Helix. Click to move the
+cursor, drag to select, wheel to scroll; click files in the tree and picker, click a thread marker
+to expand it, and click buttons in popups. While glos captures the mouse, the terminal's own text
+selection needs a modifier (usually shift), so `space y` yanks to the system clipboard: `pbcopy`,
+`wl-copy` or `xclip` as Helix does, or OSC 52 over SSH. The keyboard stays primary.
+
+## The terminal
+
+- **Untrusted text.** Agent comments and file contents can contain escape sequences that change
+  the window title, write to your clipboard or corrupt the screen. glos strips control characters
+  from everything it draws, and shows them as visible symbols in code, as Helix does.
+- **Logs never go to the terminal.** In `glos mcp`, stdout carries the MCP protocol and one stray
+  print breaks it; in the UI, output corrupts the screen. Logs go to `~/.local/state/glos/glos.log`;
+  `-v` adds detail.
+- **Behaving well:** the terminal is restored on a panic, `ctrl-z` suspends and resumes, resizing
+  redraws, and focus events trigger a refresh.
+- **Colour.** Themes are 24-bit; on terminals without truecolor (checked through `COLORTERM`, as
+  Helix does) colours are mapped to the nearest 256-colour ones. `NO_COLOR` is respected. Authors
+  are never told apart by colour alone: every comment carries its author's name.
+- **Your view stays put.** Live refreshes and agent activity never move the cursor or scroll. An
+  agent's `suggest` shows as a notice ("agent suggests src/main.rs:42"); `space n` jumps there.
+- **Speed.** The first screen draws before the whole diff is computed; files are diffed and
+  highlighted as they're needed, and only visible lines are highlighted. Target: under 100 ms to
+  the first screen on a typical branch.
 
 ## Helix fidelity
 
@@ -214,7 +305,8 @@ not.
   `~/.config/glos/` and mirrors Helix's layout (`theme`, `[keys.normal]`, `[editor]`). Your own
   themes go in `~/.config/glos/themes/` in Helix's format, so a Helix theme can be copied over as
   is. Themes that build on another (`inherits`) and named colours (`[palette]`) are resolved as
-  Helix does.
+  Helix does. A config error is shown at startup, and glos carries on with the defaults, as Helix
+  does.
 - **Syntax highlighting:** tree-sitter, with the grammars compiled into glos. A script takes from a
   pinned Helix release its `languages.toml` (which maps files to languages and pins each grammar's
   source and revision), the highlight queries and the themes. It fetches each grammar's source at
@@ -254,47 +346,74 @@ not.
 
 | Tool | What it does |
 |---|---|
-| `get_review` | The current review: scope, files, open threads, with anchors and bodies |
+| `get_review` | A summary of the current review: verdict, scope, files, and the open threads with what's new since the agent's last call. Full threads on request, by id, so the agent's context isn't flooded |
 | `reply` | Reply on a thread |
 | `resolve` | Resolve a thread with a note; `reopen` reverses it |
 | `annotate` | Leave an agent note on a line or range before you review |
 | `request_review` | Say the work is ready, optionally scoped to the files it touched. An open glos shows the request; otherwise glos runs `open_command` if set, and the answer tells the agent to ask you to run `glos` if nothing opened |
-| `focus` | Move your open view to a file and line. Only works when you've allowed it, per review, and shows who moved it |
+| `suggest` | Suggest a file and line for you to look at. It shows as a notice in your open view, and `space n` jumps there; your view never moves on its own |
 | `wait_for_review` | Fallback for hosts without channels: waits a few minutes for you to submit, then answers "still waiting" so the agent calls again, staying under the host's tool timeout |
 
 **Channel push.** When you submit, the MCP server attached to that review's agent session sees the
 submit in the database and pushes the review into the session as a channel message (Claude Code
 channels: the server declares the channel capability and sends a notification). The message holds
-every new comment with its file, lines and thread id, and tells the agent to answer each one with
-`reply`/`resolve`. This needs checking first (see M0): if channels aren't available or behave
-differently, `wait_for_review` covers it inside glos, and the separate Claude Code plugin can wait
-for a submit through the CLI and send the review as a prompt.
+the verdict and every new or edited comment with its file, lines and thread id, and tells the
+agent to answer each one with `reply`/`resolve`. This needs checking first (see M0): if channels
+aren't available or behave differently, `wait_for_review` covers it inside glos, and the separate
+Claude Code plugin can wait for a submit through the CLI and send the review as a prompt.
 
-**Which session gets it:** each review is tied to a folder (the worktree, or the folder holding the
-files). The MCP server registers the folder it was started in; a submit goes to the sessions
-registered for that folder. If several sessions serve the same folder, the most recently attached
-one gets it. Before delivering, sessions whose process is gone (checked by process id) are
-removed. With none attached, the review waits and is delivered when one attaches.
+**Which session gets it:** an MCP server over stdio isn't told the host's session id, so each
+server is identified by its own process id and named after the `clientInfo` its MCP client sends.
+Each review is tied to a folder (the worktree, or the folder holding the files), and each server
+registers the folder it was started in; a submit goes to the servers registered for that folder.
+If several serve the same folder, the most recently attached one gets it. Before delivering,
+servers whose process is gone are removed. With none attached, the review waits and is delivered
+when one attaches.
+
+**Setting it up:** `claude mcp add glos -- glos mcp` registers glos with Claude Code; `glos doctor`
+checks that it worked.
 
 ## The CLI
 
-For scripts and agents without MCP, every operation exists as a subcommand with JSON output:
-`glos review list | show | comments | reply | resolve | annotate | submit`. This is also how the
-separate Claude Code plugin and tests drive glos.
+Plain `glos` reviews the current repo; everything else is a subcommand, so a file named like a
+subcommand is never ambiguous:
+
+| Command | What it does |
+|---|---|
+| `glos` | Open the review for the current repo (branch vs base) |
+| `glos diff <old> <new>` | Review two files or two folders, like `git diff --no-index` |
+| `glos list [--all]` | Reviews on this machine: open ones by default, closed and archived with `--all` |
+| `glos show [<review>]` | A review's threads and comments |
+| `glos reply`, `resolve`, `reopen`, `annotate`, `submit`, `close` | The same actions as in the UI and MCP |
+| `glos dashboard` | Open the dashboard |
+| `glos open` | Open glos the way `request_review` does (see Launching) |
+| `glos mcp` | Run the MCP server over stdio |
+| `glos gc` | Delete old archived reviews and unused snapshot content |
+| `glos doctor` | Like `hx --health`: database, config, theme, languages, terminal colour support, MCP setup |
+| `glos completions <shell>` | Shell completions (`clap_complete`); a man page is generated at build time (`clap_mangen`) |
+
+- **Output:** readable text by default; `--json` for scripts and agents, as `gh` does. Every JSON
+  document carries a `"version"` field, and its shape only changes with that version.
+- **Exit codes:** `0` success, `1` error, `2` bad usage (clap's default). `glos show` and
+  `glos list` exit `0` with empty results.
+- **No changes:** `glos` in a repo with nothing to review says so and exits `0` instead of opening
+  an empty screen. Outside a repo with no arguments, it explains `glos diff`.
+
+This is also how the separate Claude Code plugin and tests drive glos.
 
 ## The dashboard
 
-`glos dashboard`, or `space d` inside a review, lists every review on this machine: its source
-(repo and branch or worktree, or the two paths), the agent's state (working, waiting for review,
-replied), and open, outdated and new-reply counts. `enter` opens one. It's built from the store,
-including which agent sessions are attached, and refreshes on its own.
+`glos dashboard`, or `space l` inside a review, lists every open review on this machine: its
+source (repo and branch or worktree, or the two paths), the agent's state (working, waiting for
+review, replied), and unsubmitted, unread, open and outdated counts. `enter` opens one. It's built
+from the store, including which agent sessions are attached, and refreshes on its own.
 
 ## Launching
 
 glos works in any terminal and never depends on one.
 
 - **Standalone:** `glos` in a repo finds the branch, its base and any existing review;
-  `glos old new` reviews two files or folders.
+  `glos diff old new` reviews two files or folders.
 - **Opening itself (optional):** `open_command` in `config.toml` is a shell command glos runs to
   open itself in a new pane, for example `tmux split-window -h glos`,
   `kitten @ launch --location=vsplit glos` (kitty) or `wezterm cli split-pane -- glos`; Ghostty
@@ -321,11 +440,11 @@ Picked for being widely used and maintained. Versions are fixed when the project
 | Storage | `rusqlite` (bundled SQLite) |
 | MCP | `rmcp` (the official Rust SDK) |
 | Async | `tokio` (needed by `rmcp`) |
-| CLI | `clap` |
+| CLI | `clap`, `clap_complete`, `clap_mangen` |
 | Serialisation | `serde`, `serde_json`, `toml` |
-| Paths | `etcetera` (what Helix uses) |
+| Paths | `etcetera` (what Helix uses), with its XDG strategy on both systems |
 | Ids and time | `uuid`, `jiff` |
-| Errors and logs | `anyhow`, `thiserror`, `tracing`, `tracing-subscriber` |
+| Errors and logs | `anyhow`, `thiserror`, `tracing`, `tracing-subscriber` (to the log file) |
 | Tests | `insta` (snapshots of rendered screens and JSON), `tempfile` |
 
 ## Milestones
@@ -343,19 +462,26 @@ the dashboard.
   4. `helix-core` at the pinned release builds as a dependency of glos and drives motions and
      selections over a ropey buffer, without pulling in the rest of Helix. If not, copy its
      movement, selection and text-object files instead.
-- **M1, the reader.** Store and data model; sources (two files, two folders, git branch vs base);
-  full-file + gutter view; Helix keymap engine with motions and selections from `helix-core`; the
-  key help panel; the keymap checklist; file picker; themes and highlighting; mouse.
-- **M2, commenting.** Comments on selections, review-level comments, inline collapsible threads,
-  instant saving, snapshots, `space s` submit through the channel, the CLI.
+- **M1, the reader.** Store with versioned schema and data model; sources (two files, two folders,
+  git branch vs base) and kinds of change; full-file + gutter view; Helix keymap engine with
+  motions and selections from `helix-core`; the key help panel; the keymap checklist; changed-file
+  and any-file pickers; themes and highlighting; soft wrap and horizontal scrolling; mouse and
+  clipboard; the terminal basics (control characters stripped, logs to a file, panic restore,
+  suspend, colour fallback); `glos doctor`.
+- **M2, commenting.** The comment box with drafts saved as you type and `:editor`; comments on
+  selections, review-level comments, editing and deleting; inline collapsible threads; the
+  unsubmitted count; snapshots; `space s` submit with a verdict through the channel; the CLI with
+  `--json`.
 - **Checkpoint.** Use glos for real reviews instead of tuicr before building M3–M5, and adjust the
   rest of the plan from what that shows. Include a fidelity pass: use glos and Helix side by side
   on the same files, and note every difference in how they feel.
-- **M3, two-way.** MCP tools (reply, resolve, annotate, request review, focus), live refresh
-  through `notify` and the database, re-anchoring and outdated threads.
+- **M3, two-way.** MCP tools (reply, resolve, annotate, request review, suggest), live refresh
+  through `notify` and the database without moving your view, unread replies, re-anchoring and
+  outdated threads.
 - **M4, views and scopes.** Unified and side by side; since last review, per commit, files filter;
   file tree.
-- **M5, dashboard and launching.** Multi-review dashboard; `open_command` and `glos open`.
+- **M5, dashboard and launching.** Multi-review dashboard; closing and archiving reviews, `glos gc`;
+  `open_command` and `glos open`; shell completions and the man page.
 - **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish.
 
 In-place editing is listed after the MVP because the reviewer is useful without it, and it's the

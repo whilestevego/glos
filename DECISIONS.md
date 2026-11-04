@@ -110,7 +110,7 @@ Each decision made while planning glos on 2026-11-03, with revisions from a revi
 ## Git required or not (2026-11-04)
 
 - **Options:** git repos only; git optional.
-- **Chosen:** git optional. glos also reviews two files (`glos old new`) or two folders. Every
+- **Chosen:** git optional. glos also reviews two files or two folders (`glos diff old new`). Every
   source becomes old/new text that glos diffs itself with imara-diff; gix is used only to read git
   sources. Per-commit scope is git only; since last review works everywhere.
 
@@ -127,6 +127,8 @@ Each decision made while planning glos on 2026-11-03, with revisions from a revi
 
 - **Options:** reply and resolve; pre-annotate their changes; request review; point you to a line.
 - **Chosen:** all four. Pointing you to a line works only with your permission, per review.
+- **Revised 2026-11-04:** pointing becomes `suggest`. It shows a notice and `space n` jumps there;
+  the agent never moves your view, so no permission is needed.
 
 ## Launching
 
@@ -185,6 +187,38 @@ Each decision made while planning glos on 2026-11-03, with revisions from a revi
 - **Chosen:** all four. In-place editing follows the MVP.
 - **Checkpoint (2026-11-04):** after M2, glos is used for real reviews instead of tuicr before M3–M5
   are built, and the plan is adjusted from that.
+
+## UX review (2026-11-04)
+
+A review of the plan for terminal UX and CLI conventions led to these decisions, all now in
+PLAN.md:
+
+- **Writing comments:** a small Helix-style box (insert mode first, `esc` then `enter` saves),
+  drafts saved as you type, `:editor` for `$EDITOR`. Your comments can be edited and deleted;
+  after a submit, edits are marked.
+- **Submitting:** every submit carries a verdict (approve, changes requested, comment). The count
+  of unsubmitted comments is always visible.
+- **Unread replies** are tracked per thread (`]u`).
+- **Any file** in the repo can be opened read-only (`space f`) for context.
+- **A review's life:** open, closed (`:close`) or archived (automatically when the branch is merged
+  or deleted); `glos gc` cleans up.
+- **Keys follow Helix's concepts:** changes are hunks (`]g`, `space g`), threads are diagnostics
+  (`]d`, `space d`), changed files are like buffers (`gn`, `gp`). This replaces `]h`, `]t`, `]f`,
+  `]c` and the `space f` changed-file picker, which contradicted Helix. Commits move to `]C`, the
+  dashboard to `space l`.
+- **Mouse** can be turned off, and `space y` yanks to the clipboard (OSC 52 over SSH).
+- **The terminal:** control characters are stripped from everything drawn; logs go to a file,
+  never to stdout or the screen; panic restore, `ctrl-z`, `NO_COLOR` and a 256-colour fallback;
+  soft wrap off by default with horizontal scrolling; live refresh never moves your view.
+- **Kinds of change:** binary, renamed, deleted, mode and symlink changes are shown; generated
+  files and lockfiles start collapsed. The first screen draws before the whole diff is computed.
+- **CLI:** `glos diff A B` for files and folders, so paths can't collide with subcommands; flat
+  subcommands (`glos list`, not `glos review list`); readable output by default and versioned
+  `--json`; documented exit codes; `glos doctor`; completions and a man page.
+- **Paths:** XDG folders on macOS too, as Helix does, plus `--db` / `GLOS_DB`. The schema is
+  versioned with `PRAGMA user_version`, with a backup before each migration.
+- **Agents:** `get_review` returns a summary plus what's new, with full threads on request.
+  Sessions are identified by the MCP server's process id and the client's `clientInfo` name.
 
 ## Name
 
