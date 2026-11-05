@@ -15,13 +15,14 @@ use std::{
 };
 
 use anyhow::Result;
-use helix_core::RopeSlice;
+use helix_core::syntax::TextObjectQuery;
 use helix_core::syntax::config::{Configuration, FileType, LanguageConfiguration};
+use helix_core::{Range as Span, RopeSlice, textobject::TextObject};
 use helix_stdx::rope::RopeSliceExt;
 use tree_house::{
     InjectionLanguageMarker, LanguageConfig, LanguageLoader,
     highlighter::{Highlight, HighlightEvent, Highlighter},
-    tree_sitter::Grammar,
+    tree_sitter::{Grammar, Query},
 };
 pub use tree_house::{Language, Syntax};
 
@@ -33,6 +34,7 @@ struct LangData {
     config: LanguageConfiguration,
     grammar: Option<unsafe extern "C" fn() -> *const ()>,
     compiled: OnceLock<Option<LanguageConfig>>,
+    textobjects: OnceLock<Option<TextObjectQuery>>,
 }
 
 pub struct Loader {
@@ -89,6 +91,7 @@ impl Loader {
                 config,
                 grammar,
                 compiled: OnceLock::new(),
+                textobjects: OnceLock::new(),
             });
         }
         loader.globs = globs.build()?;
@@ -193,6 +196,132 @@ impl Loader {
             out.push((pos as usize, style.clone()));
         }
         out
+    }
+}
+
+/// Helix's tree-sitter text objects (`mif`, `mac`, `]f`…), by the letter Helix gives each:
+/// the capture names in `textobjects.scm`.
+pub fn textobject_name(ch: char) -> Option<&'static str> {
+    Some(match ch {
+        'f' => "function",
+        't' => "class",
+        'a' => "parameter",
+        'c' => "comment",
+        'T' => "test",
+        'e' => "entry",
+        'x' => "xml-element",
+        _ => return None,
+    })
+}
+
+impl Loader {
+    /// The language's `textobjects.scm`, compiled the first time it's asked for, as helix-core's
+    /// `LanguageData::textobject_query`.
+    fn textobject_query(&self, lang: Language) -> Option<&TextObjectQuery> {
+        let data = self.langs.get(lang.idx())?;
+        data.textobjects
+            .get_or_init(|| {
+                let grammar = self.get_config(lang)?.grammar;
+                let text = query(&data.config.language_id, "textobjects.scm");
+                if text.is_empty() {
+                    return None;
+                }
+                let query = Query::new(grammar, &text, |_, _| Ok(())).ok()?;
+                Some(TextObjectQuery::new(query))
+            })
+            .as_ref()
+    }
+
+    /// `mi<ch>` / `ma<ch>` for a tree-sitter object: the smallest `object.inside` (or
+    /// `.around`) holding the cursor, or `range` if there's none. helix-core's
+    /// `textobject_treesitter`.
+    pub fn textobject(
+        &self,
+        syntax: &Syntax,
+        text: RopeSlice,
+        range: Span,
+        object: &str,
+        around: bool,
+    ) -> Span {
+        let kind = if around {
+            TextObject::Around
+        } else {
+            TextObject::Inside
+        };
+        let get = || -> Option<Span> {
+            let query = self.textobject_query(syntax.layer(syntax.root()).language)?;
+            let root = syntax.tree().root_node();
+            let byte = text.char_to_byte(range.cursor(text));
+            let node = query
+                .capture_nodes(&format!("{object}.{kind}"), &root, text)?
+                .filter(|n| n.byte_range().contains(&byte))
+                .min_by_key(|n| n.byte_range().len())?;
+            let len = text.len_bytes();
+            if node.start_byte() >= len || node.end_byte() >= len {
+                return None;
+            }
+            Some(Span::new(
+                text.byte_to_char(node.start_byte()),
+                text.byte_to_char(node.end_byte()),
+            ))
+        };
+        get().unwrap_or(range)
+    }
+
+    /// `]f`, `[f` and the like: the `count`th next (or previous) object, selected; `range` if
+    /// there's none. helix-core's `goto_treesitter_object`.
+    pub fn goto_object(
+        &self,
+        syntax: &Syntax,
+        text: RopeSlice,
+        range: Span,
+        object: &str,
+        forward: bool,
+        count: usize,
+    ) -> Span {
+        use std::cmp::Reverse;
+        let Some(query) = self.textobject_query(syntax.layer(syntax.root()).language) else {
+            return range;
+        };
+        let root = syntax.tree().root_node();
+        let get = |range: Span| -> Option<Span> {
+            let byte = text.char_to_byte(range.cursor(text));
+            let cap = |t: TextObject| format!("{object}.{t}");
+            let nodes = query.capture_nodes_any(
+                &[
+                    &cap(TextObject::Movement),
+                    &cap(TextObject::Around),
+                    &cap(TextObject::Inside),
+                ],
+                &root,
+                text,
+            )?;
+            let node = if forward {
+                nodes
+                    .filter(|n| n.start_byte() > byte)
+                    .min_by_key(|n| (n.start_byte(), Reverse(n.end_byte())))?
+            } else {
+                nodes
+                    .filter(|n| n.end_byte() < byte)
+                    .max_by_key(|n| (n.end_byte(), Reverse(n.start_byte())))?
+            };
+            let len = text.len_bytes();
+            if node.start_byte() >= len || node.end_byte() >= len {
+                return None;
+            }
+            Some(Span::new(
+                text.byte_to_char(node.start_byte()),
+                text.byte_to_char(node.end_byte()),
+            ))
+        };
+        let mut last = range;
+        for _ in 0..count {
+            match get(last) {
+                Some(r) if r != last => last = r,
+                _ => break,
+            }
+        }
+        last
     }
 }
 
@@ -441,6 +570,50 @@ mod tests {
         assert_eq!(l.tab_width(go), 4);
         assert_eq!(l.tab_width(rb), 2);
         assert_eq!(l.tab_width(None), 4);
+    }
+
+    #[test]
+    fn tree_sitter_text_objects() {
+        let (l, _) = loader();
+        let src = "fn a() {\n    1\n}\n\n/// doc\nfn b(x: u8, y: u8) {\n    2\n}\n";
+        let text = Rope::from(src);
+        let t = text.slice(..);
+        let lang = l.language_for(Path::new("/a.rs"), t).unwrap();
+        let syntax = l.parse(t, lang).unwrap();
+        let at = |s: &str| Span::point(src.find(s).unwrap());
+        let got = |r: Span| t.slice(r.from()..r.to()).to_string();
+        // Around a function is all of it; inside is its body.
+        let r = l.textobject(&syntax, t, at("1"), "function", true);
+        assert_eq!(got(r), "fn a() {\n    1\n}");
+        let r = l.textobject(&syntax, t, at("2"), "function", false);
+        assert!(
+            got(r).contains('2') && !got(r).contains("fn"),
+            "{:?}",
+            got(r)
+        );
+        // A parameter, a comment.
+        assert_eq!(
+            got(l.textobject(&syntax, t, at("y:"), "parameter", false)),
+            "y: u8"
+        );
+        assert!(got(l.textobject(&syntax, t, at("doc"), "comment", true)).contains("/// doc"));
+        // Nothing there: the selection stays.
+        assert_eq!(
+            l.textobject(&syntax, t, at("\n\n"), "function", true),
+            at("\n\n")
+        );
+        // ]f / [f, with a count.
+        let next = l.goto_object(&syntax, t, Span::point(0), "function", true, 1);
+        assert!(got(next).starts_with("fn b"), "{:?}", got(next));
+        let back = l.goto_object(&syntax, t, at("2"), "function", false, 1);
+        assert!(got(back).starts_with("fn a"), "{:?}", got(back));
+        assert_eq!(
+            l.goto_object(&syntax, t, Span::point(0), "function", true, 5),
+            next
+        );
+        // A language without the query, and an unknown letter.
+        assert_eq!(textobject_name('f'), Some("function"));
+        assert_eq!(textobject_name('z'), None);
     }
 
     #[test]

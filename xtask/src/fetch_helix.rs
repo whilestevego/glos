@@ -36,7 +36,12 @@ const LANGS: &[&str] = &[
     "lua",
 ];
 
-const QUERY_FILES: &[&str] = &["highlights.scm", "injections.scm", "locals.scm"];
+const QUERY_FILES: &[&str] = &[
+    "highlights.scm",
+    "injections.scm",
+    "locals.scm",
+    "textobjects.scm",
+];
 
 /// A repository at a revision, from GitHub: each regular file by its path inside the repository.
 fn tarball(repo: &str, rev: &str) -> Result<BTreeMap<String, Vec<u8>>> {

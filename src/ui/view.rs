@@ -57,8 +57,19 @@ pub enum Row {
     },
     Added(usize),
     Removed(usize),
-    /// Unchanged lines left out of a unified view: how many.
-    Fold(usize),
+    /// A line of the file as it is, in the whole-file view when something in it is folded.
+    Line(usize),
+    /// Rows folded away: from row `start` of the whole view, `len` of them, holding `changes`
+    /// changed rows and `threads` threads (a fold you made can hide those), and the first and
+    /// last lines they hide on each side, if any.
+    Fold {
+        start: usize,
+        len: usize,
+        changes: usize,
+        threads: usize,
+        lines: Option<(usize, usize)>,
+        old_lines: Option<(usize, usize)>,
+    },
     /// Padding that keeps the two sides of a side-by-side view level.
     Filler,
 }
@@ -67,9 +78,33 @@ impl Row {
     /// The new side's line, for comments and threads.
     pub fn new_line(self) -> Option<usize> {
         match self {
-            Row::Same { new, .. } | Row::Added(new) => Some(new),
+            Row::Same { new, .. } | Row::Added(new) | Row::Line(new) => Some(new),
             _ => None,
         }
+    }
+
+    /// The old side's line.
+    pub fn old_line(self) -> Option<usize> {
+        match self {
+            Row::Same { old, .. } | Row::Removed(old) => Some(old),
+            _ => None,
+        }
+    }
+
+    /// A fold's hidden lines as the gutter numbers them (1-based): `16–31`, or `16`.
+    pub fn fold_range(self, old: bool) -> Option<String> {
+        let Row::Fold {
+            lines, old_lines, ..
+        } = self
+        else {
+            return None;
+        };
+        let (a, b) = if old { old_lines } else { lines }?;
+        Some(if a == b {
+            format!("{}", a + 1)
+        } else {
+            format!("{}–{}", a + 1, b + 1)
+        })
     }
 }
 
@@ -205,10 +240,13 @@ impl File {
         let text = Rope::from(text);
         let sel = Selection::point(0).ensure_invariants(text.slice(..));
         // Each run of added and removed lines is a change, in the view's own lines, so `]g`
-        // and `[g` go through them as in the file view.
+        // and `[g` go through them as in the file view; so is a fold hiding changes.
         let mut hunks: Vec<Hunk> = vec![];
         for (i, r) in rows.iter().enumerate() {
-            if !matches!(r, Row::Added(_) | Row::Removed(_)) {
+            if !matches!(
+                r,
+                Row::Added(_) | Row::Removed(_) | Row::Fold { changes: 1.., .. }
+            ) {
                 continue;
             }
             let i = i as u32;
@@ -312,7 +350,21 @@ impl File {
         if !self.gutter {
             return 0;
         }
-        1 + 1 + self.numbers.to_string().len().max(3) + 1 + 1
+        1 + 1 + self.number_width() + 1 + 1
+    }
+
+    /// The line-number column: the biggest number (at least 3 wide), or a fold's range.
+    pub fn number_width(&self) -> usize {
+        let ranges = self
+            .rows
+            .iter()
+            .flatten()
+            .filter_map(|r| r.fold_range(self.old_numbers));
+        ranges
+            .map(|r| r.chars().count())
+            .chain([self.numbers.to_string().len(), 3])
+            .max()
+            .unwrap_or(3)
     }
 }
 
@@ -414,7 +466,8 @@ pub fn draw(
     } else {
         0
     };
-    let digits = file.numbers.to_string().len().max(3);
+    let digits = file.number_width();
+    let band = super::diffview::fold_styles(theme).0;
     let cursor_lines: Vec<usize> = file
         .sel
         .iter()
@@ -462,35 +515,46 @@ pub fn draw(
             None if file.rows.is_some() => None,
             None => Some(line),
             Some(Row::Same { old, new }) => Some(if file.old_numbers { old } else { new }),
-            Some(Row::Added(n) | Row::Removed(n)) => Some(n),
-            Some(Row::Fold(_) | Row::Filler) => None,
+            Some(Row::Added(n) | Row::Removed(n) | Row::Line(n)) => Some(n),
+            Some(Row::Fold { .. } | Row::Filler) => None,
         };
         let sign = match kind {
             Some(Row::Added(_)) => Some(("▍", added, true)),
             Some(Row::Removed(_)) => Some(("▍", deleted, true)),
+            Some(Row::Fold { changes: 1.., .. }) => Some(("▍", modified, true)),
+            Some(Row::Line(_)) | None => {
+                file.hunks
+                    .get(hunk_i)
+                    .filter(|h| h.after.start <= l)
+                    .map(|h| {
+                        if h.before.is_empty() {
+                            ("▍", added, true)
+                        } else if h.after.is_empty() {
+                            ("▔", deleted, false) // a removal shows on the first row only
+                        } else {
+                            ("▍", modified, true)
+                        }
+                    })
+            }
             Some(_) => None,
-            None => file
-                .hunks
-                .get(hunk_i)
-                .filter(|h| h.after.start <= l)
-                .map(|h| {
-                    if h.before.is_empty() {
-                        ("▍", added, true)
-                    } else if h.after.is_empty() {
-                        ("▔", deleted, false) // a removal shows on the first row only
-                    } else {
-                        ("▍", modified, true)
-                    }
-                }),
         };
         let mark = threads
             .marks
             .iter()
             .find(|(s, e, _)| *s <= line && line <= *e)
             .map(|m| m.2);
+        let fold = kind.filter(|k| matches!(k, Row::Fold { .. }));
         let gutter_row = |buf: &mut Buffer, row: usize, y: u16| {
+            // A fold is a band across the whole view, gutter and all.
+            if fold.is_some() {
+                buf.set_style(Rect::new(area.x, y, area.width, 1), band);
+            }
             if main.is_none() || gutter == 0 {
                 return;
+            }
+            if let (0, Some(range)) = (row, fold.and_then(|f| f.fold_range(file.old_numbers))) {
+                let style = band.patch(theme.get("ui.linenr"));
+                buf.set_string(area.x + 2, y, format!("{range:>digits$}"), style);
             }
             if row == 0 {
                 // The diagnostics column: a thread on this line.

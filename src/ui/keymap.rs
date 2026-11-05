@@ -86,6 +86,10 @@ pub enum AppAction {
     CommandPalette,
     /// `space l`: every open review.
     Dashboard,
+    /// The `z` fold keys.
+    Fold(super::folding::FoldKey),
+    /// `]f`, `[f` and the other tree-sitter objects: the object's letter, `true` for next.
+    GotoObject(char, bool),
 }
 
 /// Scopes as keys choose them; "since last review" becomes the latest round.
@@ -111,6 +115,7 @@ macro_rules! commands {
     };
 }
 
+use super::folding::FoldKey as F;
 use Action::{App, Doc, NextChar};
 commands! {
     move_char_left, "Move left", Doc(c::move_char_left);
@@ -236,6 +241,30 @@ commands! {
     file_explorer, "Open the file tree", App(AppAction::FileTree);
     command_palette, "Open command palette", App(AppAction::CommandPalette);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
+    // Folding: Vim's keys, in Helix's view menu.
+    fold_open, "Open the fold at the cursor", App(AppAction::Fold(F::Open));
+    fold_toggle, "Open or close the fold at the cursor", App(AppAction::Fold(F::Toggle));
+    fold_open_all, "Open every fold in the file", App(AppAction::Fold(F::OpenAll));
+    fold_close_all, "Fold everything again", App(AppAction::Fold(F::CloseAll));
+    fold_selection, "Fold the selected lines", App(AppAction::Fold(F::Make));
+    fold_delete, "Remove the fold you made at the cursor", App(AppAction::Fold(F::Delete));
+    fold_more_context, "One more line of context around changes", App(AppAction::Fold(F::Context(true)));
+    fold_less_context, "One fewer line of context around changes", App(AppAction::Fold(F::Context(false)));
+    // Helix's tree-sitter motions.
+    goto_next_function, "Goto next function", App(AppAction::GotoObject('f', true));
+    goto_prev_function, "Goto previous function", App(AppAction::GotoObject('f', false));
+    goto_next_class, "Goto next type definition", App(AppAction::GotoObject('t', true));
+    goto_prev_class, "Goto previous type definition", App(AppAction::GotoObject('t', false));
+    goto_next_parameter, "Goto next parameter", App(AppAction::GotoObject('a', true));
+    goto_prev_parameter, "Goto previous parameter", App(AppAction::GotoObject('a', false));
+    goto_next_comment, "Goto next comment", App(AppAction::GotoObject('c', true));
+    goto_prev_comment, "Goto previous comment", App(AppAction::GotoObject('c', false));
+    goto_next_test, "Goto next test", App(AppAction::GotoObject('T', true));
+    goto_prev_test, "Goto previous test", App(AppAction::GotoObject('T', false));
+    goto_next_entry, "Goto next pairing", App(AppAction::GotoObject('e', true));
+    goto_prev_entry, "Goto previous pairing", App(AppAction::GotoObject('e', false));
+    goto_next_xml_element, "Goto next (X)HTML element", App(AppAction::GotoObject('x', true));
+    goto_prev_xml_element, "Goto previous (X)HTML element", App(AppAction::GotoObject('x', false));
 }
 
 pub fn command(name: &str) -> Option<&'static Command> {
@@ -488,6 +517,13 @@ fn normal_defs() -> Vec<Def> {
                 cmd("g", "goto_prev_change"),
                 cmd("G", "goto_first_change"),
                 cmd("p", "goto_prev_paragraph"),
+                cmd("f", "goto_prev_function"),
+                cmd("t", "goto_prev_class"),
+                cmd("a", "goto_prev_parameter"),
+                cmd("c", "goto_prev_comment"),
+                cmd("T", "goto_prev_test"),
+                cmd("e", "goto_prev_entry"),
+                cmd("x", "goto_prev_xml_element"),
             ],
         ),
         menu(
@@ -501,6 +537,13 @@ fn normal_defs() -> Vec<Def> {
                 cmd("g", "goto_next_change"),
                 cmd("G", "goto_last_change"),
                 cmd("p", "goto_next_paragraph"),
+                cmd("f", "goto_next_function"),
+                cmd("t", "goto_next_class"),
+                cmd("a", "goto_next_parameter"),
+                cmd("c", "goto_next_comment"),
+                cmd("T", "goto_next_test"),
+                cmd("e", "goto_next_entry"),
+                cmd("x", "goto_next_xml_element"),
             ],
         ),
         cmd("C", "copy_selection_on_next_line"),
@@ -612,6 +655,15 @@ fn view_defs() -> Vec<Def> {
         cmd("?", "rsearch"),
         cmd("n", "search_next"),
         cmd("N", "search_prev"),
+        // glos: folds, with Vim's keys where Helix leaves them free.
+        cmd("o", "fold_open"),
+        cmd("a", "fold_toggle"),
+        cmd("R", "fold_open_all"),
+        cmd("M", "fold_close_all"),
+        cmd("f", "fold_selection"),
+        cmd("d", "fold_delete"),
+        cmd("+", "fold_more_context"),
+        cmd("minus", "fold_less_context"),
     ]
 }
 

@@ -4,6 +4,7 @@
 mod comments;
 mod dashboard;
 mod diffview;
+mod folding;
 mod keymap;
 mod picker;
 mod tree;
@@ -103,7 +104,7 @@ impl Prompt {
 }
 
 /// How the file on screen is shown: whole with the gutter, as hunks, or old beside new.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ViewKind {
     File,
     Unified,
@@ -127,6 +128,18 @@ struct Alt {
     doc: File,
     /// The old side, for side by side.
     left: Option<File>,
+    /// For each line of `doc`, the row of the whole (unfolded) view it shows; a fold line, its
+    /// first row.
+    full: Vec<usize>,
+    /// The whole view's row count.
+    len: usize,
+    /// What the context folds, before what you opened; the changed rows; each row's new-side
+    /// line.
+    auto: Vec<bool>,
+    changed: Vec<bool>,
+    lines: Vec<Option<usize>>,
+    /// The threads' lines it was folded around.
+    threads: Vec<(usize, usize)>,
 }
 
 /// Which changes are reviewed.
@@ -309,6 +322,10 @@ pub struct App {
     changed_at: Option<std::time::Instant>,
     view_kind: ViewKind,
     alt: Option<Alt>,
+    /// Unchanged lines kept around changes (`editor.diff-context`, `z+` / `z-`).
+    diff_context: usize,
+    /// What's folded, by file and view; a file's go when its text changes.
+    folds: HashMap<(String, ViewKind), diffview::Folds>,
     /// The old side's area, in the side-by-side view.
     left_view: Rect,
     scope: Scope,
@@ -338,6 +355,8 @@ fn blocked_in_box(action: AppAction) -> bool {
             | A::FilePicker
             | A::ChangedFilePicker
             | A::ToggleCollapse
+            | A::Fold(_)
+            | A::GotoObject(..)
             | A::JumpForward
             | A::JumpBackward
             | A::SaveSelection
@@ -514,6 +533,8 @@ impl App {
             changed_at: None,
             view_kind: ViewKind::File,
             alt: None,
+            diff_context: config.editor.diff_context,
+            folds: HashMap::new(),
             left_view: Rect::default(),
             scope: Scope::Base,
             commits: vec![],
@@ -557,6 +578,7 @@ impl App {
         if let Err(e) = result {
             self.status = Some((format!("{e:#}"), true));
         }
+        self.refold_if_threads_moved();
     }
 
     fn data_version(&self) -> i64 {
@@ -877,18 +899,23 @@ impl App {
             }
         }
         self.source = source;
+        let mut changed = vec![];
         self.files = self
             .source
             .changes
             .iter()
             .map(|c| {
                 let old = loaded.remove(&c.path)?;
-                Some(view::keep_view(
-                    old,
-                    File::change(c, &self.source, &self.loader),
-                ))
+                let new = File::change(c, &self.source, &self.loader);
+                if old.text != new.text {
+                    changed.push(c.path.clone());
+                }
+                Some(view::keep_view(old, new))
             })
             .collect();
+        for p in changed {
+            self.forget_folds(&p);
+        }
         // Files that are no longer changed stay open for context, where they were.
         for (p, old) in loaded {
             if p == cur_path || jumps.iter().any(|(jp, _)| *jp == p) {
@@ -899,6 +926,9 @@ impl App {
         for p in paths {
             let old = self.context.remove(&p).unwrap();
             let new = File::context(&p, &self.source, &self.loader);
+            if old.text != new.text {
+                self.forget_folds(&p);
+            }
             self.context.insert(p, view::keep_view(old, new));
         }
         let cur_for = |app: &App, p: &str| match app.source.changes.iter().position(|c| c.path == p)
@@ -1188,61 +1218,22 @@ impl App {
                 self.scroll_to_cursor(true);
             }
         }
-        if self.view_kind == ViewKind::File {
-            return;
-        }
-        let Cur::Change(i) = self.cur.clone() else {
-            return; // a context file has no diff
-        };
-        let base = self.files[i].as_ref().expect("the current file is loaded");
-        if base.binary || base.collapsed {
-            return;
-        }
-        let change = &self.source.changes[i];
-        let read = |c: &Content| self.source.read(c).ok().flatten().unwrap_or_default();
-        let (old_bytes, new_bytes) = (read(&change.old), read(&change.new));
-        let path = self.source.root.join(&change.path);
-        let old = File::side(&path, &old_bytes, &self.loader);
-        let new = File::side(&path, &new_bytes, &self.loader);
-        let hunks = crate::diff::hunks(
-            &String::from_utf8_lossy(&old_bytes),
-            &String::from_utf8_lossy(&new_bytes),
-        );
-        let (mut doc, left) = match self.view_kind {
-            ViewKind::Unified => (
-                diffview::unified(&old, &new, &hunks, &self.loader, &self.theme),
-                None,
-            ),
-            _ => {
-                let (l, r) = diffview::split(&old, &new, &hunks, &self.loader, &self.theme);
-                (r, Some(l))
-            }
-        };
-        // The same place: the base file's cursor line and column.
-        let t = base.text.slice(..);
-        let cursor = base.sel.primary().cursor(t);
-        let line = t.char_to_line(cursor);
-        let col = cursor - t.line_to_char(line);
-        let dt = doc.text.slice(..);
-        let at = doc.line_of(line).min(dt.len_lines() - 1);
-        let len = glos_helix::text::line_end_char_index(&dt, at) - dt.line_to_char(at);
-        doc.sel = Selection::point(dt.line_to_char(at) + col.min(len)).ensure_invariants(dt);
-        self.alt = Some(Alt {
-            cur: self.cur.clone(),
-            kind: self.view_kind,
-            doc,
-            left,
-        });
-        self.layout();
-        self.scroll_to_cursor(true);
+        self.build_alt();
     }
 
     /// Leaving a view: its cursor goes back to the file, so the next view opens there.
     fn sync_base(&mut self, a: Alt) {
         let t = a.doc.text.slice(..);
-        let line = t.char_to_line(a.doc.sel.primary().cursor(t));
+        let cursor = a.doc.sel.primary().cursor(t);
+        let line = t.char_to_line(cursor);
         let Some(n) = a.doc.new_line_near(line) else {
             return;
+        };
+        // On a line of the new side, the same column too.
+        let col = if a.doc.new_line_at(line) == Some(n) {
+            cursor - t.line_to_char(line)
+        } else {
+            0
         };
         let file = match &a.cur {
             Cur::Change(i) => self.files[*i].as_mut(),
@@ -1251,7 +1242,8 @@ impl App {
         if let Some(f) = file {
             let t = f.text.slice(..);
             let n = n.min(t.len_lines() - 1);
-            f.sel = Selection::point(t.line_to_char(n)).ensure_invariants(t);
+            let len = glos_helix::text::line_end_char_index(&t, n) - t.line_to_char(n);
+            f.sel = Selection::point(t.line_to_char(n) + col.min(len)).ensure_invariants(t);
         }
     }
 
@@ -1354,14 +1346,17 @@ impl App {
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
         let here = self.here_rev();
+        // Thread rows wrap to the text area, as they're drawn from its left edge.
+        let f = self.main_file();
+        let width = self.view.width.saturating_sub(f.gutter_width() as u16) as usize;
         let t = comments::layout(
             &self.shown_threads(),
             self.main_path(),
             &self.expanded,
             &self.theme,
             here.as_deref(),
+            width,
         );
-        let f = self.main_file();
         if f.rows.is_none() {
             return t;
         }
@@ -1369,7 +1364,11 @@ impl App {
         let mut rows: std::collections::BTreeMap<usize, Vec<comments::ThreadRow>> =
             Default::default();
         for (line, r) in t.rows {
-            rows.entry(f.line_of(line)).or_default().extend(r);
+            // A thread in a fold you made is counted on the fold line instead.
+            let at = f.line_of(line);
+            if f.new_line_at(at) == Some(line) {
+                rows.entry(at).or_default().extend(r);
+            }
         }
         Threads {
             rows,
@@ -1444,6 +1443,7 @@ impl App {
                 self.load(i);
                 self.cur = Cur::Change(i);
                 self.ensure_alt();
+                self.open_fold_on_change();
             }
             Target::Path(p) => {
                 // A changed file opens as its change, with its diff.
@@ -1495,6 +1495,7 @@ impl App {
 
     /// Selects whole lines `start..=end` (0-based) of the file on screen, as `x` does.
     fn select_lines(&mut self, start: usize, end: usize) {
+        self.reveal(start, end);
         let file = self.main_file_mut();
         let (start, end) = (file.line_of(start), file.line_of(end));
         let text = file.text.slice(..);
@@ -1884,6 +1885,14 @@ impl App {
                         cx.count = count;
                         f(cx, ch)
                     }),
+                    NextKey::Textobject(around)
+                        if glos_helix::syntax::textobject_name(ch).is_some() =>
+                    {
+                        // Tree-sitter objects need the file's syntax tree, not the view's.
+                        self.ts_object(around, ch, false);
+                        self.count = None;
+                        return None;
+                    }
                     NextKey::Textobject(around) => std::rc::Rc::new(move |cx| {
                         cx.count = count;
                         commands::select_textobject(cx, around, ch)
@@ -2119,6 +2128,9 @@ impl App {
                     }));
                 }
                 self.doc_command(f);
+                if command.name.ends_with("_change") {
+                    self.open_fold_on_change();
+                }
                 None
             }
             Action::NextChar(f) => {
@@ -2303,6 +2315,11 @@ impl App {
             }
             A::Submit(v) => self.submit(v),
             A::ThreadPicker { all } => self.picker = Some(self.thread_picker(all)),
+            A::Fold(k) => self.fold_command(k),
+            A::GotoObject(ch, forward) => {
+                let _ = self.push_jump();
+                self.ts_object(forward, ch, true);
+            }
             A::Dashboard => match dashboard::picker(&self.conn, &self.theme) {
                 Ok(p) => self.picker = Some(p),
                 Err(e) => self.status = Some((format!("{e:#}"), true)),
@@ -2445,7 +2462,11 @@ impl App {
             AppAction::ChangedFilePicker => self.picker = Some(self.changed_file_picker()),
             AppAction::FilePicker => self.picker = Some(self.file_picker()),
             AppAction::ToggleCollapse => {
-                // On a thread, ret opens or closes it.
+                // On a fold line, ret opens it; on a thread, it opens or closes the thread.
+                if self.fold_here().is_some() {
+                    self.fold_command(folding::FoldKey::Open);
+                    return None;
+                }
                 if let Some(i) = self.thread_here() {
                     self.toggle_thread(i);
                     return None;
@@ -2455,7 +2476,7 @@ impl App {
                 if file.notices.iter().any(|n| n == marker) || file.collapsed {
                     file.collapsed = !file.collapsed;
                 }
-                self.ensure_alt();
+                self.refold(None);
             }
             AppAction::Yank | AppAction::YankToClipboard { .. } => {
                 let file = self.file();
@@ -2675,6 +2696,10 @@ impl App {
                         Selection::single(pos, pos)
                     };
                 });
+                // A click on a fold line opens it.
+                if !drag && self.fold_here().is_some() {
+                    self.fold_command(folding::FoldKey::Open);
+                }
             }
             _ => {}
         }
@@ -2911,6 +2936,9 @@ impl App {
     /// visual rows, so a wrapped line counts as more than one.
     fn scroll_to_cursor(&mut self, center: bool) {
         let (height, width) = self.text_size();
+        if height == 0 {
+            return; // not drawn yet: the first draw has the size
+        }
         let wrap = self.wrap();
         let annotations = self.annotations();
         let file = self.file_mut();
@@ -3225,8 +3253,12 @@ impl App {
         let cursor = file.sel.primary().cursor(text);
         let line = text.char_to_line(cursor);
         let col = cursor - text.line_to_char(line);
-        // In a view, the position is the file's: its new-side line.
-        let line = file.new_line_near(line).unwrap_or(line);
+        // In a view, the position is the file's: its new-side line, or a fold's first.
+        let fold_line = match self.comment_box {
+            None => self.fold_first_line(),
+            Some(_) => None,
+        };
+        let line = fold_line.or(file.new_line_near(line)).unwrap_or(line);
         let sels = file.sel.len();
         let right = format!(
             " {which}  {sels} sel{}  {}:{} ",
