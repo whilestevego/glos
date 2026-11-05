@@ -26,7 +26,7 @@ pub enum Outcome {
 pub enum Msg {
     /// From a picker: close it.
     Close,
-    /// From a picker: open a file or thread, run a command, or go back (`Target::Nothing`).
+    /// From a picker or the file tree: open a file or thread, run a command, or go back (`Target::Nothing`).
     Open(Target),
     /// From the command line: the line changed, so a search or regex shows its matches.
     PreviewPrompt,
@@ -34,6 +34,8 @@ pub enum Msg {
     CancelPrompt,
     /// From the command line: `ret`.
     SubmitPrompt,
+    /// From the file tree: `q`.
+    CloseTree,
 }
 
 /// What every component may read.

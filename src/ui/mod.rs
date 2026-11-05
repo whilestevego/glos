@@ -675,26 +675,6 @@ impl App {
 
     /// Keys while the file tree is focused: `j`/`k` move, `ret` or `l` opens the file (the
     /// tree stays), `esc` goes back to the file, `q` closes the tree.
-    fn tree_key(&mut self, key: Key) {
-        let Some(t) = &mut self.tree else { return };
-        match (key.code, key.char()) {
-            (KeyCode::Down, _) | (_, Some('j')) => t.step(true),
-            (KeyCode::Up, _) | (_, Some('k')) => t.step(false),
-            (KeyCode::Enter, _) | (_, Some('l')) => {
-                if let Some(p) = t.selected().map(str::to_string) {
-                    t.focused = false;
-                    self.open(Target::Path(p));
-                }
-            }
-            (KeyCode::Esc, _) => t.focused = false,
-            (_, Some('q')) => {
-                self.tree = None;
-                self.layout();
-            }
-            _ => {}
-        }
-    }
-
     /// The scope and filter, as the statusline and messages say them.
     fn scope_label(&self) -> String {
         let mut s = match (&self.scope, &self.source.revs) {
@@ -1739,9 +1719,11 @@ impl App {
                 Outcome::Ignored | Outcome::Consumed => None,
             };
         }
-        if self.tree.as_ref().is_some_and(|t| t.focused) {
-            self.tree_key(key);
-            return None;
+        if let Some(t) = self.tree.as_mut().filter(|t| t.focused) {
+            return match t.key(key, &cx) {
+                Outcome::Msg(msg) => self.apply(msg),
+                Outcome::Ignored | Outcome::Consumed => None,
+            };
         }
         if let Some(next) = self.next_key.take() {
             self.pending.clear();
@@ -1843,6 +1825,10 @@ impl App {
             Msg::PreviewPrompt => self.search_preview(),
             Msg::CancelPrompt => self.cancel_prompt(),
             Msg::SubmitPrompt => self.submit_prompt(),
+            Msg::CloseTree => {
+                self.tree = None;
+                self.layout();
+            }
         }
         None
     }
@@ -2475,19 +2461,15 @@ impl App {
             return;
         }
         // A click in the file tree opens that file.
-        if let Some(t) = &self.tree
-            && m.column < self.tree_area.right()
-        {
-            if m.kind == MouseEventKind::Down(MouseButton::Left)
-                && let Some(p) = t.path_at(self.tree_area, m.row).map(str::to_string)
-            {
-                self.open(Target::Path(p.clone()));
-                if let Some(t) = &mut self.tree {
-                    t.select(&p);
-                    t.focused = false;
+        if let Some(t) = &mut self.tree {
+            match t.mouse(m, self.tree_area, &cx) {
+                Outcome::Ignored => {}
+                Outcome::Consumed => return,
+                Outcome::Msg(msg) => {
+                    self.apply(msg);
+                    return;
                 }
             }
-            return;
         }
         // A click on a thread opens or closes it.
         if m.kind == MouseEventKind::Down(MouseButton::Left)
