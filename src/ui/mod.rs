@@ -1346,14 +1346,17 @@ impl App {
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
         let here = self.here_rev();
+        // Thread rows wrap to the text area, as they're drawn from its left edge.
+        let f = self.main_file();
+        let width = self.view.width.saturating_sub(f.gutter_width() as u16) as usize;
         let t = comments::layout(
             &self.shown_threads(),
             self.main_path(),
             &self.expanded,
             &self.theme,
             here.as_deref(),
+            width,
         );
-        let f = self.main_file();
         if f.rows.is_none() {
             return t;
         }

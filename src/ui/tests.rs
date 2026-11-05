@@ -847,6 +847,30 @@ fn threads_open_and_close() {
 }
 
 #[test]
+fn long_comments_wrap_to_the_screen() {
+    // 72 columns, less the gutter: a comment longer than that wraps instead of being cut off.
+    let mut t = T::files(OLD, NEW);
+    let body = "a long comment that goes on well past the right edge of the screen, \
+                so it has to wrap onto more rows to be read in full";
+    t.keys("space c").typed(body).keys("esc ret");
+    let width = |l: &str| unicode_width::UnicodeWidthStr::width(l);
+    let screen = t.screen();
+    assert!(screen.lines().all(|l| width(l) <= 72), "{screen}");
+    // Closed, it takes two rows and says there's more.
+    assert!(screen.contains('…'), "{screen}");
+    t.keys("ret");
+    let screen = t.screen();
+    assert!(t.shows("in full"), "the end shows once open: {screen}");
+    assert!(screen.lines().all(|l| width(l) <= 72), "{screen}");
+    // Every row of it is one the view counts, so the status bar stays put below them.
+    assert!(screen.lines().last().unwrap().contains("NOR"), "{screen}");
+    // A click on any of its rows closes it again.
+    let y = t.app.thread_hits.last().unwrap().0;
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 10, y);
+    assert!(!t.shows("in full"), "{}", t.screen());
+}
+
+#[test]
 fn opened_threads_count_when_scrolling() {
     let body = (1..=8)
         .map(|i| format!("l{i}"))
