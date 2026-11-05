@@ -2282,3 +2282,5 @@ fn a_fold_is_a_band_across_the_view() {
     assert_eq!(band.bg, Some(Color::Rgb(0x44, 0x55, 0x66)));
     assert_eq!(band.fg, Some(Color::Rgb(0x11, 0x22, 0x33)));
 }
+
+mod perf;
