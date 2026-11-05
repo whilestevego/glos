@@ -1432,7 +1432,7 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     let new = old.replace("line 10\n", "line ten\n");
     let mut t = T::files(&old, &new);
     t.keys("space v u");
-    assert!(t.shows("⋯ 6 unchanged lines"), "{}", t.screen());
+    assert!(t.shows("↕ lines 1–6 (6)"), "{}", t.screen());
     assert!(t.shows(" unified"));
     // The cursor opens on the change; the line above it is the removed one.
     assert_eq!(t.app.cursor_new_line(), 9);
@@ -1936,8 +1936,8 @@ fn row_of(t: &T, s: &str) -> usize {
         .unwrap_or_else(|| panic!("{s} not shown:\n{}", t.screen()))
 }
 
-const FOLDED: &str = "⋯ 16 unchanged lines\nline 17\nline 18\nline 19\nline twenty\nline 21\n\
-                      line 22\nline 23\n⋯ 17 unchanged lines\n";
+const FOLDED: &str = "↕ lines 1–16 (16)  ret opens\nline 17\nline 18\nline 19\nline twenty\n\
+                      line 21\nline 22\nline 23\n↕ lines 24–40 (17)  ret opens\n";
 
 #[test]
 fn folded_file_view() {
@@ -1977,7 +1977,7 @@ fn opening_and_closing_folds() {
     // za closes it again, from any of its lines.
     t.keys("j j z a");
     assert_eq!(text(&t), FOLDED);
-    assert!(t.sel().starts_with("#[⋯|]#"), "{}", t.sel());
+    assert!(t.sel().starts_with("#[↕|]#"), "{}", t.sel());
     t.keys("z a");
     assert!(text(&t).starts_with("line 1\n"));
     t.keys("z a");
@@ -2005,7 +2005,7 @@ fn ret_and_a_click_open_a_fold() {
     t.keys("g g ret");
     assert!(text(&t).starts_with("line 1\n"));
     t.keys("z M");
-    let y = row_of(&t, "⋯ 17 unchanged") as u16;
+    let y = row_of(&t, "↕ lines 24–40") as u16;
     t.mouse(MouseEventKind::Down(MouseButton::Left), 10, y);
     assert!(text(&t).ends_with("line 39\nline 40\n"), "{}", text(&t));
     assert!(t.shows("line 24"));
@@ -2019,7 +2019,7 @@ fn context_lines_and_the_cursor_staying_put() {
     let row = row_of(&t, "line 23");
     t.keys("z +");
     assert_eq!(t.said(), "4 lines of context");
-    assert!(text(&t).starts_with("⋯ 15 unchanged lines\nline 16\n"));
+    assert!(text(&t).starts_with("↕ lines 1–15 (15)  ret opens\nline 16\n"));
     assert_eq!(row_of(&t, "line 23"), row, "the line stays where it was");
     assert!(t.sel().contains("#[l|]#ine 23"));
     t.keys("3 k");
@@ -2027,7 +2027,7 @@ fn context_lines_and_the_cursor_staying_put() {
     assert_eq!(t.said(), "0 lines of context");
     assert_eq!(
         text(&t),
-        "⋯ 19 unchanged lines\nline twenty\n⋯ 20 unchanged lines\n"
+        "↕ lines 1–19 (19)  ret opens\nline twenty\n↕ lines 21–40 (20)  ret opens\n"
     );
     t.keys("z minus");
     assert_eq!(t.said(), "0 lines of context", "never below 0");
@@ -2045,9 +2045,9 @@ fn folds_you_make_and_remove() {
     let mut t = folded();
     // x x: line twenty and 21, folded with what they hide said.
     t.keys("x x z f");
-    assert!(t.shows("⋯ 2 lines · 1 changed"), "{}", t.screen());
+    assert!(t.shows("↕ lines 20–21 (2) · 1 changed"), "{}", t.screen());
     assert!(!t.shows("line twenty"));
-    assert!(t.sel().contains("#[⋯|]# 2 lines"), "{}", t.sel());
+    assert!(t.sel().contains("#[↕|]# lines 20–21"), "{}", t.sel());
     // zd removes it.
     t.keys("z d");
     assert!(t.shows("line twenty"));
@@ -2058,7 +2058,7 @@ fn folds_you_make_and_remove() {
     // C copies the selection down: three selections, on lines 1, 2 and 3, each a fold, shown as
     // one stretch.
     assert!(
-        text(&t).starts_with("⋯ 3 unchanged lines\nline 4\n"),
+        text(&t).starts_with("↕ lines 1–3 (3)  ret opens\nline 4\n"),
         "{}",
         text(&t)
     );
@@ -2067,7 +2067,7 @@ fn folds_you_make_and_remove() {
     assert!(text(&t).starts_with("line 1\n"));
     t.keys("z M");
     assert!(
-        text(&t).starts_with("⋯ 3 unchanged lines\n⋯ 13 unchanged lines\nline 17\n"),
+        text(&t).starts_with("↕ lines 1–3 (3)  ret opens\n↕ lines 4–16 (13)  ret opens\nline 17\n"),
         "yours stays apart from the context's: {}",
         text(&t)
     );
@@ -2088,7 +2088,7 @@ fn jumps_open_the_folds_they_land_in() {
     assert!(t.shows("▸ you: thirty"));
     // A fold you make over one hides it, says so, and ]d opens it again.
     t.keys("x z f");
-    assert!(t.shows("⋯ 1 line · 1 thread"), "{}", t.screen());
+    assert!(t.shows("↕ line 30 (1) · 1 thread"), "{}", t.screen());
     assert!(!t.shows("▸ you: thirty"));
     t.keys("g g ] d");
     assert!(t.shows("▸ you: thirty"), "{}", t.screen());
@@ -2115,7 +2115,7 @@ fn folds_last_until_the_file_changes() {
     assert!(text(&t).starts_with("line 1\n"));
     // Another file and back: still open.
     t.keys("g n");
-    assert!(text(&t).starts_with("⋯ 16"));
+    assert!(text(&t).starts_with("↕ lines 1–16"));
     t.keys("g p");
     assert!(text(&t).starts_with("line 1\n"), "{}", text(&t));
     // The file changes: folded afresh.
@@ -2123,26 +2123,26 @@ fn folds_last_until_the_file_changes() {
     std::fs::write(&new, lines(40).replace("line 20\n", "y\n")).unwrap();
     t.app.files_changed();
     t.draw();
-    assert!(text(&t).starts_with("⋯ 16"), "{}", text(&t));
+    assert!(text(&t).starts_with("↕ lines 1–16"), "{}", text(&t));
 }
 
 #[test]
 fn unified_and_side_by_side_fold_with_the_same_keys() {
     let mut t = folded();
     t.keys("space v u");
-    assert!(t.shows("⋯ 16 unchanged lines"));
+    assert!(t.shows("↕ lines 1–16 (16)"));
     t.keys("z R");
     assert!(text(&t).starts_with("line 1\n"));
     assert!(text(&t).contains("line 20\nline twenty\n"));
     t.keys("z M space v s");
-    assert!(t.shows("⋯ 16 unchanged lines"));
+    assert!(t.shows("↕ lines 1–16 (16)"));
     t.keys("g g z o");
     let left = t.app.split_left().unwrap().text.to_string();
     assert!(left.starts_with("line 1\n"), "both sides open: {left}");
     assert_eq!(left.lines().count(), text(&t).lines().count());
     // Each view keeps its own folds.
     t.keys("space v u");
-    assert!(text(&t).starts_with("⋯ 16"));
+    assert!(text(&t).starts_with("↕ lines 1–16"));
     // A comment next to a fold goes on the right line.
     t.keys("space v f g g j x space c");
     assert!(t.shows("Comment on main.rs:17 "), "{}", t.screen());
@@ -2180,7 +2180,7 @@ fn tree_sitter_objects_and_motions() {
     );
     // Folding a function: select it, then zf.
     t.keys("z f");
-    assert!(t.shows("⋯ 4 lines · 2 changed"), "{}", t.screen());
+    assert!(t.shows("↕ lines 5–7 (4) · 2 changed"), "{}", t.screen());
     // Plain text has no syntax tree.
     let mut t = T::folders(|o, n| {
         std::fs::write(o.join("a.txt"), "x\n").unwrap();
@@ -2200,17 +2200,59 @@ fn a_text_object_opens_the_folds_it_covers() {
     let old = format!("fn a() {{\n{body}}}\n");
     let new = old.replace("x1 = 1;", "x1 = 100;");
     let mut t = T::files_sized(&old, &new, 72, 40);
-    assert!(t.shows("⋯ 17 unchanged lines"), "{}", t.screen());
+    assert!(t.shows("↕ lines 6–22 (17)"), "{}", t.screen());
     t.keys("m a f");
-    assert!(!t.shows("⋯"), "the whole function is shown: {}", t.screen());
+    assert!(!t.shows("↕"), "the whole function is shown: {}", t.screen());
     assert!(t.sel().starts_with("#[fn a() {"), "{}", t.sel());
     assert!(t.sel().ends_with("}|]#\n"), "{}", t.sel());
     t.keys("z f");
-    assert_eq!(text(&t), "⋯ 22 lines · 1 changed\n");
+    assert_eq!(text(&t), "↕ lines 1–22 (22) · 1 changed  ret opens\n");
     // The status bar gives the line a fold starts on.
     assert!(
         t.screen().lines().any(|l| l.ends_with("sel  1:1")),
         "{}",
         t.screen()
     );
+}
+
+#[test]
+fn a_fold_is_a_band_across_the_view() {
+    let t = folded();
+    let (band, hint) = diffview::fold_styles(&t.app.theme);
+    assert!(
+        band.bg.is_some(),
+        "the default theme gives the band a background"
+    );
+    let y = row_of(&t, "↕ lines 1–16") as u16;
+    let w = t.term.backend().buffer().area.width;
+    // Gutter to right edge.
+    for x in [0, 3, 20, w - 1] {
+        assert_eq!(t.cell(x, y).bg, band.bg.unwrap(), "column {x}");
+    }
+    // Other lines aren't banded; the key hint is in its own, dimmer colour.
+    let line = row_of(&t, "line 17") as u16;
+    assert_ne!(t.cell(w - 1, line).bg, band.bg.unwrap());
+    let hint_x = t
+        .screen()
+        .lines()
+        .nth(y as usize)
+        .unwrap()
+        .find("ret opens")
+        .unwrap();
+    let hint_x = t.screen().lines().nth(y as usize).unwrap()[..hint_x]
+        .chars()
+        .count() as u16;
+    assert_eq!(Some(t.cell(hint_x, y).fg), hint.fg);
+    assert_ne!(hint.fg, band.fg);
+    // A theme's own `ui.virtual.fold` wins.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("mine.toml"),
+        "inherits = \"default\"\n\"ui.virtual.fold\" = { fg = \"#112233\", bg = \"#445566\" }\n",
+    )
+    .unwrap();
+    let mine = Theme::load_from("mine", ColorSupport::TrueColor, Some(dir.path())).unwrap();
+    let (band, _) = diffview::fold_styles(&mine);
+    assert_eq!(band.bg, Some(Color::Rgb(0x44, 0x55, 0x66)));
+    assert_eq!(band.fg, Some(Color::Rgb(0x11, 0x22, 0x33)));
 }

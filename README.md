@@ -101,8 +101,8 @@ and the rest. On top of those, it adds keys for reviewing:
 
 ### Folding
 
-Lines far from any change are folded into one line, like `⋯ 40 unchanged lines`. Lines with a
-comment on them are never folded. Press `enter` on a fold, or click it, to open it. The rest of
+Lines far from any change are folded into a band across the screen that says which lines it
+hides, like `↕ lines 16–31 (16)  ret opens`. Lines with a comment on them are never folded. Press `enter` on a fold, or click it, to open it. The rest of
 the folding keys are under `z`, as in Vim:
 
 | Key | What it does |
@@ -116,7 +116,7 @@ the folding keys are under `z`, as in Vim:
 | `zd` | Remove a fold you made |
 
 A fold you make can hide anything, even changes and comments, and it says what it's hiding:
-`⋯ 12 lines · 3 changed · 1 thread`. Jumping to something inside it (`]g`, `]d`, a picker)
+`↕ lines 40–51 (12) · 3 changed · 1 thread`. Jumping to something inside it (`]g`, `]d`, a picker)
 opens it again.
 
 To fold a whole function, select it with `maf` and press `zf`. glos has Helix's syntax-aware
@@ -160,7 +160,8 @@ For kitty, use `open-command = "kitten @ launch --location=vsplit"`. For WezTerm
 `open-command = "wezterm cli split-pane --"`. Without an `open-command`, glos never opens windows
 by itself, and the agent will ask you to run `glos` instead.
 
-You can put your own themes in `~/.config/glos/themes/`, in Helix's format.
+You can put your own themes in `~/.config/glos/themes/`, in Helix's format. Folds use
+`ui.virtual.fold` if your theme sets it, and the current-line colour otherwise.
 
 ## Other commands
 

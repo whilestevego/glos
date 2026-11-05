@@ -436,6 +436,12 @@ Plan: `plans/FOLDING.md`.
   `]f` and the rest map the cursor to the new side, ask Helix's `textobjects.scm` there, and map
   the range back. `]x`/`[x` (HTML elements) are bound though Helix 25.07 leaves them unbound.
 - **Search doesn't look inside folds:** the hidden text isn't in the document. `zR` first.
+- **A fold looks like GitHub's expander row** (chosen 2026-11-05 over a dim `⋯ 40 unchanged
+  lines`, a first-line preview, a divider rule and Vim's `+--`): a full-width band, the hidden
+  range in the gutter, `↕ lines 16–31 (16)` and a `ret opens` hint. The line-number column widens
+  to fit a range, in views that have folds. The band's style is a new theme key,
+  `ui.virtual.fold`, falling back to `ui.cursorline.primary`'s background, since Helix themes
+  have no fold style.
 
 ## The plan folder
 

@@ -54,7 +54,10 @@ struct Doc<'a> {
     rows: Vec<Row>,
     old: (&'a File, Vec<(usize, Style)>),
     new: (&'a File, Vec<(usize, Style)>),
-    fold: Style,
+    /// The fold band, and its key hint.
+    fold: (Style, Style),
+    /// The old side of side by side: its fold lines give old line numbers.
+    old_side: bool,
 }
 
 impl Doc<'_> {
@@ -83,23 +86,22 @@ impl Doc<'_> {
                 }
                 self.text += &text;
             }
-            None => {
-                let style = if matches!(row, Row::Fold { .. }) {
-                    self.fold
-                } else {
-                    Style::default()
-                };
-                self.spans.push((start, style));
-                if let Row::Fold {
+            None => match row {
+                Row::Fold {
                     len,
                     changes,
                     threads,
                     ..
-                } = row
-                {
-                    self.text += &fold_text(len, changes, threads);
+                } => {
+                    let range = row.fold_range(self.old_side);
+                    let (text, hint) = fold_text(len, changes, threads, range.as_deref());
+                    self.spans.push((start, self.fold.0));
+                    self.text += &text;
+                    self.spans.push((self.text.len(), self.fold.1));
+                    self.text += &hint;
                 }
-            }
+                _ => self.spans.push((start, Style::default())),
+            },
         }
         self.text.push('\n');
         self.rows.push(row);
@@ -126,28 +128,53 @@ fn doc<'a>(old: &'a File, new: &'a File, loader: &Loader, theme: &Theme) -> Doc<
             },
         ),
         new: (new, spans_of(new, loader, theme)),
-        fold: theme.get("ui.virtual"),
+        fold: fold_styles(theme),
+        old_side: false,
     }
+}
+
+/// The fold band: the theme's `ui.virtual.fold` if it has one, else text on the current line's
+/// background (`ui.cursorline.primary`, or the popups'), as a quiet band across the view. Its
+/// key hint is in `ui.virtual`'s dimmer colour.
+pub fn fold_styles(theme: &Theme) -> (Style, Style) {
+    let band = theme.try_get_exact("ui.virtual.fold").unwrap_or_else(|| {
+        let bg = [
+            "ui.cursorline.primary",
+            "ui.cursorline",
+            "ui.popup",
+            "ui.statusline",
+        ]
+        .iter()
+        .find_map(|k| theme.try_get(k).and_then(|s| s.bg));
+        let mut s = theme.get("ui.text");
+        s.bg = bg.or(s.bg);
+        s
+    });
+    let mut hint = band;
+    hint.fg = theme.get("ui.virtual").fg.or(band.fg);
+    (band, hint)
 }
 
 fn plural(n: usize, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
 
-/// A fold line: `⋯ 40 unchanged lines`, or for a fold you made over changes or threads,
-/// `⋯ 40 lines · 3 changed · 1 thread`.
-fn fold_text(len: usize, changes: usize, threads: usize) -> String {
-    if changes == 0 && threads == 0 {
-        return format!("⋯ {len} unchanged line{}", if len == 1 { "" } else { "s" });
-    }
-    let mut s = format!("⋯ {}", plural(len, "line"));
+/// A fold line, and its key hint: `↕ lines 16–31 (16)`, or for a fold you made over changes
+/// or threads, `↕ lines 16–31 (16) · 3 changed · 1 thread`; then `  ret opens`.
+fn fold_text(len: usize, changes: usize, threads: usize, range: Option<&str>) -> (String, String) {
+    let mut s = match range {
+        Some(r) if r.contains('–') => format!("↕ lines {r} ({len})"),
+        Some(r) => format!("↕ line {r} ({len})"),
+        // Only removed lines, in a fold you made in the unified view.
+        None => format!("↕ {}", plural(len, "row")),
+    };
     if changes > 0 {
         s += &format!(" · {changes} changed");
     }
     if threads > 0 {
         s += &format!(" · {}", plural(threads, "thread"));
     }
-    s
+    (s, "  ret opens".into())
 }
 
 /// What's folded in one view of one file, in rows of the whole view (before folding). It's
@@ -452,7 +479,10 @@ pub fn build(
         };
     }
     let mut d = doc(old, new, loader, theme);
-    let mut ld = r.left.as_ref().map(|_| doc(old, new, loader, theme));
+    let mut ld = r.left.as_ref().map(|_| Doc {
+        old_side: true,
+        ..doc(old, new, loader, theme)
+    });
     let mut full = vec![];
     let mut i = 0;
     while i < n {
@@ -470,6 +500,9 @@ pub fn build(
         while i < n && hidden[i] && mine[i] == mine[start] {
             i += 1;
         }
+        // The lines hidden on each side: the old side's from its own rows in side by side.
+        let span = |lines: Vec<usize>| Some((*lines.first()?, *lines.last()?));
+        let olds = r.left.as_ref().unwrap_or(&r.rows)[start..i].iter();
         let fold = Row::Fold {
             start,
             len: i - start,
@@ -478,6 +511,13 @@ pub fn build(
                 .iter()
                 .filter(|t| (start..i).contains(*t))
                 .count(),
+            lines: span(
+                r.rows[start..i]
+                    .iter()
+                    .filter_map(|r| r.new_line())
+                    .collect(),
+            ),
+            old_lines: span(olds.filter_map(|r| r.old_line()).collect()),
         };
         d.push(fold);
         if let Some(ld) = &mut ld {
@@ -628,7 +668,7 @@ mod tests {
         let u = unified(&o, &n, &h, &l, &t);
         assert_eq!(
             text(&u),
-            "⋯ 6 unchanged lines\n7\n8\n9\n10\nten\n11\n12\n13\n⋯ 7 unchanged lines\n"
+            "↕ lines 1–6 (6)  ret opens\n7\n8\n9\n10\nten\n11\n12\n13\n↕ lines 14–20 (7)  ret opens\n"
         );
         let rows = u.rows.as_ref().unwrap();
         assert_eq!(rows[4], Row::Removed(9));
@@ -639,7 +679,9 @@ mod tests {
                 start: 0,
                 len: 6,
                 changes: 0,
-                threads: 0
+                threads: 0,
+                lines: Some((0, 5)),
+                old_lines: Some((0, 5)),
             }
         );
         // New-side lines map both ways; removed and folded lines have none.
@@ -660,7 +702,7 @@ mod tests {
         let u = unified(&o, &n, &h, &l, &t);
         assert_eq!(
             text(&u),
-            "1\none\n2\n3\n4\n5\nfive\n6\n7\n8\n⋯ 2 unchanged lines\n"
+            "1\none\n2\n3\n4\n5\nfive\n6\n7\n8\n↕ lines 9–10 (2)  ret opens\n"
         );
         // A new file is all added; a deleted one all removed; with no changes, nothing folds.
         let (o, n, h, l, t) = files("", "a\nb\n");
@@ -695,16 +737,16 @@ mod tests {
         };
         assert_eq!(
             b(0, &[]),
-            "⋯ 9 unchanged lines\n10\nten\n⋯ 20 unchanged lines\n"
+            "↕ lines 1–9 (9)  ret opens\n10\nten\n↕ lines 11–30 (20)  ret opens\n"
         );
         assert_eq!(
             b(1, &[]),
-            "⋯ 8 unchanged lines\n9\n10\nten\n11\n⋯ 19 unchanged lines\n"
+            "↕ lines 1–8 (8)  ret opens\n9\n10\nten\n11\n↕ lines 12–30 (19)  ret opens\n"
         );
         // A thread on line 25 (0-based 24) keeps it and its context.
         assert_eq!(
             b(0, &[(24, 24)]),
-            "⋯ 9 unchanged lines\n10\nten\n⋯ 14 unchanged lines\n25\n⋯ 5 unchanged lines\n"
+            "↕ lines 1–9 (9)  ret opens\n10\nten\n↕ lines 11–24 (14)  ret opens\n25\n↕ lines 26–30 (5)  ret opens\n"
         );
     }
 
@@ -729,7 +771,7 @@ mod tests {
         assert!(b.folded);
         assert_eq!(
             text(&b.doc),
-            "⋯ 8 unchanged lines\n9\nten\n11\n⋯ 7 unchanged lines\n19\n21\n22\n⋯ 8 unchanged lines\n"
+            "↕ lines 1–8 (8)  ret opens\n9\nten\n11\n↕ lines 12–18 (7)  ret opens\n19\n21\n22\n↕ lines 22–29 (8)  ret opens\n"
         );
         let rows = b.doc.rows.as_ref().unwrap();
         assert_eq!(rows[2], Row::Line(9));
@@ -756,7 +798,7 @@ mod tests {
         let b = build(ViewKind::Unified, &o, &n, &h, 3, &f, &[(5, 5)], &l, &t);
         assert_eq!(
             text(&b.doc),
-            "1\n2\n⋯ 7 lines · 2 changed · 1 thread\n9\n10\n"
+            "1\n2\n↕ lines 3–8 (7) · 2 changed · 1 thread  ret opens\n9\n10\n"
         );
         // Next to what the context folds, it stays a line of its own.
         let mut f = Folds::default();
@@ -764,12 +806,19 @@ mod tests {
         let old = numbered(20);
         let (o2, n2, h2, _, _) = files(&old, &old.replace("10\n", "ten\n"));
         let b2 = build(ViewKind::Unified, &o2, &n2, &h2, 3, &f, &[], &l, &t);
-        assert!(text(&b2.doc).starts_with("⋯ 2 unchanged lines\n⋯ 4 unchanged lines\n7\n"));
+        assert!(
+            text(&b2.doc)
+                .starts_with("↕ lines 1–2 (2)  ret opens\n↕ lines 3–6 (4)  ret opens\n7\n")
+        );
         // `]g` still finds the hidden change: the fold line is one.
         assert_eq!(b.doc.hunks.len(), 1);
         assert_eq!(b.doc.hunks[0].after, 2..3);
-        assert_eq!(fold_text(1, 0, 0), "⋯ 1 unchanged line");
-        assert_eq!(fold_text(3, 1, 2), "⋯ 3 lines · 1 changed · 2 threads");
+        assert_eq!(fold_text(1, 0, 0, Some("5")).0, "↕ line 5 (1)");
+        assert_eq!(
+            fold_text(3, 1, 2, Some("2–4")).0,
+            "↕ lines 2–4 (3) · 1 changed · 2 threads"
+        );
+        assert_eq!(fold_text(3, 0, 0, None).0, "↕ 3 rows", "only removed lines");
     }
 
     #[test]
@@ -793,9 +842,9 @@ mod tests {
         assert_eq!(left.text.len_lines(), right.text.len_lines());
         assert_eq!(
             text(&right),
-            "⋯ 6 unchanged lines\n7\n8\n9\nten\n11\n12\n13\n⋯ 7 unchanged lines\n"
+            "↕ lines 1–6 (6)  ret opens\n7\n8\n9\nten\n11\n12\n13\n↕ lines 14–20 (7)  ret opens\n"
         );
-        assert!(text(&left).starts_with("⋯ 6 unchanged lines\n7\n8\n9\n10\n"));
+        assert!(text(&left).starts_with("↕ lines 1–6 (6)  ret opens\n7\n8\n9\n10\n"));
     }
 
     #[test]

@@ -8,7 +8,10 @@ you make by hand and Helix's tree-sitter text objects to make them with.
 ## Automatic folds
 
 - **Every view folds:** unified, side by side and the whole-file view. A stretch of unchanged lines
-  becomes one fold line: `⋯ 40 unchanged lines`.
+  becomes one fold line: a band across the view, gutter included, with the hidden range in the
+  gutter and `↕ lines 16–31 (16)  ret opens` on it. The band is `ui.virtual.fold`, or the
+  current line's background (`ui.cursorline.primary`) where a theme doesn't set it; the key hint
+  is in `ui.virtual`'s colour.
 - **Context:** `context` lines are kept before and after each change. A stretch is only folded if
   that hides at least 2 lines; folding one line into one fold line saves nothing.
 - **Threads are never folded:** a line with a thread (yours or an agent's note) counts as a change,
@@ -44,7 +47,7 @@ Helix's "center", so closing a single fold is `za`).
 - **`zf` folds any selection:** lines (`x`), a paragraph (`mip`), a function (`maf`), a class
   (`mac`) and so on. Select first, then fold, as Helix does everywhere.
 - **They can hide changes and threads,** since you asked for them. The fold line says what's inside:
-  `⋯ 40 lines · 3 changed · 1 thread`. `]g`, `]d`, `]u`, `gn` and the pickers open a fold when
+  `↕ lines 40–79 (40) · 3 changed · 1 thread`. `]g`, `]d`, `]u`, `gn` and the pickers open a fold when
   they land inside one.
 - **Reset on rebuild,** like automatic folds: new changes from the agent clear them.
 
