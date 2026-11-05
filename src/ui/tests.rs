@@ -9,7 +9,7 @@ use glos_helix::test::plain;
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 use tempfile::TempDir;
 
-use super::*;
+use super::{prompt::completions, *};
 
 /// An app over a review, with a test terminal of a fixed size.
 struct T {
@@ -122,8 +122,8 @@ impl T {
     }
 
     fn path(&self) -> String {
-        match &self.app.cur {
-            Cur::Change(i) => self.app.source.changes[*i].path.clone(),
+        match &self.app.state.cur {
+            Cur::Change(i) => self.app.state.source.changes[*i].path.clone(),
             Cur::Context(p) => format!("context:{p}"),
         }
     }
@@ -206,7 +206,7 @@ fn notices_for_kinds_of_change() {
         std::fs::set_permissions(n.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
     });
     let mut seen = vec![];
-    for _ in 0..t.app.files.len() {
+    for _ in 0..t.app.state.files.len() {
         seen.push(format!(
             "{}: {}",
             t.path(),
@@ -331,9 +331,9 @@ fn next_key_commands() {
 fn select_mode() {
     let mut t = T::files("", "one two three\n");
     assert_eq!(t.keys("v w w").sel(), "#[one two |]#three\n");
-    assert!(t.app.mode == Mode::Select);
-    assert!(t.keys("esc").app.mode == Mode::Normal);
-    assert!(t.keys("v v").app.mode == Mode::Normal);
+    assert!(t.app.state.mode == Mode::Select);
+    assert!(t.keys("esc").app.state.mode == Mode::Normal);
+    assert!(t.keys("v v").app.state.mode == Mode::Normal);
 }
 
 #[test]
@@ -507,7 +507,7 @@ fn changed_files_and_context() {
     assert_eq!(t.path(), "b");
     // esc closes a picker without moving.
     t.keys("space g esc");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert_eq!(t.path(), "b");
 }
 
@@ -542,7 +542,7 @@ fn typed_commands() {
     t.keys(":").typed("nope").keys("ret");
     assert_eq!(t.status(), Some("no such command: 'nope'"));
     t.keys(":").typed("toggle soft-wrap").keys("ret");
-    assert!(t.app.wrap);
+    assert!(t.app.state.wrap);
     t.keys(":").typed("toggle nonsense").keys("ret");
     assert_eq!(t.status(), Some("unknown option 'nonsense'"));
     // Backspace on an empty prompt closes it; esc closes it too.
@@ -560,7 +560,10 @@ fn yank() {
     t.keys("v w y");
     assert_eq!(t.app.yanked, ["one "]);
     assert_eq!(t.status(), Some("yanked 1 selection to register \""));
-    assert!(t.app.mode == Mode::Normal, "yanking leaves select mode");
+    assert!(
+        t.app.state.mode == Mode::Normal,
+        "yanking leaves select mode"
+    );
 }
 
 // ---- Scrolling and the mouse ----
@@ -601,7 +604,7 @@ fn soft_wrap_counts_rows() {
     }
     let mut t = T::files_sized("", &text, 40, 14);
     t.keys(": t o g g l e space s o f t - w r a p ret");
-    assert!(t.app.wrap);
+    assert!(t.app.state.wrap);
     assert!(t.screen().contains("↪"));
     // `j` moves by visual row: still within line 0.
     t.keys("j");
@@ -698,14 +701,27 @@ fn mouse_below_notices_and_in_picker() {
     assert_eq!(t.sel(), "one\n#[t|]#wo\n");
     // In the picker a click opens the row under it.
     t.keys("space g");
-    let (list, _) = t.app.picker.as_ref().unwrap().areas(t.app.screen);
+    let (list, _) = t.app.pickers.last().unwrap().areas(t.app.screen);
     t.mouse(
         MouseEventKind::Down(MouseButton::Left),
         list.x + 4,
         list.y + 4,
     );
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert_eq!(t.path(), "b");
+    // The command line and the comment box swallow clicks: the cursor stays.
+    let click = |t: &mut T| {
+        t.mouse(MouseEventKind::Down(MouseButton::Left), gutter + 2, 2);
+    };
+    t.keys(":");
+    click(&mut t);
+    assert_eq!(t.sel(), "one\n#[t|]#wo\n");
+    assert!(t.app.prompt.is_some());
+    t.keys("esc space c");
+    click(&mut t);
+    assert!(t.app.comment_box.is_some());
+    t.keys("esc q");
+    assert_eq!(t.sel(), "one\n#[t|]#wo\n");
 }
 
 #[test]
@@ -732,6 +748,7 @@ impl T {
 
     fn bodies(&self) -> Vec<String> {
         self.app
+            .state
             .threads
             .iter()
             .flat_map(|t| t.comments.iter().map(|c| c.body.clone()))
@@ -772,7 +789,7 @@ fn commenting_on_a_selection_saves_at_once() {
     t.keys("ret");
     assert!(t.app.comment_box.is_none());
     assert_eq!(t.bodies(), ["why\nnot hi?"]);
-    let a = t.app.threads[0].anchor.clone().unwrap();
+    let a = t.app.state.threads[0].anchor.clone().unwrap();
     assert_eq!((a.path.as_str(), a.start, a.end), ("main.rs", 2, 3));
     assert_eq!(t.said(), "Comment saved · 1 unsent; space s submits");
     assert!(t.shows("1 unsent"), "{}", t.screen());
@@ -819,7 +836,7 @@ fn motions_work_in_the_box_and_files_stay_put() {
     t.keys("g n");
     assert!(t.said().starts_with("Close the comment box first"));
     t.keys("space g");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     // `:` commands still work, and `:q` with a draft just quits: the draft is saved.
     t.keys(":").typed("q").keys("ret");
     assert!(t.app.quit);
@@ -908,7 +925,7 @@ fn editing_and_deleting_a_comment() {
     assert!(t.app.comment_box.is_some());
     t.keys("ret");
     assert_eq!(t.said(), "Comment deleted");
-    assert!(t.app.threads.is_empty());
+    assert!(t.app.state.threads.is_empty());
     // With no thread here, there's nothing to edit or reply to.
     t.keys("space m");
     assert_eq!(t.said(), "No comment of yours here");
@@ -922,13 +939,13 @@ fn replies_and_review_level_comments() {
     t.keys("space c").typed("one").keys("esc ret");
     t.keys("space r").typed("two").keys("esc ret");
     assert_eq!(t.said(), "Reply saved · 2 unsent; space s submits");
-    assert_eq!(t.app.threads.len(), 1);
+    assert_eq!(t.app.state.threads.len(), 1);
     assert_eq!(t.bodies(), ["one", "two"]);
     t.keys("space C");
     assert!(t.shows("Comment on the review"));
     t.typed("overall fine").keys("esc ret");
-    assert_eq!(t.app.threads.len(), 2);
-    assert!(t.app.threads[0].anchor.is_none());
+    assert_eq!(t.app.state.threads.len(), 2);
+    assert!(t.app.state.threads[0].anchor.is_none());
 }
 
 #[test]
@@ -1123,6 +1140,7 @@ impl T {
 
     fn thread_lines(&self) -> Vec<(u32, u32, String)> {
         self.app
+            .state
             .threads
             .iter()
             .filter_map(|t| {
@@ -1139,7 +1157,7 @@ fn sent(t: &mut T) -> String {
     t.keys("space c")
         .typed("why hello?")
         .keys("esc ret space s r");
-    t.app.threads[0].id.clone()
+    t.app.state.threads[0].id.clone()
 }
 
 #[test]
@@ -1155,7 +1173,7 @@ fn agent_replies_appear_unread_and_read_when_opened() {
     // Opening the thread reads it.
     t.keys("ret");
     assert!(t.shows("    it reads better"));
-    assert!(t.app.threads.iter().all(|th| !th.unread()));
+    assert!(t.app.state.threads.iter().all(|th| !th.unread()));
     assert!(!t.shows("1 unread"), "{}", t.screen());
     let stored = review::threads(&t.agent(), &t.app.review.id).unwrap();
     assert!(!stored[0].unread(), "read is kept in the store");
@@ -1212,7 +1230,7 @@ fn next_unread_goes_across_files() {
     assert!(t.sel().contains("#[3\n|]#"));
     t.keys("] u");
     assert_eq!(t.said(), "No more unread replies");
-    assert!(t.app.threads.iter().all(|th| !th.unread()));
+    assert!(t.app.state.threads.iter().all(|th| !th.unread()));
     assert!(!t.shows("1 unread"), "{}", t.screen());
 }
 
@@ -1222,11 +1240,11 @@ fn resolve_and_reopen() {
     t.keys("space c").typed("x").keys("esc ret");
     t.keys("space x");
     assert_eq!(t.said(), "Thread resolved");
-    assert_eq!(t.app.threads[0].status, "resolved");
+    assert_eq!(t.app.state.threads[0].status, "resolved");
     assert!(t.shows("· resolved"));
     t.keys("space x");
     assert_eq!(t.said(), "Thread reopened");
-    assert_eq!(t.app.threads[0].status, "open");
+    assert_eq!(t.app.state.threads[0].status, "open");
     t.keys("g g space x");
     assert_eq!(t.said(), "No thread here");
 }
@@ -1313,7 +1331,7 @@ fn files_appear_and_stop_being_changed() {
     std::fs::write(new.join("b.rs"), "fresh\n").unwrap();
     t.app.files_changed();
     t.draw();
-    assert_eq!(t.app.source.changes.len(), 2);
+    assert_eq!(t.app.state.source.changes.len(), 2);
     assert_eq!(t.path(), "a.rs");
     assert!(t.shows("1/2 files"));
     // a.rs changed back: it stays on screen, for context.
@@ -1344,7 +1362,7 @@ fn threads_follow_changes_made_while_glos_was_closed() {
     let source = Source::diff(&dir.join("old.rs"), &dir.join("main.rs")).unwrap();
     let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
     let app = App::new(source, &config(), theme, t.agent()).unwrap();
-    let a = app.threads[0].anchor.clone().unwrap();
+    let a = app.state.threads[0].anchor.clone().unwrap();
     assert_eq!((a.start, a.end), (4, 4));
 }
 
@@ -1503,7 +1521,7 @@ fn since_the_last_review() {
 #[test]
 fn one_commit_at_a_time() {
     let mut t = git_repo();
-    assert_eq!(t.app.source.changes.len(), 3);
+    assert_eq!(t.app.state.source.changes.len(), 3);
     // `]C` only shows in the per-commit scope.
     t.keys("]");
     assert!(!t.shows("Goto next commit"));
@@ -1595,6 +1613,7 @@ fn a_revision_against_your_files() {
     // Since HEAD~1: b.rs (the last commit) and c.rs (uncommitted); not a.rs.
     let paths: Vec<&str> = t
         .app
+        .state
         .source
         .changes
         .iter()
@@ -1613,7 +1632,7 @@ fn a_revision_against_your_files() {
     );
     // Reading the files again keeps comparing with HEAD~1.
     t.app.files_changed();
-    assert_eq!(t.app.source.changes.len(), 2);
+    assert_eq!(t.app.state.source.changes.len(), 2);
 }
 
 #[test]
@@ -1621,6 +1640,7 @@ fn comments_on_two_revisions_keep_their_diff() {
     let mut t = git_repo_with(|r| Source::revs(r, "HEAD~2", Some("HEAD~1")).unwrap());
     let paths: Vec<&str> = t
         .app
+        .state
         .source
         .changes
         .iter()
@@ -1630,10 +1650,10 @@ fn comments_on_two_revisions_keep_their_diff() {
     assert!(t.shows("HEAD~2 vs HEAD~1"), "{}", t.screen());
     // The cursor opens on the change, `line two`, which is the commit's content.
     t.keys("space c").typed("why two?").keys("esc ret");
-    let th = &t.app.threads[0];
+    let th = &t.app.state.threads[0];
     let (old, new) = (
-        t.app.source.old_commit.unwrap(),
-        t.app.source.new_commit.unwrap(),
+        t.app.state.source.old_commit.unwrap(),
+        t.app.state.source.new_commit.unwrap(),
     );
     assert_eq!(th.on.old_rev, Some(old.to_string()));
     assert_eq!(th.on.new_rev, Some(new.to_string()));
@@ -1645,7 +1665,7 @@ fn comments_on_two_revisions_keep_their_diff() {
     assert!(t.shows("▸ you: why two?"), "{}", t.screen());
     // Still history after a reload, so the thread keeps its place.
     t.app.files_changed();
-    assert_eq!(t.app.threads[0].anchor.as_ref().unwrap().start, 2);
+    assert_eq!(t.app.state.threads[0].anchor.as_ref().unwrap().start, 2);
     // In the branch's review of your files the same code is still there: shown, marked.
     let repo = t._dir.path().join("repo");
     let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
@@ -1673,7 +1693,7 @@ fn comments_on_one_commit_stay_on_it() {
     t.keys("space o c");
     assert_eq!(t.path(), "a.rs");
     t.keys("space c").typed("on the commit").keys("esc ret");
-    let th = t.app.threads[0].clone();
+    let th = t.app.state.threads[0].clone();
     let commit = &t.app.commits[0];
     assert_eq!(th.on.new_rev, Some(commit.id.to_string()));
     let diff = th.on.diff.unwrap();
@@ -1750,7 +1770,7 @@ fn the_file_tree_starts_open() {
 impl T {
     /// The palette's title (its second column's header) and its rows' text.
     fn palette(&self) -> (String, Vec<String>) {
-        let p = self.app.picker.as_ref().expect("the palette is open");
+        let p = self.app.pickers.last().expect("the palette is open");
         let screen = self.screen();
         (
             p.columns[1].to_string(),
@@ -1785,7 +1805,7 @@ fn palette_lists_what_applies_and_runs_it() {
     // ret runs the command, here a submit.
     t.keys("esc C-g");
     t.typed("approve").keys("ret");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert!(
         t.said().starts_with("Round 1 submitted: approved"),
         "{}",
@@ -1795,7 +1815,7 @@ fn palette_lists_what_applies_and_runs_it() {
     t.keys("space ?");
     assert_eq!(t.palette().0, "Normal mode");
     t.keys("C-g");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     // A command that waits for a character still does.
     t.keys("C-g")
         .typed("Move to next occurrence of char")
@@ -1812,7 +1832,7 @@ fn palette_in_the_comment_box() {
     assert!(t.shows("New line"));
     // esc goes back to typing, the text kept.
     t.keys("esc");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert!(t.app.comment_box.as_ref().unwrap().insert);
     t.typed("!");
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "draft!");
@@ -1836,13 +1856,19 @@ fn palette_in_the_tree_picker_and_prompt() {
     assert_eq!(t.palette().0, "File tree");
     assert!(t.shows("Close the tree"));
     t.keys("ret"); // a listed key: back to the tree, still focused
-    assert!(t.app.picker.is_none() && t.app.tree.as_ref().unwrap().focused);
+    assert!(t.app.pickers.is_empty() && t.app.tree.as_ref().unwrap().focused);
     t.keys("q");
     // A picker: the palette covers it, and esc brings it back with its query.
     t.keys("space g").typed("main").keys("C-g");
     assert_eq!(t.palette().0, "Picker");
-    t.keys("esc");
-    assert!(t.shows("main.rs") && t.app.picker.is_some());
+    assert_eq!(t.app.pickers.len(), 2);
+    t.keys("C-g"); // C-g again goes back too
+    assert_eq!(t.app.pickers.len(), 1);
+    t.keys("C-g ret"); // so does choosing a key it only lists
+    assert_eq!(t.app.pickers.len(), 1);
+    assert!(!t.app.pickers[0].palette);
+    t.keys("C-g esc");
+    assert!(t.shows("main.rs") && t.app.pickers.len() == 1);
     t.keys("esc");
     // The command line: the line is kept.
     t.keys(":").typed("subm").keys("C-g");
@@ -1880,7 +1906,7 @@ fn the_dashboard_lists_reviews_and_opens_another() {
 
     // Its own review: the dashboard just closes.
     t.typed("main.rs").keys("ret");
-    assert!(t.app.picker.is_none() && !t.app.quit && t.app.switch.is_none());
+    assert!(t.app.pickers.is_empty() && !t.app.quit && t.app.switch.is_none());
 
     // Another: glos closes this review and opens that one.
     t.keys("space l").typed("other").keys("ret");
@@ -1893,14 +1919,14 @@ fn the_dashboard_lists_reviews_and_opens_another() {
 fn the_dashboard_is_a_command_and_a_key() {
     let mut t = T::files(OLD, NEW);
     t.keys(": d a s h b o a r d ret");
-    assert!(t.app.picker.as_ref().is_some_and(dashboard::is_dashboard));
+    assert!(t.app.pickers.last().is_some_and(dashboard::is_dashboard));
     t.keys("esc");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     // C-g over it lists the picker's keys.
     t.keys("space l C-g");
     assert!(t.shows("Filter the list"), "{}", t.screen());
     t.keys("C-g");
-    assert!(t.app.picker.as_ref().is_some_and(dashboard::is_dashboard));
+    assert!(t.app.pickers.last().is_some_and(dashboard::is_dashboard));
 }
 
 #[test]

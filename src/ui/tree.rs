@@ -1,10 +1,16 @@
 //! The file tree (`space e`): the review's changed files by folder, each with the lines it adds
 //! and removes and its open threads.
 
+use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{buffer::Buffer, layout::Rect};
 use unicode_width::UnicodeWidthStr;
 
-use super::view::clean;
+use super::{
+    component::{Component, Cx, Msg, Outcome},
+    keymap::Key,
+    picker::Target,
+    view::clean,
+};
 use crate::theme::Theme;
 
 /// A changed file as the tree lists it.
@@ -106,8 +112,7 @@ impl Tree {
         self.rows.get(i)?.path.as_deref()
     }
 
-    /// Draws the tree in `area`, the file on screen marked.
-    pub fn render(&mut self, buf: &mut Buffer, area: Rect, current: &str, theme: &Theme) {
+    fn render_in(&mut self, buf: &mut Buffer, area: Rect, current: &str, theme: &Theme) {
         let base = theme.get("ui.background");
         buf.set_style(area, base);
         let title = theme.get("ui.text").patch(ratatui::style::Style::default());
@@ -165,6 +170,47 @@ impl Tree {
                 theme.get("ui.window"),
             );
         }
+    }
+}
+
+impl Component for Tree {
+    /// Every key is the tree's while it's focused.
+    fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
+        match (key.code, key.char()) {
+            (KeyCode::Down, _) | (_, Some('j')) => self.step(true),
+            (KeyCode::Up, _) | (_, Some('k')) => self.step(false),
+            (KeyCode::Enter, _) | (_, Some('l')) => {
+                if let Some(p) = self.selected().map(str::to_string) {
+                    self.focused = false;
+                    return Outcome::Msg(Msg::Open(Target::Path(p)));
+                }
+            }
+            (KeyCode::Esc, _) => self.focused = false,
+            (_, Some('q')) => return Outcome::Msg(Msg::CloseTree),
+            _ => {}
+        }
+        Outcome::Consumed
+    }
+
+    /// A click on a file opens it; anything else over the tree does nothing.
+    fn mouse(&mut self, m: MouseEvent, area: Rect, _cx: &Cx) -> Outcome {
+        if m.column >= area.right() {
+            return Outcome::Ignored;
+        }
+        if m.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some(p) = self.path_at(area, m.row).map(str::to_string)
+        {
+            self.select(&p);
+            self.focused = false;
+            return Outcome::Msg(Msg::Open(Target::Path(p)));
+        }
+        Outcome::Consumed
+    }
+
+    /// Draws the tree in `area`, the file on screen marked.
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
+        let current = cx.state.map_or("", |s| s.main_path());
+        self.render_in(buf, area, current, cx.theme);
     }
 }
 
@@ -235,7 +281,7 @@ mod tests {
         let mut t = Tree::new(vec![e("src/a.rs", 12, 3, 2), e("b.rs", 0, 0, 0)]);
         let area = Rect::new(0, 0, 30, 5);
         let mut buf = Buffer::empty(area);
-        t.render(&mut buf, area, "b.rs", &theme);
+        t.render_in(&mut buf, area, "b.rs", &theme);
         let row = |y| {
             (0..30)
                 .map(|x| buf[(x, y)].symbol())
@@ -253,5 +299,61 @@ mod tests {
         assert_eq!(t.path_at(area, 3), Some("src/a.rs"));
         assert_eq!(t.path_at(area, 2), None, "a folder");
         assert_eq!(t.path_at(area, 0), None, "the title");
+    }
+
+    #[test]
+    fn as_a_component() {
+        use crossterm::event::KeyModifiers;
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
+        let cx = Cx {
+            screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
+        };
+        let key = |c| Key {
+            code: KeyCode::Char(c),
+            mods: KeyModifiers::NONE,
+        };
+        let mut t = Tree::new(vec![e("a.rs", 1, 0, 0), e("src/b.rs", 1, 0, 0)]);
+        assert_eq!(t.key(key('j'), &cx), Outcome::Consumed);
+        assert_eq!(t.selected(), Some("src/b.rs"));
+        assert_eq!(
+            t.key(key('x'), &cx),
+            Outcome::Consumed,
+            "every key is the tree's"
+        );
+        assert_eq!(
+            t.key(key('l'), &cx),
+            Outcome::Msg(Msg::Open(Target::Path("src/b.rs".into())))
+        );
+        assert!(!t.focused, "opening a file gives the keys back to it");
+        assert_eq!(t.key(key('q'), &cx), Outcome::Msg(Msg::CloseTree));
+
+        // Rows: the title, then a.rs, src/, b.rs.
+        let area = Rect::new(0, 0, 20, 10);
+        let click = |column, row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        t.focused = true;
+        assert_eq!(
+            t.mouse(click(3, 1), area, &cx),
+            Outcome::Msg(Msg::Open(Target::Path("a.rs".into())))
+        );
+        assert_eq!(t.selected(), Some("a.rs"));
+        assert!(!t.focused);
+        assert_eq!(
+            t.mouse(click(3, 2), area, &cx),
+            Outcome::Consumed,
+            "a folder"
+        );
+        assert_eq!(
+            t.mouse(click(30, 1), area, &cx),
+            Outcome::Ignored,
+            "beside the tree"
+        );
     }
 }

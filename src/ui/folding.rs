@@ -34,7 +34,7 @@ impl App {
     /// The threads of the file on screen, as new-side line ranges: they keep their lines in
     /// view.
     fn fold_threads(&self) -> Vec<(usize, usize)> {
-        let path = self.main_path();
+        let path = self.state.main_path();
         let mut v: Vec<(usize, usize)> = self
             .shown_threads()
             .iter()
@@ -48,7 +48,7 @@ impl App {
     }
 
     fn fold_key(&self) -> (String, ViewKind) {
-        (self.main_path().to_string(), self.view_kind)
+        (self.state.main_path().to_string(), self.view_kind)
     }
 
     /// The view of the file on screen, folded as it is now; `None` for a view this file can't
@@ -74,19 +74,19 @@ impl App {
                 ctx,
                 &folds,
                 &threads,
-                &self.loader,
+                &self.state.loader,
                 &self.theme,
             ));
         }
-        let Cur::Change(i) = self.cur else {
+        let Cur::Change(i) = self.state.cur else {
             return None; // a context file has no diff
         };
-        let change = &self.source.changes[i];
-        let read = |c: &Content| self.source.read(c).ok().flatten().unwrap_or_default();
+        let change = &self.state.source.changes[i];
+        let read = |c: &Content| self.state.source.read(c).ok().flatten().unwrap_or_default();
         let (old_bytes, new_bytes) = (read(&change.old), read(&change.new));
-        let path = self.source.root.join(&change.path);
-        let old = File::side(&path, &old_bytes, &self.loader);
-        let new = File::side(&path, &new_bytes, &self.loader);
+        let path = self.state.source.root.join(&change.path);
+        let old = File::side(&path, &old_bytes, &self.state.loader);
+        let new = File::side(&path, &new_bytes, &self.state.loader);
         let hunks = crate::diff::hunks(
             &String::from_utf8_lossy(&old_bytes),
             &String::from_utf8_lossy(&new_bytes),
@@ -99,7 +99,7 @@ impl App {
             ctx,
             &folds,
             &threads,
-            &self.loader,
+            &self.state.loader,
             &self.theme,
         ))
     }
@@ -126,7 +126,7 @@ impl App {
         doc.sel = Selection::point(dt.line_to_char(at) + col.min(len)).ensure_invariants(dt);
         doc.top = at.saturating_sub(glos_helix::commands::SCROLLOFF);
         self.alt = Some(Alt {
-            cur: self.cur.clone(),
+            cur: self.state.cur.clone(),
             kind: self.view_kind,
             doc,
             left: b.left,
@@ -145,7 +145,7 @@ impl App {
     fn shown_alt(&self) -> Option<&Alt> {
         self.alt
             .as_ref()
-            .filter(|a| a.cur == self.cur && a.kind == self.view_kind)
+            .filter(|a| a.cur == self.state.cur && a.kind == self.view_kind)
     }
 
     /// The row of the whole view on view line `line` (a fold line: its first row).
@@ -286,7 +286,7 @@ impl App {
                     return;
                 }
                 self.folds.entry(k).or_default().hand.extend(made);
-                self.mode = super::Mode::Normal;
+                self.state.mode = super::Mode::Normal;
                 self.refold(Some(first));
             }
             FoldKey::Delete => {
@@ -403,7 +403,7 @@ impl App {
             return;
         };
         let count = self.count.map_or(1, std::num::NonZeroUsize::get);
-        let extend = self.mode == super::Mode::Select;
+        let extend = self.state.mode == super::Mode::Select;
         let base = self.base_file();
         let Some(syntax) = &base.syntax else {
             self.status = Some((
@@ -421,9 +421,11 @@ impl App {
             .map(|r| {
                 let br = Range::new(to_base(view, base, r.anchor), to_base(view, base, r.head));
                 let got = if goto {
-                    self.loader.goto_object(syntax, bt, br, name, flag, count)
+                    self.state
+                        .loader
+                        .goto_object(syntax, bt, br, name, flag, count)
                 } else {
-                    self.loader.textobject(syntax, bt, br, name, flag)
+                    self.state.loader.textobject(syntax, bt, br, name, flag)
                 };
                 (br, (got != br).then_some(got))
             })

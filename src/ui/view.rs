@@ -390,6 +390,21 @@ pub fn keep_view(old: File, mut new: File) -> File {
 /// How `draw` styles a selection: (selection, primary selection, cursor, primary cursor).
 pub type SelectionStyles = (Style, Style, Style, Style);
 
+/// (selection, primary selection, cursor, primary cursor) in `mode`, as Helix picks them.
+pub fn selection_styles(t: &Theme, mode: &str) -> SelectionStyles {
+    let sel = t.get("ui.selection");
+    let sel_primary = t.try_get("ui.selection.primary").unwrap_or(sel);
+    let base_cursor = t.try_get_exact("ui.cursor").unwrap_or(sel);
+    let base_primary = t.try_get("ui.cursor.primary").unwrap_or(base_cursor);
+    let cursor = t
+        .try_get_exact(&format!("ui.cursor.{mode}"))
+        .unwrap_or(base_cursor);
+    let primary = t
+        .try_get_exact(&format!("ui.cursor.primary.{mode}"))
+        .unwrap_or(base_primary);
+    (sel, sel_primary, cursor, primary)
+}
+
 /// The text layout for a view `width` columns wide, with Helix's soft-wrap defaults
 /// (helix-view `Document::text_format`): wrap indicator `↪ `, max-wrap 20, max-indent-retain 40.
 pub fn text_format(file: &File, width: u16, wrap: bool) -> TextFormat {

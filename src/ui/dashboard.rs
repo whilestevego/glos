@@ -4,15 +4,14 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Context, Result};
-use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{DefaultTerminal, layout::Rect};
 use rusqlite::Connection;
 
 use super::{
+    component::{Component, Cx, Msg, Outcome},
     keymap::Key,
-    picker::{self, Item, Outcome, Picker, Target},
+    picker::{self, Item, Picker, Target},
 };
 use crate::{
     review::{self, Review},
@@ -137,9 +136,12 @@ pub fn run(
             screen = f.area();
             let buf = f.buffer_mut();
             buf.set_style(screen, theme.get("ui.background"));
-            let p = keys.as_mut().unwrap_or(&mut list);
-            let (area, _) = p.areas(screen);
-            p.render(buf, area, theme);
+            let cx = Cx {
+                screen,
+                theme,
+                state: None,
+            };
+            keys.as_mut().unwrap_or(&mut list).render(buf, screen, &cx);
             let line = status.clone().unwrap_or_else(|| {
                 "Reviews on this machine · ret opens · esc quits · C-g keys".into()
             });
@@ -154,6 +156,11 @@ pub fn run(
             );
         })?;
         if event::poll(Duration::from_millis(500))? {
+            let cx = Cx {
+                screen,
+                theme,
+                state: None,
+            };
             let outcome = match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     let key = Key::from(k);
@@ -165,37 +172,21 @@ pub fn run(
                         };
                         continue;
                     }
-                    let p = keys.as_mut().unwrap_or(&mut list);
-                    let page = p.page(p.areas(screen).0);
-                    p.key(key, page)
+                    keys.as_mut().unwrap_or(&mut list).key(key, &cx)
                 }
-                Event::Mouse(m) => {
-                    let p = keys.as_mut().unwrap_or(&mut list);
-                    let (area, _) = p.areas(screen);
-                    let step = |code| Key {
-                        code,
-                        mods: KeyModifiers::NONE,
-                    };
-                    match m.kind {
-                        MouseEventKind::ScrollDown => p.key(step(KeyCode::Down), 1),
-                        MouseEventKind::ScrollUp => p.key(step(KeyCode::Up), 1),
-                        MouseEventKind::Down(MouseButton::Left) => p
-                            .target_at(area, m.column, m.row)
-                            .map_or(Outcome::Stay, Outcome::Open),
-                        _ => Outcome::Stay,
-                    }
-                }
-                _ => Outcome::Stay,
+                Event::Mouse(m) => keys.as_mut().unwrap_or(&mut list).mouse(m, screen, &cx),
+                _ => Outcome::Consumed,
             };
             match outcome {
-                Outcome::Stay => {}
-                Outcome::Close if keys.is_some() => keys = None,
-                Outcome::Close => return Ok(None),
-                Outcome::Open(Target::Review(id)) => match source_of(conn, &id) {
+                Outcome::Ignored | Outcome::Consumed => {}
+                Outcome::Msg(Msg::Close) if keys.is_some() => keys = None,
+                Outcome::Msg(Msg::Close) => return Ok(None),
+                Outcome::Msg(Msg::Open(Target::Review(id))) => match source_of(conn, &id) {
                     Ok(s) => return Ok(Some(s)),
                     Err(e) => status = Some(format!("{e:#}")),
                 },
-                Outcome::Open(_) => keys = None,
+                Outcome::Msg(Msg::Open(_)) => keys = None,
+                Outcome::Msg(_) => {} // a picker sends nothing else
             }
         }
         let v = version();
