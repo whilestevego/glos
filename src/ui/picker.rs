@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use nucleo::{
     Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -16,7 +16,11 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{keymap::Key, view::clean};
+use super::{
+    component::{Component, Cx, Msg, Outcome},
+    keymap::Key,
+    view::clean,
+};
 use crate::theme::Theme;
 
 /// Below this width Helix drops the preview.
@@ -85,12 +89,6 @@ pub struct Picker {
     pub preview: bool,
 }
 
-pub enum Outcome {
-    Stay,
-    Close,
-    Open(Target),
-}
-
 impl Picker {
     pub fn new(columns: Vec<&'static str>, items: Vec<Item>) -> Picker {
         let mut p = Picker {
@@ -146,18 +144,15 @@ impl Picker {
             .map(|i| &self.items[*i as usize].target)
     }
 
-    /// Helix's picker keys.
-    pub fn key(&mut self, key: Key, page: usize) -> Outcome {
+    /// Helix's picker keys; `page` is how far a page key moves.
+    fn key_paged(&mut self, key: Key, page: usize) -> Outcome {
         let ctrl = key.mods.contains(KeyModifiers::CONTROL);
         let n = self.matched.len();
         match key.code {
-            KeyCode::Esc => return Outcome::Close,
-            KeyCode::Char('c') if ctrl => return Outcome::Close,
+            KeyCode::Esc => return Outcome::Msg(Msg::Close),
+            KeyCode::Char('c') if ctrl => return Outcome::Msg(Msg::Close),
             KeyCode::Enter => {
-                return self
-                    .selected()
-                    .cloned()
-                    .map_or(Outcome::Close, Outcome::Open);
+                return Outcome::Msg(self.selected().cloned().map_or(Msg::Close, Msg::Open));
             }
             KeyCode::BackTab | KeyCode::Up => self.cursor = (self.cursor + n.max(1) - 1) % n.max(1),
             KeyCode::Char('p') if ctrl => self.cursor = (self.cursor + n.max(1) - 1) % n.max(1),
@@ -182,7 +177,7 @@ impl Picker {
             }
             _ => {}
         }
-        Outcome::Stay
+        Outcome::Consumed
     }
 
     /// Where the picker and its preview go: 90% of the screen above the bottom two rows.
@@ -376,6 +371,34 @@ impl Picker {
     }
 }
 
+impl Component for Picker {
+    fn key(&mut self, key: Key, cx: &Cx) -> Outcome {
+        let page = self.page(self.areas(cx.screen).0);
+        self.key_paged(key, page)
+    }
+
+    /// The wheel moves; a click opens the item under it. The picker places itself on the
+    /// screen, so `area` isn't used.
+    fn mouse(&mut self, m: MouseEvent, _area: Rect, cx: &Cx) -> Outcome {
+        let step = |code| Key {
+            code,
+            mods: KeyModifiers::NONE,
+        };
+        match m.kind {
+            MouseEventKind::ScrollDown => self.key_paged(step(KeyCode::Down), 1),
+            MouseEventKind::ScrollUp => self.key_paged(step(KeyCode::Up), 1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (list, _) = self.areas(cx.screen);
+                match self.target_at(list, m.column, m.row) {
+                    Some(t) => Outcome::Msg(Msg::Open(t)),
+                    None => Outcome::Consumed,
+                }
+            }
+            _ => Outcome::Consumed,
+        }
+    }
+}
+
 /// The bordered frame of the preview, and the area inside it for the text.
 pub fn preview_frame(buf: &mut Buffer, area: Rect, theme: &Theme) -> Rect {
     buf.set_style(area, theme.get("ui.background"));
@@ -412,7 +435,7 @@ mod tests {
 
     fn typed(p: &mut Picker, s: &str) {
         for c in s.chars() {
-            p.key(
+            p.key_paged(
                 Key {
                     code: KeyCode::Char(c),
                     mods: KeyModifiers::NONE,
@@ -429,35 +452,35 @@ mod tests {
         typed(&mut p, "uimod");
         assert_eq!(p.matched.len(), 1);
         assert_eq!(p.selected(), Some(&Target::Path("src/ui/mod.rs".into())));
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Backspace,
                 mods: KeyModifiers::NONE,
             },
             10,
         );
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Backspace,
                 mods: KeyModifiers::NONE,
             },
             10,
         );
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Backspace,
                 mods: KeyModifiers::NONE,
             },
             10,
         );
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Backspace,
                 mods: KeyModifiers::NONE,
             },
             10,
         );
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Backspace,
                 mods: KeyModifiers::NONE,
@@ -465,7 +488,7 @@ mod tests {
             10,
         );
         assert_eq!(p.matched.len(), 3);
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Up,
                 mods: KeyModifiers::NONE,
@@ -474,14 +497,14 @@ mod tests {
         );
         assert_eq!(p.selected(), Some(&Target::Path("README.md".into())));
         assert!(matches!(
-            p.key(
+            p.key_paged(
                 Key {
                     code: KeyCode::Esc,
                     mods: KeyModifiers::NONE
                 },
                 10
             ),
-            Outcome::Close
+            Outcome::Msg(Msg::Close)
         ));
     }
 
@@ -499,39 +522,42 @@ mod tests {
             mods: KeyModifiers::CONTROL,
         };
         let at = |p: &Picker| p.selected().cloned();
-        p.key(key(KeyCode::Up), 10);
+        p.key_paged(key(KeyCode::Up), 10);
         assert_eq!(
             at(&p),
             Some(Target::Path("f29".into())),
             "up wraps to the end"
         );
-        p.key(key(KeyCode::Down), 10);
+        p.key_paged(key(KeyCode::Down), 10);
         assert_eq!(
             at(&p),
             Some(Target::Path("f00".into())),
             "down wraps to the start"
         );
-        p.key(ctrl('n'), 10);
-        p.key(key(KeyCode::Tab), 10);
+        p.key_paged(ctrl('n'), 10);
+        p.key_paged(key(KeyCode::Tab), 10);
         assert_eq!(at(&p), Some(Target::Path("f02".into())));
-        p.key(ctrl('p'), 10);
-        p.key(key(KeyCode::BackTab), 10);
+        p.key_paged(ctrl('p'), 10);
+        p.key_paged(key(KeyCode::BackTab), 10);
         assert_eq!(at(&p), Some(Target::Path("f00".into())));
-        p.key(ctrl('d'), 10);
+        p.key_paged(ctrl('d'), 10);
         assert_eq!(at(&p), Some(Target::Path("f10".into())));
-        p.key(key(KeyCode::PageDown), 100);
+        p.key_paged(key(KeyCode::PageDown), 100);
         assert_eq!(
             at(&p),
             Some(Target::Path("f29".into())),
             "pages stop at the end"
         );
-        p.key(ctrl('u'), 10);
+        p.key_paged(ctrl('u'), 10);
         assert_eq!(at(&p), Some(Target::Path("f19".into())));
-        p.key(key(KeyCode::Home), 10);
+        p.key_paged(key(KeyCode::Home), 10);
         assert_eq!(at(&p), Some(Target::Path("f00".into())));
-        p.key(key(KeyCode::End), 10);
+        p.key_paged(key(KeyCode::End), 10);
         assert_eq!(at(&p), Some(Target::Path("f29".into())));
-        assert!(matches!(p.key(ctrl('c'), 10), Outcome::Close));
+        assert!(matches!(
+            p.key_paged(ctrl('c'), 10),
+            Outcome::Msg(Msg::Close)
+        ));
     }
 
     #[test]
@@ -540,24 +566,24 @@ mod tests {
         typed(&mut p, "zzz");
         assert_eq!(p.selected(), None);
         assert!(matches!(
-            p.key(
+            p.key_paged(
                 Key {
                     code: KeyCode::Enter,
                     mods: KeyModifiers::NONE
                 },
                 10
             ),
-            Outcome::Close
+            Outcome::Msg(Msg::Close)
         ));
         let mut p = picker(&["a.rs", "b.rs"]);
         typed(&mut p, "b");
         assert!(matches!(
-            p.key(Key { code: KeyCode::Enter, mods: KeyModifiers::NONE }, 10),
-            Outcome::Open(Target::Path(ref s)) if s == "b.rs"
+            p.key_paged(Key { code: KeyCode::Enter, mods: KeyModifiers::NONE }, 10),
+            Outcome::Msg(Msg::Open(Target::Path(ref s))) if s == "b.rs"
         ));
         // Alt and ctrl characters aren't typed into the query.
         let mut p = picker(&["a.rs"]);
-        p.key(
+        p.key_paged(
             Key {
                 code: KeyCode::Char('x'),
                 mods: KeyModifiers::ALT,
@@ -587,5 +613,39 @@ mod tests {
         assert_eq!(p.target_at(area, 5, 6), None);
         assert_eq!(p.target_at(area, 0, 3), None, "the border");
         assert_eq!(p.target_at(area, 5, 1), None, "the prompt");
+    }
+
+    #[test]
+    fn as_a_component() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut p = picker(&["a", "b", "c"]);
+        let cx = Cx {
+            screen: Rect::new(0, 0, 50, 14),
+        };
+        let mouse = |kind, column, row| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let key = |code| Key {
+            code,
+            mods: KeyModifiers::NONE,
+        };
+        assert_eq!(p.key(key(KeyCode::Down), &cx), Outcome::Consumed);
+        assert_eq!(p.selected(), Some(&Target::Path("b".into())));
+        let wheel = mouse(MouseEventKind::ScrollDown, 10, 5);
+        assert_eq!(p.mouse(wheel, cx.screen, &cx), Outcome::Consumed);
+        assert_eq!(p.selected(), Some(&Target::Path("c".into())));
+        // The list is 90% of the screen above the bottom two rows: row 1 is its top border.
+        let (list, _) = p.areas(cx.screen);
+        let click = mouse(MouseEventKind::Down(MouseButton::Left), 5, list.y + 3);
+        assert_eq!(
+            p.mouse(click, cx.screen, &cx),
+            Outcome::Msg(Msg::Open(Target::Path("a".into())))
+        );
+        let off = mouse(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        assert_eq!(p.mouse(off, cx.screen, &cx), Outcome::Consumed);
+        assert_eq!(p.key(key(KeyCode::Esc), &cx), Outcome::Msg(Msg::Close));
     }
 }

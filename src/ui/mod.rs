@@ -2,6 +2,7 @@
 //! pickers.
 
 mod comments;
+mod component;
 mod dashboard;
 mod diffview;
 mod folding;
@@ -44,8 +45,9 @@ use crate::{
     theme::{ColorSupport, Theme},
 };
 use comments::{CommentBox, Place, ThreadLines, Threads};
+use component::{Component, Cx, Msg, Outcome};
 use keymap::{Action, AppAction, Key, Keymaps, Node};
-use picker::{Item, Outcome, Picker, Target};
+use picker::{Item, Picker, Target};
 use view::{File, clean};
 
 /// A motion that `A-.` can repeat.
@@ -1852,14 +1854,12 @@ impl App {
             }
             return None;
         }
+        let cx = self.cx();
         if let Some(picker) = &mut self.picker {
-            let page = picker.page(picker.areas(self.screen).0);
-            match picker.key(key, page) {
-                Outcome::Stay => {}
-                Outcome::Close => self.picker = self.palette.take().flatten(),
-                Outcome::Open(t) => return self.choose(t),
-            }
-            return None;
+            return match picker.key(key, &cx) {
+                Outcome::Msg(msg) => self.apply(msg),
+                Outcome::Ignored | Outcome::Consumed => None,
+            };
         }
         if self.prompt.is_some() {
             self.prompt_key(key);
@@ -1953,6 +1953,23 @@ impl App {
             .unwrap_or_default();
         self.pending = keep;
         self.execute(command)
+    }
+
+    fn cx(&self) -> Cx {
+        Cx {
+            screen: self.screen,
+        }
+    }
+
+    /// What a component asked for.
+    fn apply(&mut self, msg: Msg) -> Option<AppAction> {
+        match msg {
+            Msg::Close => {
+                self.picker = self.palette.take().flatten();
+                None
+            }
+            Msg::Open(t) => self.choose(t),
+        }
     }
 
     /// An item chosen in a picker: a file or thread opens; a command runs; a key that's only
@@ -2621,33 +2638,10 @@ impl App {
     /// Click to move the cursor, drag to select, wheel to scroll; in the picker, the wheel moves
     /// and a click opens.
     fn mouse(&mut self, m: MouseEvent) {
+        let cx = self.cx();
         if let Some(picker) = &mut self.picker {
-            let (list, _) = picker.areas(self.screen);
-            match m.kind {
-                MouseEventKind::ScrollDown => {
-                    picker.key(
-                        Key {
-                            code: KeyCode::Down,
-                            mods: KeyModifiers::NONE,
-                        },
-                        1,
-                    );
-                }
-                MouseEventKind::ScrollUp => {
-                    picker.key(
-                        Key {
-                            code: KeyCode::Up,
-                            mods: KeyModifiers::NONE,
-                        },
-                        1,
-                    );
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(t) = picker.target_at(list, m.column, m.row) {
-                        self.choose(t);
-                    }
-                }
-                _ => {}
+            if let Outcome::Msg(msg) = picker.mouse(m, self.screen, &cx) {
+                self.apply(msg);
             }
             return;
         }
