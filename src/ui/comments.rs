@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers, MouseEvent};
 use glos_helix::{
     layout::LineAnnotation,
     syntax::Loader,
@@ -12,9 +12,18 @@ use glos_helix::{
         prev_grapheme_boundary,
     },
 };
-use ratatui::style::Style;
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::Style,
+    widgets::{Block, Borders, Clear, Widget},
+};
 
-use super::view::File;
+use super::{
+    component::{Component, Cx, Msg, Outcome},
+    keymap::Key,
+    view::{self, File, SelectionStyles, clean},
+};
 use crate::{
     review::{Anchor, Thread, YOU},
     theme::Theme,
@@ -106,8 +115,8 @@ impl CommentBox {
         self.insert = false;
     }
 
-    /// A key in insert mode. Returns whether the text changed.
-    pub fn insert_key(&mut self, code: KeyCode, loader: &Loader) -> bool {
+    /// A key in insert mode. Returns whether the text changed; `App` parses it again then.
+    pub fn insert_key(&mut self, code: KeyCode) -> bool {
         let text = self.file.text.slice(..);
         let tx = match code {
             KeyCode::Char(c) => Transaction::insert(
@@ -145,8 +154,79 @@ impl CommentBox {
         };
         tx.apply(&mut self.file.text);
         self.file.sel = self.file.sel.clone().map(tx.changes());
-        self.file.reparse(loader);
         true
+    }
+
+    /// The box, docked under the file view, with its place as the title. `styles` are the
+    /// selection's colours for the mode it's in.
+    pub fn render(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        loader: &Loader,
+        theme: &Theme,
+        styles: SelectionStyles,
+    ) {
+        let popup = theme.get("ui.popup");
+        let hint = if self.insert {
+            " esc: normal mode "
+        } else {
+            " ret saves · q closes · :editor "
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", clean(&self.place.title())))
+            .title_bottom(hint)
+            .style(popup)
+            .border_style(popup);
+        let inner = block.inner(area);
+        Clear.render(area, buf);
+        block.render(area, buf);
+        view::draw(
+            buf,
+            inner,
+            &self.file,
+            self.file.top,
+            self.file.left,
+            true,
+            loader,
+            theme,
+            Some(styles),
+            &Threads::default(),
+        );
+    }
+}
+
+impl Component for CommentBox {
+    /// In insert mode every key is the box's. In normal mode only `ret`, `q`, `i` and `a` are:
+    /// the others are the editor's, which edits the box's text with Helix's keys.
+    fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
+        let ctrl = key.mods.contains(KeyModifiers::CONTROL);
+        if self.insert {
+            if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+                self.leave_insert();
+                return Outcome::Msg(Msg::BoxMoved);
+            }
+            let typed = !key
+                .mods
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && self.insert_key(key.code);
+            return Outcome::Msg(if typed { Msg::BoxEdited } else { Msg::BoxMoved });
+        }
+        match key.code {
+            KeyCode::Enter if key.mods.is_empty() => Outcome::Msg(Msg::SaveBox),
+            KeyCode::Char('q') if key.mods.is_empty() => Outcome::Msg(Msg::CloseBox),
+            KeyCode::Char(c @ ('i' | 'a')) if key.mods.is_empty() => {
+                self.enter_insert(c == 'a');
+                Outcome::Msg(Msg::BoxInsert)
+            }
+            _ => Outcome::Ignored,
+        }
+    }
+
+    /// Clicks do nothing while the box is open.
+    fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
+        Outcome::Consumed
     }
 }
 
@@ -413,14 +493,14 @@ mod tests {
         .unwrap()
     }
 
-    fn typed(b: &mut CommentBox, s: &str, loader: &Loader) {
+    fn typed(b: &mut CommentBox, s: &str) {
         for c in s.chars() {
             let code = if c == '\n' {
                 KeyCode::Enter
             } else {
                 KeyCode::Char(c)
             };
-            b.insert_key(code, loader);
+            b.insert_key(code);
         }
     }
 
@@ -428,32 +508,78 @@ mod tests {
     fn typing_editing_and_modes() {
         let l = loader();
         let mut b = CommentBox::new(Place::Review, "", &l);
-        typed(&mut b, "helo", &l);
+        typed(&mut b, "helo");
         assert_eq!(plain(b.file.text.clone(), &b.file.sel), "helo#[|]#");
-        b.insert_key(KeyCode::Left, &l);
-        typed(&mut b, "l", &l);
+        b.insert_key(KeyCode::Left);
+        typed(&mut b, "l");
         assert_eq!(b.body(), "hello");
-        b.insert_key(KeyCode::Backspace, &l);
-        b.insert_key(KeyCode::Backspace, &l);
+        b.insert_key(KeyCode::Backspace);
+        b.insert_key(KeyCode::Backspace);
         assert_eq!(b.body(), "heo");
-        b.insert_key(KeyCode::Delete, &l);
+        b.insert_key(KeyCode::Delete);
         assert_eq!(b.body(), "he");
         // esc puts a one-character cursor on the character before, as Helix does.
         b.leave_insert();
         assert!(!b.insert);
         assert_eq!(plain(b.file.text.clone(), &b.file.sel), "h#[e|]#");
         b.enter_insert(true);
-        typed(&mut b, "llo", &l);
+        typed(&mut b, "llo");
         assert_eq!(b.body(), "hello");
         b.leave_insert();
         b.enter_insert(false);
-        typed(&mut b, "!", &l);
+        typed(&mut b, "!");
         assert_eq!(b.body(), "hell!o");
         // Backspace at the start does nothing.
         let mut b = CommentBox::new(Place::Review, "", &l);
-        b.insert_key(KeyCode::Backspace, &l);
+        b.insert_key(KeyCode::Backspace);
         b.leave_insert();
         assert_eq!(b.body(), "");
+    }
+
+    #[test]
+    fn as_a_component() {
+        let l = loader();
+        let cx = Cx {
+            screen: Rect::new(0, 0, 80, 24),
+        };
+        let key = |code, mods| Key { code, mods };
+        let none = KeyModifiers::NONE;
+        let mut b = CommentBox::new(Place::Review, "", &l);
+        // Insert mode: every key is the box's; typing asks App to save the draft.
+        assert_eq!(
+            b.key(key(KeyCode::Char('x'), none), &cx),
+            Outcome::Msg(Msg::BoxEdited)
+        );
+        assert_eq!(
+            b.key(key(KeyCode::Left, none), &cx),
+            Outcome::Msg(Msg::BoxMoved)
+        );
+        assert_eq!(
+            b.key(key(KeyCode::Char('w'), KeyModifiers::CONTROL), &cx),
+            Outcome::Msg(Msg::BoxMoved),
+            "ctrl keys aren't typed"
+        );
+        assert_eq!(b.body(), "x");
+        assert_eq!(
+            b.key(key(KeyCode::Esc, none), &cx),
+            Outcome::Msg(Msg::BoxMoved)
+        );
+        assert!(!b.insert);
+        // Normal mode: its own keys, and the rest go on to the editor.
+        assert_eq!(b.key(key(KeyCode::Char('w'), none), &cx), Outcome::Ignored);
+        assert_eq!(
+            b.key(key(KeyCode::Enter, none), &cx),
+            Outcome::Msg(Msg::SaveBox)
+        );
+        assert_eq!(
+            b.key(key(KeyCode::Char('q'), none), &cx),
+            Outcome::Msg(Msg::CloseBox)
+        );
+        assert_eq!(
+            b.key(key(KeyCode::Char('a'), none), &cx),
+            Outcome::Msg(Msg::BoxInsert)
+        );
+        assert!(b.insert);
     }
 
     #[test]
@@ -461,17 +587,17 @@ mod tests {
         let l = loader();
         let mut b = CommentBox::new(Place::Review, "abcd\nxy\nlonger", &l);
         assert_eq!(b.file.sel.primary().head, 14);
-        b.insert_key(KeyCode::Up, &l);
+        b.insert_key(KeyCode::Up);
         assert_eq!(b.file.sel.primary().head, 7, "clamped to the end of `xy`");
-        b.insert_key(KeyCode::Up, &l);
+        b.insert_key(KeyCode::Up);
         assert_eq!(b.file.sel.primary().head, 2);
-        b.insert_key(KeyCode::Up, &l);
+        b.insert_key(KeyCode::Up);
         assert_eq!(b.file.sel.primary().head, 2, "no line above");
-        b.insert_key(KeyCode::End, &l);
+        b.insert_key(KeyCode::End);
         assert_eq!(b.file.sel.primary().head, 4);
-        b.insert_key(KeyCode::Home, &l);
+        b.insert_key(KeyCode::Home);
         assert_eq!(b.file.sel.primary().head, 0);
-        typed(&mut b, "> ", &l);
+        typed(&mut b, "> ");
         assert_eq!(b.body(), "> abcd\nxy\nlonger");
     }
 

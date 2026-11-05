@@ -36,6 +36,16 @@ pub enum Msg {
     SubmitPrompt,
     /// From the file tree: `q`.
     CloseTree,
+    /// From the comment box: its text changed, so it's parsed and its draft saved.
+    BoxEdited,
+    /// From the comment box: its cursor moved, or it left insert mode.
+    BoxMoved,
+    /// From the comment box: `i` or `a`, into insert mode.
+    BoxInsert,
+    /// From the comment box: `ret`.
+    SaveBox,
+    /// From the comment box: `q`.
+    CloseBox,
 }
 
 /// What every component may read.

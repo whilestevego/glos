@@ -33,7 +33,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::Style,
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Block, Borders, Clear},
 };
 use rusqlite::Connection;
 use unicode_width::UnicodeWidthStr;
@@ -1467,36 +1467,6 @@ impl App {
 
     /// Keys the comment box handles itself: everything in insert mode, and `ret` (save), `q`
     /// (close), `i` and `a` in normal mode. The rest go through the keymap as usual.
-    fn box_key(&mut self, key: Key) -> bool {
-        let Some(b) = &mut self.comment_box else {
-            return false;
-        };
-        let ctrl = key.mods.contains(KeyModifiers::CONTROL);
-        if b.insert {
-            if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-                b.leave_insert();
-            } else if !key
-                .mods
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && b.insert_key(key.code, &self.loader)
-            {
-                self.save_draft();
-            }
-            self.scroll_to_cursor(false);
-            return true;
-        }
-        match key.code {
-            KeyCode::Enter if key.mods.is_empty() => self.save_box(),
-            KeyCode::Char('q') if key.mods.is_empty() => self.close_box(),
-            KeyCode::Char(c @ ('i' | 'a')) if key.mods.is_empty() => {
-                b.enter_insert(c == 'a');
-                self.mode = Mode::Normal;
-            }
-            _ => return false,
-        }
-        true
-    }
-
     fn close_box(&mut self) {
         if let Some(b) = self.comment_box.take()
             && !b.body().is_empty()
@@ -1760,9 +1730,18 @@ impl App {
             self.count = None;
             return None;
         }
-        if self.comment_box.is_some() && self.pending.is_empty() && self.box_key(key) {
-            self.count = None;
-            return None;
+        if self.pending.is_empty()
+            && let Some(b) = &mut self.comment_box
+        {
+            let outcome = b.key(key, &cx);
+            if outcome != Outcome::Ignored {
+                self.count = None;
+            }
+            match outcome {
+                Outcome::Ignored => {}
+                Outcome::Consumed => return None,
+                Outcome::Msg(msg) => return self.apply(msg),
+            }
         }
         // A count, as in Helix: digits before a command (a leading 0 isn't one).
         if self.pending.is_empty()
@@ -1829,6 +1808,17 @@ impl App {
                 self.tree = None;
                 self.layout();
             }
+            Msg::BoxEdited => {
+                if let Some(b) = &mut self.comment_box {
+                    b.file.reparse(&self.loader);
+                }
+                self.save_draft();
+                self.scroll_to_cursor(false);
+            }
+            Msg::BoxMoved => self.scroll_to_cursor(false),
+            Msg::BoxInsert => self.mode = Mode::Normal,
+            Msg::SaveBox => self.save_box(),
+            Msg::CloseBox => self.close_box(),
         }
         None
     }
@@ -2865,7 +2855,10 @@ impl App {
             Some(styles),
             &threads,
         );
-        self.render_box(buf);
+        if let Some(b) = &self.comment_box {
+            let styles = self.selection_styles();
+            b.render(buf, self.box_area, &self.loader, &self.theme, styles);
+        }
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
         self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
         if let Some(p) = &self.prompt {
@@ -2877,39 +2870,6 @@ impl App {
         }
         self.render_picker(buf, area);
         self.render_help(f, area);
-    }
-
-    /// The comment box, docked under the file view, with its place as the title.
-    fn render_box(&self, buf: &mut Buffer) {
-        let Some(b) = &self.comment_box else { return };
-        let t = &self.theme;
-        let popup = t.get("ui.popup");
-        let hint = if b.insert {
-            " esc: normal mode "
-        } else {
-            " ret saves · q closes · :editor "
-        };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", clean(&b.place.title())))
-            .title_bottom(hint)
-            .style(popup)
-            .border_style(popup);
-        let inner = block.inner(self.box_area);
-        Clear.render(self.box_area, buf);
-        block.render(self.box_area, buf);
-        view::draw(
-            buf,
-            inner,
-            &b.file,
-            b.file.top,
-            b.file.left,
-            true,
-            &self.loader,
-            t,
-            Some(self.selection_styles()),
-            &Threads::default(),
-        );
     }
 
     fn render_picker(&mut self, buf: &mut Buffer, area: Rect) {
