@@ -415,8 +415,6 @@ gone to an unrelated `glos diff` of two files started in the same folder.
   are unchanged: you name what you open by where and how you run them.
 - **`Review::for_folder` is gone.**
 
-||||||| parent of 1071f12 (Folding: unchanged code folds around changes, in every view)
-
 ## Folding (2026-11-04)
 
 Plan: `plans/FOLDING.md`.
