@@ -17,9 +17,10 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::{
+    comments::Threads,
     component::{Component, Cx, Msg, Outcome},
     keymap::Key,
-    view::clean,
+    view::{self, clean},
 };
 use crate::theme::Theme;
 
@@ -234,7 +235,7 @@ impl Picker {
         area.height.saturating_sub(2 + 2 + header).max(1) as usize
     }
 
-    pub fn render(&mut self, buf: &mut Buffer, area: Rect, theme: &Theme) {
+    fn render_list(&mut self, buf: &mut Buffer, area: Rect, theme: &Theme) {
         let text_style = theme.get("ui.text");
         let selected = theme.get("ui.text.focus");
         let highlight = theme.get("special").add_modifier(Modifier::BOLD);
@@ -400,6 +401,33 @@ impl Component for Picker {
             }
             _ => Outcome::Consumed,
         }
+    }
+
+    /// The list over most of the screen (`area`), and beside it, when there's room, the selected
+    /// file: centred on the thread, or on its first change, as Helix centres a preview.
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
+        let (list, preview) = self.areas(area);
+        self.render_list(buf, list, cx.theme);
+        let Some(preview) = preview else { return };
+        let inner = preview_frame(buf, preview, cx.theme);
+        let Some(state) = cx.state else { return };
+        let Some((file, line)) = self.selected().and_then(|t| state.preview(t)) else {
+            return;
+        };
+        let line = line.or(file.hunks.first().map(|h| h.after.start as usize));
+        let top = line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3));
+        view::draw(
+            buf,
+            inner,
+            file,
+            top,
+            0,
+            state.wrap,
+            &state.loader,
+            cx.theme,
+            None,
+            &Threads::default(),
+        );
     }
 }
 
@@ -623,8 +651,12 @@ mod tests {
     fn as_a_component() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut p = picker(&["a", "b", "c"]);
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
         let cx = Cx {
             screen: Rect::new(0, 0, 50, 14),
+            theme: &theme,
+            state: None,
         };
         let mouse = |kind, column, row| MouseEvent {
             kind,

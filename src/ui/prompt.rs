@@ -141,7 +141,7 @@ impl Prompt {
     }
 
     /// The command line while typing: the prompt's prefix, the line and the cursor.
-    pub fn render_line(&self, buf: &mut Buffer, area: Rect, t: &Theme) {
+    fn render_line(&self, buf: &mut Buffer, area: Rect, t: &Theme) {
         let prefix = match self.kind {
             PromptKind::Command => ":",
             PromptKind::Search { .. } => "search:",
@@ -162,7 +162,7 @@ impl Prompt {
     }
 
     /// `:` completions above the command line, as Helix lists them, with what each does.
-    pub fn render_completion(&self, buf: &mut Buffer, area: Rect, t: &Theme) {
+    fn render_completion(&self, buf: &mut Buffer, area: Rect, t: &Theme) {
         let Prompt {
             kind: PromptKind::Command,
             line,
@@ -258,6 +258,17 @@ impl Component for Prompt {
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Consumed
     }
+
+    /// The line on the screen's (`area`'s) last row, and `:` completions above the statusline.
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
+        if area.height < 3 {
+            return;
+        }
+        let bottom = area.bottom() - 1;
+        self.render_line(buf, Rect::new(area.x, bottom, area.width, 1), cx.theme);
+        let above = Rect::new(area.x, area.y, area.width, area.height - 2);
+        self.render_completion(buf, above, cx.theme);
+    }
 }
 
 #[cfg(test)]
@@ -270,8 +281,12 @@ mod tests {
 
     #[test]
     fn keys_edit_the_line_and_ask_app_for_the_rest() {
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
         let cx = Cx {
             screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
         };
         let none = KeyModifiers::NONE;
         let mut p = Prompt::new(PromptKind::Command);
@@ -325,5 +340,31 @@ mod tests {
         });
         assert_eq!(s.key(key(KeyCode::Tab, none), &cx), Outcome::Consumed);
         assert_eq!(s.line, "");
+    }
+
+    #[test]
+    fn draws_the_line_at_the_bottom_and_completions_above_the_statusline() {
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
+        let area = Rect::new(0, 0, 40, 6);
+        let cx = Cx {
+            screen: area,
+            theme: &theme,
+            state: None,
+        };
+        let mut p = Prompt::new(PromptKind::Command);
+        p.line = "sub".into();
+        let mut buf = Buffer::empty(area);
+        p.render(&mut buf, area, &cx);
+        let row = |y: u16| -> String {
+            (0..area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        };
+        assert_eq!(row(5), ":sub");
+        assert_eq!(row(4), "", "the statusline's row is left alone");
+        assert!(row(3).trim_start().starts_with("submit"));
     }
 }

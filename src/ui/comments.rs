@@ -20,6 +20,7 @@ use ratatui::{
 };
 
 use super::{
+    Mode,
     component::{Component, Cx, Msg, Outcome},
     keymap::Key,
     view::{self, File, SelectionStyles, clean},
@@ -157,9 +158,7 @@ impl CommentBox {
         true
     }
 
-    /// The box, docked under the file view, with its place as the title. `styles` are the
-    /// selection's colours for the mode it's in.
-    pub fn render(
+    fn render_in(
         &self,
         buf: &mut Buffer,
         area: Rect,
@@ -227,6 +226,19 @@ impl Component for CommentBox {
     /// Clicks do nothing while the box is open.
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Consumed
+    }
+
+    /// The box, docked under the file view, with its place as the title and the selection in
+    /// the colours of the mode it's in.
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
+        let Some(state) = cx.state else { return };
+        let mode = match (self.insert, state.mode) {
+            (true, _) => "insert",
+            (_, Mode::Select) => "select",
+            _ => "normal",
+        };
+        let styles = view::selection_styles(cx.theme, mode);
+        self.render_in(buf, area, &state.loader, cx.theme, styles);
     }
 }
 
@@ -539,8 +551,12 @@ mod tests {
     #[test]
     fn as_a_component() {
         let l = loader();
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
         let cx = Cx {
             screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
         };
         let key = |code, mods| Key { code, mods };
         let none = KeyModifiers::NONE;

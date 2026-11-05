@@ -112,8 +112,7 @@ impl Tree {
         self.rows.get(i)?.path.as_deref()
     }
 
-    /// Draws the tree in `area`, the file on screen marked.
-    pub fn render(&mut self, buf: &mut Buffer, area: Rect, current: &str, theme: &Theme) {
+    fn render_in(&mut self, buf: &mut Buffer, area: Rect, current: &str, theme: &Theme) {
         let base = theme.get("ui.background");
         buf.set_style(area, base);
         let title = theme.get("ui.text").patch(ratatui::style::Style::default());
@@ -207,6 +206,12 @@ impl Component for Tree {
         }
         Outcome::Consumed
     }
+
+    /// Draws the tree in `area`, the file on screen marked.
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
+        let current = cx.state.map_or("", |s| s.main_path());
+        self.render_in(buf, area, current, cx.theme);
+    }
 }
 
 #[cfg(test)]
@@ -276,7 +281,7 @@ mod tests {
         let mut t = Tree::new(vec![e("src/a.rs", 12, 3, 2), e("b.rs", 0, 0, 0)]);
         let area = Rect::new(0, 0, 30, 5);
         let mut buf = Buffer::empty(area);
-        t.render(&mut buf, area, "b.rs", &theme);
+        t.render_in(&mut buf, area, "b.rs", &theme);
         let row = |y| {
             (0..30)
                 .map(|x| buf[(x, y)].symbol())
@@ -299,8 +304,12 @@ mod tests {
     #[test]
     fn as_a_component() {
         use crossterm::event::KeyModifiers;
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
         let cx = Cx {
             screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
         };
         let key = |c| Key {
             code: KeyCode::Char(c),

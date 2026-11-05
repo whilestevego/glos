@@ -164,6 +164,36 @@ impl State {
         let a = self.threads.iter().find(|t| t.id == id)?.anchor.as_ref()?;
         Some((a.path.clone(), a.start as usize - 1))
     }
+
+    /// What a picker's preview shows for an item: the file, loaded before drawing, and for a
+    /// thread its first line.
+    fn preview(&self, t: &Target) -> Option<(&File, Option<usize>)> {
+        let at_path = |p: &str| match self.source.changes.iter().position(|c| c.path == p) {
+            Some(i) => self.files[i].as_ref(),
+            None => self.context.get(p),
+        };
+        match t {
+            Target::Change(i) => Some((self.files[*i].as_ref()?, None)),
+            Target::Path(p) => Some((self.context.get(p)?, None)),
+            Target::Thread(id) => {
+                let (p, line) = self.thread_place(id)?;
+                Some((at_path(&p)?, Some(line)))
+            }
+            Target::Command(_) | Target::Nothing | Target::Review(_) => None,
+        }
+    }
+}
+
+/// The [`Cx`] components read, borrowing only `App`'s `state` and `theme`, so a component field
+/// can be borrowed mutably beside it.
+macro_rules! cx {
+    ($app:expr) => {
+        Cx {
+            screen: $app.screen,
+            theme: &$app.theme,
+            state: Some(&$app.state),
+        }
+    };
 }
 
 pub struct App {
@@ -1720,7 +1750,7 @@ impl App {
         }
         // The open picker, the command line or the focused tree takes every key; then the
         // editor's own state (a pending `f`, the comment box, a count, the keymap) does.
-        let cx = self.cx();
+        let cx = cx!(self);
         let outcome = if let Some(p) = self.pickers.last_mut() {
             p.key(key, &cx)
         } else if let Some(p) = &mut self.prompt {
@@ -1828,12 +1858,6 @@ impl App {
             .unwrap_or_default();
         self.pending = keep;
         self.execute(command)
-    }
-
-    fn cx(&self) -> Cx {
-        Cx {
-            screen: self.screen,
-        }
     }
 
     /// What a component asked for.
@@ -2482,7 +2506,7 @@ impl App {
     fn mouse(&mut self, m: MouseEvent) {
         // What's on top takes the click: the picker, the command line or the comment box (which
         // swallow it), then the tree, where a click opens a file.
-        let cx = self.cx();
+        let cx = cx!(self);
         let outcome = if let Some(p) = self.pickers.last_mut() {
             p.mouse(m, self.screen, &cx)
         } else if let Some(p) = &mut self.prompt {
@@ -2846,10 +2870,9 @@ impl App {
             return;
         }
         self.layout();
-        let current = self.state.main_path().to_string();
-        let tree_area = self.tree_area;
+        let cx = cx!(self);
         if let Some(t) = &mut self.tree {
-            t.render(buf, tree_area, &current, &self.theme);
+            t.render(buf, self.tree_area, &cx);
         }
         let threads = self.main_threads();
         if let Some(left) = self.split_left() {
@@ -2885,7 +2908,7 @@ impl App {
         let file = self.main_file();
         // Under the comment box, the commented lines keep normal mode's colours.
         let styles = if self.comment_box.is_some() {
-            self.selection_styles_in("normal")
+            view::selection_styles(&self.theme, "normal")
         } else {
             self.selection_styles()
         };
@@ -2901,62 +2924,20 @@ impl App {
             Some(styles),
             &threads,
         );
-        if let Some(b) = &self.comment_box {
-            let styles = self.selection_styles();
-            b.render(buf, self.box_area, &self.state.loader, &self.theme, styles);
+        // The layers over the file, back to front, as Helix's compositor draws them.
+        let cx = cx!(self);
+        if let Some(b) = &mut self.comment_box {
+            b.render(buf, self.box_area, &cx);
         }
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
         self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
-        if let Some(p) = &self.prompt {
-            p.render_completion(
-                buf,
-                Rect::new(0, 0, area.width, area.height - 2),
-                &self.theme,
-            );
+        if let Some(p) = &mut self.prompt {
+            p.render(buf, area, &cx);
         }
-        self.render_picker(buf, area);
+        if let Some(p) = self.pickers.last_mut() {
+            p.render(buf, area, &cx);
+        }
         self.render_help(f, area);
-    }
-
-    fn render_picker(&mut self, buf: &mut Buffer, area: Rect) {
-        let Some(picker) = self.pickers.last_mut() else {
-            return;
-        };
-        let (list, preview) = picker.areas(area);
-        picker.render(buf, list, &self.theme);
-        let Some(preview) = preview else { return };
-        let inner = picker::preview_frame(buf, preview, &self.theme);
-        let selected = picker.selected().cloned();
-        let at_path = |p: &str| match self.state.source.changes.iter().position(|c| c.path == p) {
-            Some(i) => self.state.files[i].as_ref(),
-            None => self.state.context.get(p),
-        };
-        let (file, line) = match &selected {
-            Some(Target::Change(i)) => (self.state.files[*i].as_ref(), None),
-            Some(Target::Path(p)) => (self.state.context.get(p), None),
-            Some(Target::Thread(id)) => match self.state.thread_place(id) {
-                Some((p, line)) => (at_path(&p), Some(line)),
-                None => (None, None),
-            },
-            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) | None => (None, None),
-        };
-        if let Some(file) = file {
-            // Centre the thread, or the first change, as Helix centres a preview on its range.
-            let line = line.or(file.hunks.first().map(|h| h.after.start as usize));
-            let top = line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3));
-            view::draw(
-                buf,
-                inner,
-                file,
-                top,
-                0,
-                self.state.wrap,
-                &self.state.loader,
-                &self.theme,
-                None,
-                &Threads::default(),
-            );
-        }
     }
 
     /// (selection, primary selection, cursor, primary cursor), as Helix picks them per mode.
@@ -2966,22 +2947,7 @@ impl App {
             (_, Mode::Select) => "select",
             _ => "normal",
         };
-        self.selection_styles_in(mode)
-    }
-
-    fn selection_styles_in(&self, mode: &str) -> view::SelectionStyles {
-        let t = &self.theme;
-        let sel = t.get("ui.selection");
-        let sel_primary = t.try_get("ui.selection.primary").unwrap_or(sel);
-        let base_cursor = t.try_get_exact("ui.cursor").unwrap_or(sel);
-        let base_primary = t.try_get("ui.cursor.primary").unwrap_or(base_cursor);
-        let cursor = t
-            .try_get_exact(&format!("ui.cursor.{mode}"))
-            .unwrap_or(base_cursor);
-        let primary = t
-            .try_get_exact(&format!("ui.cursor.primary.{mode}"))
-            .unwrap_or(base_primary);
-        (sel, sel_primary, cursor, primary)
+        view::selection_styles(&self.theme, mode)
     }
 
     fn render_statusline(&self, buf: &mut Buffer, area: Rect) {
@@ -3046,9 +3012,8 @@ impl App {
 
     fn render_command_line(&self, buf: &mut Buffer, area: Rect) {
         let t = &self.theme;
-        if let Some(p) = &self.prompt {
-            p.render_line(buf, area, t);
-            return;
+        if self.prompt.is_some() {
+            return; // the prompt draws itself here
         }
         if let Some((msg, error)) = &self.status {
             let style = if *error {

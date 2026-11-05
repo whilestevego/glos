@@ -1,14 +1,13 @@
-//! What the parts of the screen that take keys share: a picker, the command line, the file tree
-//! and the comment box each handle their own keys and clicks, and ask `App` for anything beyond
-//! their own state with a [`Msg`].
-//!
-//! Drawing isn't part of the trait: each part needs different things from `App` to draw (the
-//! picker's preview, the box's selection colours), so each has its own `render`.
+//! What the parts of the screen share, as Helix's compositor layers do: a picker, the command
+//! line, the file tree and the comment box each handle their own keys and clicks and draw
+//! themselves. They read the review through [`Cx`] and ask `App` for any change beyond their own
+//! state with a [`Msg`].
 
 use crossterm::event::MouseEvent;
-use ratatui::layout::Rect;
+use ratatui::{buffer::Buffer, layout::Rect};
 
-use super::{keymap::Key, picker::Target};
+use super::{State, keymap::Key, picker::Target};
+use crate::theme::Theme;
 
 /// What a component did with a key or click.
 #[derive(Debug, PartialEq, Eq)]
@@ -49,9 +48,12 @@ pub enum Msg {
 }
 
 /// What every component may read.
-pub struct Cx {
+pub struct Cx<'a> {
     /// The whole screen, as last drawn.
     pub screen: Rect,
+    pub theme: &'a Theme,
+    /// The open review; `None` in `glos dashboard`, before one is open.
+    pub state: Option<&'a State>,
 }
 
 pub trait Component {
@@ -61,4 +63,7 @@ pub trait Component {
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Ignored
     }
+
+    /// Draws it in `area`: the screen for a picker or the command line, else its own place.
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx);
 }

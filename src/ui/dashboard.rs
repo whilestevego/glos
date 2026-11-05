@@ -136,9 +136,12 @@ pub fn run(
             screen = f.area();
             let buf = f.buffer_mut();
             buf.set_style(screen, theme.get("ui.background"));
-            let p = keys.as_mut().unwrap_or(&mut list);
-            let (area, _) = p.areas(screen);
-            p.render(buf, area, theme);
+            let cx = Cx {
+                screen,
+                theme,
+                state: None,
+            };
+            keys.as_mut().unwrap_or(&mut list).render(buf, screen, &cx);
             let line = status.clone().unwrap_or_else(|| {
                 "Reviews on this machine · ret opens · esc quits · C-g keys".into()
             });
@@ -153,7 +156,11 @@ pub fn run(
             );
         })?;
         if event::poll(Duration::from_millis(500))? {
-            let cx = Cx { screen };
+            let cx = Cx {
+                screen,
+                theme,
+                state: None,
+            };
             let outcome = match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     let key = Key::from(k);

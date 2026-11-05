@@ -43,8 +43,11 @@ pub enum Outcome {
 pub enum Msg { /* grows step by step; see below */ }
 
 /// What every component may read.
-pub struct Cx {
+pub struct Cx<'a> {
     pub screen: Rect,
+    pub theme: &'a Theme,
+    /// The open review; `None` in `glos dashboard`, before one is open.
+    pub state: Option<&'a State>,
 }
 
 pub trait Component {
@@ -52,22 +55,29 @@ pub trait Component {
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Ignored
     }
+    fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx);
 }
 ```
+
+`State` holds what components read: the review's files, threads, the file on screen, the mode,
+soft wrap and the syntax loader. It's a field of `App`, beside the components, so `App` can lend
+a component mutably while `Cx` borrows `state` and `theme` (the `cx!` macro builds it from those
+two fields alone). This is Helix's design: its `Component::render` gets a `Context` holding the
+`Editor`, which is separate from the compositor that owns the layers. glos is stricter about it:
+a `Cx` is read-only, and changes go back to `App` as a `Msg`.
 
 ### As built
 
 The implementation departs from the first draft of this plan in three ways:
 
-- **No `render` on the trait, and `Cx` holds only the screen.** Each part needs different things
-  from App to draw. The picker's preview needs App's files, and the box needs the loader and the
-  selection colours for App's mode. So each part has its own `render` with the arguments it needs,
-  and `App::render` keeps the fixed z-order. With `Cx` reduced to the screen size, `glos dashboard`
-  (which has no `Loader`) can use the same trait.
+- **`render` came last, after `State` was split out of `App`.** Before that, a component could
+  not borrow what it draws (the preview's files, the loader, the mode) while `App` lent the
+  component out mutably. The picker's preview now draws itself from `State::preview`.
 - **The tree keeps its `focused` flag.** There's one pane, so a `Focus` enum would just move the
   flag.
 - **The box no longer parses its own text.** `CommentBox::insert_key` returns whether the text
-  changed, and App re-parses it when it gets `Msg::BoxEdited`. That keeps the `Loader` out of `Cx`.
+  changed, and App re-parses it when it gets `Msg::BoxEdited`, since only `App` can change the
+  state the loader is in.
 
 Decisions:
 
