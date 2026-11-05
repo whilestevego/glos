@@ -8,6 +8,7 @@ mod diffview;
 mod folding;
 mod keymap;
 mod picker;
+mod prompt;
 mod tree;
 mod view;
 
@@ -48,6 +49,7 @@ use comments::{CommentBox, Place, ThreadLines, Threads};
 use component::{Component, Cx, Msg, Outcome};
 use keymap::{Action, AppAction, Key, Keymaps, Node};
 use picker::{Item, Picker, Target};
+use prompt::{Prompt, PromptKind};
 use view::{File, clean};
 
 /// A motion that `A-.` can repeat.
@@ -71,38 +73,6 @@ enum NextKey {
 enum Cur {
     Change(usize),
     Context(String),
-}
-
-enum PromptKind {
-    Command,
-    /// A search, forward or back; it previews as you type and `esc` puts the selection back.
-    Search {
-        forward: bool,
-        origin: Selection,
-        top: usize,
-    },
-    /// `s`, `S`, `K`, `A-K`: previews as you type, as Helix's regex prompts do.
-    Regex {
-        action: commands::RegexAction,
-        origin: Selection,
-    },
-}
-
-struct Prompt {
-    kind: PromptKind,
-    line: String,
-    /// While tabbing through `:` completions: what was typed, and which completion is shown.
-    completion: Option<(String, usize)>,
-}
-
-impl Prompt {
-    fn new(kind: PromptKind) -> Prompt {
-        Prompt {
-            kind,
-            line: String::new(),
-            completion: None,
-        }
-    }
 }
 
 /// How the file on screen is shown: whole with the gutter, as hunks, or old beside new.
@@ -165,102 +135,6 @@ pub enum Filter {
 
 /// The comment box's height, borders included.
 const BOX_HEIGHT: u16 = 8;
-
-/// `:` commands, with their aliases and descriptions, for running and completing them.
-const TYPABLE: &[(&str, &[&str], &str)] = &[
-    (
-        "quit",
-        &["q", "qa"],
-        "Close glos; reminds you once of unsent comments",
-    ),
-    (
-        "quit!",
-        &["q!", "qa!"],
-        "Close glos now; unsent comments are kept",
-    ),
-    ("comment", &[], "Comment on the selected lines"),
-    ("review-comment", &[], "Comment on the whole review"),
-    ("reply", &[], "Reply to the thread under the cursor"),
-    (
-        "edit-comment",
-        &[],
-        "Edit your latest comment on the thread under the cursor",
-    ),
-    (
-        "submit",
-        &[],
-        "Submit the review to the agent: approve, changes or comment",
-    ),
-    ("editor", &[], "Edit the open comment in $VISUAL or $EDITOR"),
-    (
-        "view",
-        &[],
-        "Show the file whole, unified, or split side by side",
-    ),
-    (
-        "scope",
-        &[],
-        "Review the branch (base), since your last review, or commit by commit",
-    ),
-    (
-        "filter",
-        &[],
-        "Only files matching a glob, or with open threads; empty for all",
-    ),
-    ("toggle-option", &["toggle"], "Toggle an option: soft-wrap"),
-    ("dashboard", &[], "Every open review on this machine"),
-    (
-        "close",
-        &[],
-        "Close the review, once everything is sent, and quit",
-    ),
-];
-
-/// What `:` can complete `line` with: where the completed word starts, and the words with
-/// their descriptions. Command names complete first, then `submit`'s and `toggle`'s argument.
-fn completions(line: &str) -> (usize, Vec<(String, &'static str)>) {
-    match line.split_once(' ') {
-        None => (
-            0,
-            TYPABLE
-                .iter()
-                .filter(|(name, aliases, _)| {
-                    name.starts_with(line) || aliases.iter().any(|a| a.starts_with(line))
-                })
-                .map(|(name, _, doc)| (name.to_string(), *doc))
-                .collect(),
-        ),
-        Some((cmd, arg)) => {
-            let args: &[(&str, &'static str)] = match cmd {
-                "submit" => &[
-                    ("approve", "Approve"),
-                    ("changes", "Request changes"),
-                    ("comment", "Send comments without a verdict"),
-                ],
-                "toggle" | "toggle-option" => &[("soft-wrap", "Soft-wrap long lines")],
-                "view" => &[
-                    ("file", "The whole file, changes in the gutter"),
-                    ("unified", "Changes with three lines around them"),
-                    ("split", "Old and new side by side"),
-                ],
-                "scope" => &[
-                    ("base", "The branch against its base (or old against new)"),
-                    ("since", "What changed since your last submit"),
-                    ("commits", "One commit at a time"),
-                ],
-                "filter" => &[("threads", "Only files with open threads")],
-                _ => &[],
-            };
-            (
-                cmd.len() + 1,
-                args.iter()
-                    .filter(|(a, _)| a.starts_with(arg.trim_start()))
-                    .map(|(a, d)| (a.to_string(), *d))
-                    .collect(),
-            )
-        }
-    }
-}
 
 pub struct App {
     source: Source,
@@ -1859,9 +1733,11 @@ impl App {
                 Outcome::Ignored | Outcome::Consumed => None,
             };
         }
-        if self.prompt.is_some() {
-            self.prompt_key(key);
-            return None;
+        if let Some(p) = &mut self.prompt {
+            return match p.key(key, &cx) {
+                Outcome::Msg(msg) => self.apply(msg),
+                Outcome::Ignored | Outcome::Consumed => None,
+            };
         }
         if self.tree.as_ref().is_some_and(|t| t.focused) {
             self.tree_key(key);
@@ -1962,12 +1838,13 @@ impl App {
     /// What a component asked for.
     fn apply(&mut self, msg: Msg) -> Option<AppAction> {
         match msg {
-            Msg::Close => {
-                self.pickers.pop();
-                None
-            }
-            Msg::Open(t) => self.choose(t),
+            Msg::Close => drop(self.pickers.pop()),
+            Msg::Open(t) => return self.choose(t),
+            Msg::PreviewPrompt => self.search_preview(),
+            Msg::CancelPrompt => self.cancel_prompt(),
+            Msg::SubmitPrompt => self.submit_prompt(),
         }
+        None
     }
 
     /// An item chosen in a picker: a file or thread opens; a command runs; a key that's only
@@ -2164,99 +2041,48 @@ impl App {
         result
     }
 
-    fn prompt_key(&mut self, key: Key) {
-        let Some(prompt) = &mut self.prompt else {
+    /// `esc` in the command line: a search or regex prompt puts the selection back.
+    fn cancel_prompt(&mut self) {
+        match self.prompt.take() {
+            Some(Prompt {
+                kind: PromptKind::Search { origin, top, .. },
+                ..
+            }) => {
+                let file = self.file_mut();
+                file.sel = origin;
+                file.top = top;
+            }
+            Some(Prompt {
+                kind: PromptKind::Regex { origin, .. },
+                ..
+            }) => self.file_mut().sel = origin,
+            _ => {}
+        }
+    }
+
+    /// `ret` in the command line: runs the command, or keeps the search or regex.
+    fn submit_prompt(&mut self) {
+        let Some(Prompt { kind, line, .. }) = self.prompt.take() else {
             return;
         };
-        match key.code {
-            KeyCode::Esc => match self.prompt.take() {
-                Some(Prompt {
-                    kind: PromptKind::Search { origin, top, .. },
-                    ..
-                }) => {
-                    let file = self.file_mut();
-                    file.sel = origin;
-                    file.top = top;
-                }
-                Some(Prompt {
-                    kind: PromptKind::Regex { origin, .. },
-                    ..
-                }) => self.file_mut().sel = origin,
-                _ => {}
-            },
-            KeyCode::Char('c') if key.mods.contains(KeyModifiers::CONTROL) => {
-                self.prompt_key(Key {
-                    code: KeyCode::Esc,
-                    mods: KeyModifiers::NONE,
-                });
-            }
-            KeyCode::Enter => {
-                let Some(Prompt { kind, line, .. }) = self.prompt.take() else {
-                    return;
-                };
-                match kind {
-                    PromptKind::Command => self.typed_command(line.trim()),
-                    PromptKind::Regex { action, origin } => {
-                        // Applied once more from where it started, so errors show.
-                        if let Some(regex) = commands::search_regex(&line) {
-                            self.file_mut().sel = origin;
-                            self.doc_command(|cx| commands::regex_selections(cx, action, &regex));
-                        }
-                    }
-                    PromptKind::Search { .. } => {
-                        // An empty search repeats the last one, as in Helix.
-                        if !line.is_empty() {
-                            self.last_search = Some(line);
-                        }
-                        if commands::search_regex(self.last_search.as_deref().unwrap_or(""))
-                            .is_none()
-                        {
-                            self.status = Some(("Invalid regex".into(), true));
-                        }
-                    }
+        match kind {
+            PromptKind::Command => self.typed_command(line.trim()),
+            PromptKind::Regex { action, origin } => {
+                // Applied once more from where it started, so errors show.
+                if let Some(regex) = commands::search_regex(&line) {
+                    self.file_mut().sel = origin;
+                    self.doc_command(|cx| commands::regex_selections(cx, action, &regex));
                 }
             }
-            KeyCode::Tab | KeyCode::BackTab if matches!(prompt.kind, PromptKind::Command) => {
-                // Helix's completion: each tab shows the next match for what was typed.
-                let typed = match &prompt.completion {
-                    Some((t, _)) => t.clone(),
-                    None => prompt.line.clone(),
-                };
-                let (start, items) = completions(&typed);
-                if items.is_empty() {
-                    return;
+            PromptKind::Search { .. } => {
+                // An empty search repeats the last one, as in Helix.
+                if !line.is_empty() {
+                    self.last_search = Some(line);
                 }
-                let n = items.len();
-                let back = key.code == KeyCode::BackTab || key.mods.contains(KeyModifiers::SHIFT);
-                let i = match (&prompt.completion, back) {
-                    (None, true) => n - 1,
-                    (None, false) => 0,
-                    (Some((_, i)), true) => (i + n - 1) % n,
-                    (Some((_, i)), false) => (i + 1) % n,
-                };
-                prompt.line = format!("{}{}", &typed[..start], items[i].0);
-                prompt.completion = Some((typed, i));
-            }
-            KeyCode::Backspace => {
-                prompt.completion = None;
-                if prompt.line.pop().is_none() {
-                    return self.prompt_key(Key {
-                        code: KeyCode::Esc,
-                        mods: KeyModifiers::NONE,
-                    });
+                if commands::search_regex(self.last_search.as_deref().unwrap_or("")).is_none() {
+                    self.status = Some(("Invalid regex".into(), true));
                 }
-                self.search_preview();
             }
-            KeyCode::Char(c)
-                if !key
-                    .mods
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                prompt.completion = None;
-                prompt.line.push(c);
-                self.search_preview();
-            }
-            _ => {}
         }
     }
 
@@ -2784,7 +2610,7 @@ impl App {
         Picker::new(vec!["path"], items)
     }
 
-    /// `:` commands (see [`TYPABLE`]), and `:<n>` to go to line n.
+    /// `:` commands (see [`prompt::TYPABLE`]), and `:<n>` to go to line n.
     fn typed_command(&mut self, line: &str) {
         let (name, args) = line.split_once(' ').unwrap_or((line, ""));
         match name {
@@ -3060,7 +2886,13 @@ impl App {
         self.render_box(buf);
         self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
         self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
-        self.render_completion(buf, Rect::new(0, 0, area.width, area.height - 2));
+        if let Some(p) = &self.prompt {
+            p.render_completion(
+                buf,
+                Rect::new(0, 0, area.width, area.height - 2),
+                &self.theme,
+            );
+        }
         self.render_picker(buf, area);
         self.render_help(f, area);
     }
@@ -3096,48 +2928,6 @@ impl App {
             Some(self.selection_styles()),
             &Threads::default(),
         );
-    }
-
-    /// `:` completions above the command line, as Helix lists them, with what each does.
-    fn render_completion(&self, buf: &mut Buffer, area: Rect) {
-        let Some(Prompt {
-            kind: PromptKind::Command,
-            line,
-            completion,
-        }) = &self.prompt
-        else {
-            return;
-        };
-        let typed = completion
-            .as_ref()
-            .map_or(line.as_str(), |(t, _)| t.as_str());
-        let (_, items) = completions(typed);
-        if items.is_empty() || area.height == 0 {
-            return;
-        }
-        let t = &self.theme;
-        let rows = items.len().min(area.height as usize).min(10);
-        let name_w = items.iter().map(|(n, _)| n.width()).max().unwrap_or(0);
-        let selected = completion.as_ref().map(|(_, i)| *i);
-        // The selected one stays in view.
-        let first = selected.map_or(0, |i| (i + 1).saturating_sub(rows));
-        let y0 = area.bottom() - rows as u16;
-        for (row, (i, (name, doc))) in items.iter().enumerate().skip(first).take(rows).enumerate() {
-            let style = if Some(i) == selected {
-                t.get("ui.menu.selected")
-            } else {
-                t.get("ui.menu")
-            };
-            let r = Rect::new(area.x, y0 + row as u16, area.width, 1);
-            buf.set_style(r, style);
-            buf.set_stringn(
-                r.x + 1,
-                r.y,
-                format!("{name:name_w$}  {doc}"),
-                area.width.saturating_sub(2) as usize,
-                style,
-            );
-        }
     }
 
     fn render_picker(&mut self, buf: &mut Buffer, area: Rect) {
@@ -3269,23 +3059,7 @@ impl App {
     fn render_command_line(&self, buf: &mut Buffer, area: Rect) {
         let t = &self.theme;
         if let Some(p) = &self.prompt {
-            let prefix = match p.kind {
-                PromptKind::Command => ":",
-                PromptKind::Search { .. } => "search:",
-                PromptKind::Regex { action, .. } => action.prompt(),
-            };
-            let shown = format!("{prefix}{}", clean(&p.line));
-            buf.set_stringn(
-                area.x,
-                area.y,
-                &shown,
-                area.width as usize,
-                t.get("ui.text"),
-            );
-            let x = area.x + shown.width() as u16;
-            if x < area.right() {
-                buf[(x, area.y)].set_style(t.get("ui.cursor.primary"));
-            }
+            p.render_line(buf, area, t);
             return;
         }
         if let Some((msg, error)) = &self.status {

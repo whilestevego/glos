@@ -9,7 +9,7 @@ use glos_helix::test::plain;
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 use tempfile::TempDir;
 
-use super::*;
+use super::{prompt::completions, *};
 
 /// An app over a review, with a test terminal of a fixed size.
 struct T {

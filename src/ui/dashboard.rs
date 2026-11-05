@@ -179,6 +179,7 @@ pub fn run(
                     Err(e) => status = Some(format!("{e:#}")),
                 },
                 Outcome::Msg(Msg::Open(_)) => keys = None,
+                Outcome::Msg(_) => {} // a picker sends nothing else
             }
         }
         let v = version();

@@ -24,10 +24,16 @@ pub enum Outcome {
 /// What a component asks `App` to do.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Msg {
-    /// Close it.
+    /// From a picker: close it.
     Close,
-    /// Open a file or thread, run a command, or go back (`Target::Nothing`).
+    /// From a picker: open a file or thread, run a command, or go back (`Target::Nothing`).
     Open(Target),
+    /// From the command line: the line changed, so a search or regex shows its matches.
+    PreviewPrompt,
+    /// From the command line: `esc`, or backspace on an empty line.
+    CancelPrompt,
+    /// From the command line: `ret`.
+    SubmitPrompt,
 }
 
 /// What every component may read.
