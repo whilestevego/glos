@@ -415,6 +415,34 @@ gone to an unrelated `glos diff` of two files started in the same folder.
   are unchanged: you name what you open by where and how you run them.
 - **`Review::for_folder` is gone.**
 
+## Folding (2026-11-04)
+
+Plan: `plans/FOLDING.md`.
+
+- **A view is rows, then a fold:** each view (whole file, unified, side by side) is first every
+  row it could show, then one pass hides rows by the context, what you opened and the folds you
+  made. Fold state is kept in rows of the whole view, per file and view, so the arithmetic is the
+  same everywhere and unit-tested apart from the UI.
+- **The whole-file view becomes a built document only when something in it folds.** Fully open,
+  or for a context file, it's the file itself as before, so nothing else changed for it.
+- **Opened rows, not opened folds:** `zo` marks rows shown, so a fold you opened stays open
+  through `z+`/`z-`; `za` closes the stretch the context folds around the cursor.
+- **Folds reset when a file's text changes,** only that file's. Switching files keeps them.
+- **A file with no changes isn't folded** (a mode change, a context file): there's nothing to
+  fold around. The unified view of such a file used to be one fold line; it's now whole.
+- **Jumps open folds:** `]g`/`[g` and opening a file land on a fold hiding changes and open it;
+  `]d`, `]u`, the pickers and `space n` open the folds hiding their lines.
+- **Tree-sitter objects run on the file, not the view:** a view has no syntax tree, so `maf`,
+  `]f` and the rest map the cursor to the new side, ask Helix's `textobjects.scm` there, and map
+  the range back. `]x`/`[x` (HTML elements) are bound though Helix 25.07 leaves them unbound.
+- **Search doesn't look inside folds:** the hidden text isn't in the document. `zR` first.
+- **A fold looks like GitHub's expander row** (chosen 2026-11-05 over a dim `⋯ 40 unchanged
+  lines`, a first-line preview, a divider rule and Vim's `+--`): a full-width band, the hidden
+  range in the gutter, `↕ lines 16–31 (16)` and a `ret opens` hint. The line-number column widens
+  to fit a range, in views that have folds. The band's style is a new theme key,
+  `ui.virtual.fold`, falling back to `ui.cursorline.primary`'s background, since Helix themes
+  have no fold style.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.

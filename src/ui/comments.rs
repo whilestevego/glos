@@ -196,6 +196,7 @@ pub fn layout(
     expanded: &HashSet<String>,
     theme: &Theme,
     here: Option<&str>,
+    width: usize,
 ) -> Threads {
     let mut out = Threads::default();
     for (i, t) in threads.iter().enumerate() {
@@ -207,13 +208,17 @@ pub fn layout(
         let (start, end) = (a.start as usize - 1, a.end as usize - 1);
         out.marks.push((start, end, style));
         let rows = out.rows.entry(end).or_default();
-        let mut row = |text: String, style: Style| {
-            rows.push(ThreadRow {
-                text,
-                style,
-                thread: i,
-            })
+        // Each row wraps to the width, its continuations indented as it is.
+        let mut wrapped = |text: String, style: Style, max: usize| {
+            for text in wrap(&text, width, max) {
+                rows.push(ThreadRow {
+                    text,
+                    style,
+                    thread: i,
+                })
+            }
         };
+        let mut row = |text: String, style: Style| wrapped(text, style, usize::MAX);
         let unsent = t.comments.iter().filter(|c| c.unsent()).count();
         let mut tags = vec![];
         if t.unread() {
@@ -239,7 +244,8 @@ pub fn layout(
             let first = t.comments.first();
             let line = first.map_or("", |c| c.body.lines().next().unwrap_or(""));
             let author = first.map_or(String::new(), who);
-            row(format!("▸ {author}: {line}{tags}"), style);
+            // Closed, a thread stays short: two rows at most, `…` if there's more.
+            wrapped(format!("▸ {author}: {line}{tags}"), style, 2);
             continue;
         }
         row(format!("▾ thread {}{tags}", t.id), style);
@@ -267,6 +273,68 @@ pub fn layout(
         }
     }
     out
+}
+
+/// `text` in rows of at most `width` columns, broken between words where it can be, each
+/// continuation indented like the first row (past a leading `▸ ` or `▾ `). At most `max` rows;
+/// the last ends in `…` if text was left out. A width of 0 (not drawn yet) doesn't wrap.
+fn wrap(text: &str, width: usize, max: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if width == 0 || text.width() <= width {
+        return vec![text.to_string()];
+    }
+    let (lead, rest) = text.split_at(text.len() - text.trim_start_matches([' ', '▸', '▾']).len());
+    let indent = " ".repeat(lead.width().min(width / 2));
+    let mut rows = vec![];
+    let mut cur = lead.to_string();
+    // Whether `cur` has any text yet, past its lead or indent.
+    let mut started = false;
+    let mut cut = false;
+    'words: for word in rest.split(' ') {
+        let gap = usize::from(started);
+        if cur.width() + gap + word.width() <= width {
+            if started {
+                cur.push(' ');
+            }
+            cur.push_str(word);
+            started = true;
+            continue;
+        }
+        if started {
+            if rows.len() + 1 == max {
+                cut = true;
+                break;
+            }
+            rows.push(std::mem::replace(&mut cur, indent.clone()));
+            started = false;
+            if cur.width() + word.width() <= width {
+                cur.push_str(word);
+                started = true;
+                continue;
+            }
+        }
+        // A word wider than a row is broken where it reaches the edge.
+        for ch in word.chars() {
+            if cur.width() + ch.width().unwrap_or(0) > width {
+                if rows.len() + 1 == max {
+                    cut = true;
+                    break 'words;
+                }
+                rows.push(std::mem::replace(&mut cur, indent.clone()));
+            }
+            cur.push(ch);
+            started = true;
+        }
+    }
+    if cut {
+        while cur.width() + 1 > width {
+            cur.pop();
+        }
+        cur.truncate(cur.trim_end().len());
+        cur.push('…');
+    }
+    rows.push(cur);
+    rows
 }
 
 /// A comment's author, with agents' notes made before review marked as such.
@@ -463,7 +531,7 @@ mod tests {
             thread("t3", "a.rs", 3, 3, &[("claude", "a note")]),
         ];
         let rows = |expanded: &HashSet<String>| -> Vec<(usize, String)> {
-            layout(&threads, "a.rs", expanded, &theme, None)
+            layout(&threads, "a.rs", expanded, &theme, None, 80)
                 .rows
                 .into_iter()
                 .flat_map(|(l, rs)| rs.into_iter().map(move |r| (l, r.text)))
@@ -493,11 +561,73 @@ mod tests {
                 "▸ claude: a note · unread"
             ]
         );
-        let l = layout(&threads, "a.rs", &HashSet::new(), &theme, None);
+        let l = layout(&threads, "a.rs", &HashSet::new(), &theme, None, 80);
         assert_eq!(l.marks.len(), 2);
         assert_eq!((l.marks[0].0, l.marks[0].1), (1, 2));
         // Agents' threads are drawn in another colour.
         assert_ne!(l.marks[0].2, l.marks[1].2);
+    }
+
+    #[test]
+    fn long_rows_wrap_between_words_and_keep_their_indent() {
+        assert_eq!(wrap("short", 20, usize::MAX), ["short"]);
+        assert_eq!(
+            wrap("not wrapped before drawing", 0, 1),
+            ["not wrapped before drawing"]
+        );
+        assert_eq!(
+            wrap("    one two three four five", 14, usize::MAX),
+            ["    one two", "    three four", "    five"]
+        );
+        // A word longer than a row is broken at the edge.
+        assert_eq!(
+            wrap("    abcdefghijkl", 10, usize::MAX),
+            ["    abcdef", "    ghijkl"]
+        );
+        // The marker's width counts in the indent; wide characters take two columns.
+        assert_eq!(
+            wrap("▸ you: 漢字 漢字 漢字", 12, usize::MAX),
+            ["▸ you: 漢字", "  漢字 漢字"]
+        );
+        // At most `max` rows, the last ending in `…`.
+        assert_eq!(
+            wrap("▸ you: one two three four five six", 14, 2),
+            ["▸ you: one two", "  three four…"]
+        );
+        for row in wrap(&"word ".repeat(40), 17, usize::MAX) {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(row.as_str()) <= 17,
+                "{row:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn open_threads_wrap_in_full_and_closed_ones_stay_short() {
+        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+        let body = "this comment is long enough that it has to wrap onto several rows";
+        let threads = [thread("t1", "a.rs", 1, 1, &[(YOU, body)])];
+        let texts = |expanded: &HashSet<String>| -> Vec<String> {
+            layout(&threads, "a.rs", expanded, &theme, None, 30).rows[&0]
+                .iter()
+                .map(|r| r.text.clone())
+                .collect()
+        };
+        let closed = texts(&HashSet::new());
+        assert_eq!(closed.len(), 2, "{closed:?}");
+        assert!(closed[1].ends_with('…'), "{closed:?}");
+        let open = texts(&HashSet::from(["t1".to_string()]));
+        let text: String = open[2..]
+            .iter()
+            .map(|r| r.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(text, body, "nothing is lost: {open:?}");
+        assert!(open[2..].iter().all(|r| r.starts_with("    ")), "{open:?}");
+        assert!(
+            open.iter()
+                .all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 30)
+        );
     }
 
     #[test]

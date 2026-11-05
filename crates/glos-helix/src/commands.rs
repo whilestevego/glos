@@ -385,7 +385,8 @@ pub fn match_brackets(cx: &mut Ctx) {
     );
 }
 
-/// `mi<ch>` / `ma<ch>`. The tree-sitter objects (f, t, a, c, T, e) are not supported yet.
+/// `mi<ch>` / `ma<ch>` for the plain-text objects. The tree-sitter objects (f, t, a, c, T, e,
+/// x) need the file's syntax tree: `syntax::Loader::textobject`.
 pub fn select_textobject(cx: &mut Ctx, around: bool, ch: char) {
     let objtype = if around {
         TextObject::Around
@@ -423,6 +424,13 @@ pub const TEXTOBJECT_HELP: &[(&str, &str)] = &[
     ("w", "Word"),
     ("W", "WORD"),
     ("p", "Paragraph"),
+    ("t", "Type definition (tree-sitter)"),
+    ("f", "Function (tree-sitter)"),
+    ("a", "Argument/parameter (tree-sitter)"),
+    ("c", "Comment (tree-sitter)"),
+    ("T", "Test (tree-sitter)"),
+    ("e", "Data structure entry (tree-sitter)"),
+    ("x", "(X)HTML element (tree-sitter)"),
     ("m", "Closest surrounding pair"),
     ("g", "Change"),
     (" ", "... or any character acting as a pair"),
