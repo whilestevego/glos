@@ -276,7 +276,8 @@ pub struct App {
     count: Option<NonZeroUsize>,
     next_key: Option<NextKey>,
     prompt: Option<Prompt>,
-    picker: Option<Picker>,
+    /// Open pickers, the one shown last. Only the palette opens over another.
+    pickers: Vec<Picker>,
     /// Helix's `/` register: the last search.
     last_search: Option<String>,
     /// Helix's `"` register: the last yank.
@@ -338,8 +339,6 @@ pub struct App {
     last_round: Option<u32>,
     tree: Option<tree::Tree>,
     tree_area: Rect,
-    /// While the palette is open: the picker it covers, to go back to.
-    palette: Option<Option<Picker>>,
     /// A review chosen in the dashboard: glos closes this one and opens it.
     pub switch: Option<Source>,
 }
@@ -504,7 +503,7 @@ impl App {
             count: None,
             next_key: None,
             prompt: None,
-            picker: None,
+            pickers: vec![],
             last_search: None,
             yanked: vec![],
             wrap: config.editor.soft_wrap.enable,
@@ -544,7 +543,6 @@ impl App {
             last_round: None,
             tree: None,
             tree_area: Rect::default(),
-            palette: None,
             switch: None,
         };
         app.load(0);
@@ -620,7 +618,7 @@ impl App {
         } else if unread(self) > unread_before {
             self.status = Some(("New reply from the agent · ]u goes to it".into(), false));
         }
-        if let Some(p) = self.picker.as_mut().filter(|p| dashboard::is_dashboard(p)) {
+        if let Some(p) = self.pickers.iter_mut().find(|p| dashboard::is_dashboard(p)) {
             match dashboard::items(&self.conn, &self.theme) {
                 Ok(items) => p.set_items(items),
                 Err(e) => self.status = Some((format!("{e:#}"), true)),
@@ -1118,7 +1116,7 @@ impl App {
 
     /// The picker's preview needs its file loaded before drawing.
     fn load_preview(&mut self) {
-        match self.picker.as_ref().and_then(|p| p.selected().cloned()) {
+        match self.pickers.last().and_then(|p| p.selected().cloned()) {
             Some(Target::Change(i)) => self.load(i),
             Some(Target::Path(p)) => self.load_context(&p),
             Some(Target::Command(_) | Target::Nothing | Target::Review(_)) => {}
@@ -1848,14 +1846,14 @@ impl App {
         }
         // Ctrl-G anywhere: the keys for where you are. Again, or esc, goes back.
         if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
-            match self.palette.take() {
-                Some(previous) => self.picker = previous,
-                None => self.open_palette(),
+            match self.pickers.last() {
+                Some(p) if p.palette => drop(self.pickers.pop()),
+                _ => self.open_palette(),
             }
             return None;
         }
         let cx = self.cx();
-        if let Some(picker) = &mut self.picker {
+        if let Some(picker) = self.pickers.last_mut() {
             return match picker.key(key, &cx) {
                 Outcome::Msg(msg) => self.apply(msg),
                 Outcome::Ignored | Outcome::Consumed => None,
@@ -1965,7 +1963,7 @@ impl App {
     fn apply(&mut self, msg: Msg) -> Option<AppAction> {
         match msg {
             Msg::Close => {
-                self.picker = self.palette.take().flatten();
+                self.pickers.pop();
                 None
             }
             Msg::Open(t) => self.choose(t),
@@ -1975,15 +1973,17 @@ impl App {
     /// An item chosen in a picker: a file or thread opens; a command runs; a key that's only
     /// listed (in the palette for the tree, say) goes back to where you were.
     fn choose(&mut self, t: Target) -> Option<AppAction> {
-        let previous = self.palette.take().flatten();
-        self.picker = None;
+        let chosen = self.pickers.pop();
+        let under = std::mem::take(&mut self.pickers);
         match t {
             Target::Command(name) => {
                 let command = keymap::command(name)?;
                 self.pending.clear();
                 return self.execute(command);
             }
-            Target::Nothing => self.picker = previous,
+            // Only the palette lists these; the picker it covers comes back.
+            Target::Nothing if chosen.is_some_and(|p| p.palette) => self.pickers = under,
+            Target::Nothing => {}
             t => self.open(t),
         }
         None
@@ -2007,8 +2007,8 @@ impl App {
         self.pending.clear();
         self.next_key = None;
         self.count = None;
-        self.palette = Some(self.picker.take());
-        self.picker = Some(p);
+        p.palette = true;
+        self.pickers.push(p);
     }
 
     /// The keys that work where you are: (keys, what they do, the command to run, if any).
@@ -2018,7 +2018,7 @@ impl App {
                 .map(|(k, d)| (k.to_string(), *d, None))
                 .collect()
         };
-        if self.picker.is_some() {
+        if !self.pickers.is_empty() {
             return ("Picker", fixed(picker::KEYS));
         }
         if let Some(p) = &self.prompt {
@@ -2331,14 +2331,14 @@ impl App {
                 }
             }
             A::Submit(v) => self.submit(v),
-            A::ThreadPicker { all } => self.picker = Some(self.thread_picker(all)),
+            A::ThreadPicker { all } => self.pickers = vec![self.thread_picker(all)],
             A::Fold(k) => self.fold_command(k),
             A::GotoObject(ch, forward) => {
                 let _ = self.push_jump();
                 self.ts_object(forward, ch, true);
             }
             A::Dashboard => match dashboard::picker(&self.conn, &self.theme) {
-                Ok(p) => self.picker = Some(p),
+                Ok(p) => self.pickers = vec![p],
                 Err(e) => self.status = Some((format!("{e:#}"), true)),
             },
             A::NextThread(forward) => self.goto_thread(forward, false),
@@ -2476,8 +2476,8 @@ impl App {
                 };
                 self.open(Target::Change(i));
             }
-            AppAction::ChangedFilePicker => self.picker = Some(self.changed_file_picker()),
-            AppAction::FilePicker => self.picker = Some(self.file_picker()),
+            AppAction::ChangedFilePicker => self.pickers = vec![self.changed_file_picker()],
+            AppAction::FilePicker => self.pickers = vec![self.file_picker()],
             AppAction::ToggleCollapse => {
                 // On a fold line, ret opens it; on a thread, it opens or closes the thread.
                 if self.fold_here().is_some() {
@@ -2639,7 +2639,7 @@ impl App {
     /// and a click opens.
     fn mouse(&mut self, m: MouseEvent) {
         let cx = self.cx();
-        if let Some(picker) = &mut self.picker {
+        if let Some(picker) = self.pickers.last_mut() {
             if let Outcome::Msg(msg) = picker.mouse(m, self.screen, &cx) {
                 self.apply(msg);
             }
@@ -3141,7 +3141,7 @@ impl App {
     }
 
     fn render_picker(&mut self, buf: &mut Buffer, area: Rect) {
-        let Some(picker) = &mut self.picker else {
+        let Some(picker) = self.pickers.last_mut() else {
             return;
         };
         let (list, preview) = picker.areas(area);

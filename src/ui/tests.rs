@@ -507,7 +507,7 @@ fn changed_files_and_context() {
     assert_eq!(t.path(), "b");
     // esc closes a picker without moving.
     t.keys("space g esc");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert_eq!(t.path(), "b");
 }
 
@@ -698,13 +698,13 @@ fn mouse_below_notices_and_in_picker() {
     assert_eq!(t.sel(), "one\n#[t|]#wo\n");
     // In the picker a click opens the row under it.
     t.keys("space g");
-    let (list, _) = t.app.picker.as_ref().unwrap().areas(t.app.screen);
+    let (list, _) = t.app.pickers.last().unwrap().areas(t.app.screen);
     t.mouse(
         MouseEventKind::Down(MouseButton::Left),
         list.x + 4,
         list.y + 4,
     );
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert_eq!(t.path(), "b");
 }
 
@@ -819,7 +819,7 @@ fn motions_work_in_the_box_and_files_stay_put() {
     t.keys("g n");
     assert!(t.said().starts_with("Close the comment box first"));
     t.keys("space g");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     // `:` commands still work, and `:q` with a draft just quits: the draft is saved.
     t.keys(":").typed("q").keys("ret");
     assert!(t.app.quit);
@@ -1750,7 +1750,7 @@ fn the_file_tree_starts_open() {
 impl T {
     /// The palette's title (its second column's header) and its rows' text.
     fn palette(&self) -> (String, Vec<String>) {
-        let p = self.app.picker.as_ref().expect("the palette is open");
+        let p = self.app.pickers.last().expect("the palette is open");
         let screen = self.screen();
         (
             p.columns[1].to_string(),
@@ -1785,7 +1785,7 @@ fn palette_lists_what_applies_and_runs_it() {
     // ret runs the command, here a submit.
     t.keys("esc C-g");
     t.typed("approve").keys("ret");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert!(
         t.said().starts_with("Round 1 submitted: approved"),
         "{}",
@@ -1795,7 +1795,7 @@ fn palette_lists_what_applies_and_runs_it() {
     t.keys("space ?");
     assert_eq!(t.palette().0, "Normal mode");
     t.keys("C-g");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     // A command that waits for a character still does.
     t.keys("C-g")
         .typed("Move to next occurrence of char")
@@ -1812,7 +1812,7 @@ fn palette_in_the_comment_box() {
     assert!(t.shows("New line"));
     // esc goes back to typing, the text kept.
     t.keys("esc");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     assert!(t.app.comment_box.as_ref().unwrap().insert);
     t.typed("!");
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "draft!");
@@ -1836,13 +1836,19 @@ fn palette_in_the_tree_picker_and_prompt() {
     assert_eq!(t.palette().0, "File tree");
     assert!(t.shows("Close the tree"));
     t.keys("ret"); // a listed key: back to the tree, still focused
-    assert!(t.app.picker.is_none() && t.app.tree.as_ref().unwrap().focused);
+    assert!(t.app.pickers.is_empty() && t.app.tree.as_ref().unwrap().focused);
     t.keys("q");
     // A picker: the palette covers it, and esc brings it back with its query.
     t.keys("space g").typed("main").keys("C-g");
     assert_eq!(t.palette().0, "Picker");
-    t.keys("esc");
-    assert!(t.shows("main.rs") && t.app.picker.is_some());
+    assert_eq!(t.app.pickers.len(), 2);
+    t.keys("C-g"); // C-g again goes back too
+    assert_eq!(t.app.pickers.len(), 1);
+    t.keys("C-g ret"); // so does choosing a key it only lists
+    assert_eq!(t.app.pickers.len(), 1);
+    assert!(!t.app.pickers[0].palette);
+    t.keys("C-g esc");
+    assert!(t.shows("main.rs") && t.app.pickers.len() == 1);
     t.keys("esc");
     // The command line: the line is kept.
     t.keys(":").typed("subm").keys("C-g");
@@ -1880,7 +1886,7 @@ fn the_dashboard_lists_reviews_and_opens_another() {
 
     // Its own review: the dashboard just closes.
     t.typed("main.rs").keys("ret");
-    assert!(t.app.picker.is_none() && !t.app.quit && t.app.switch.is_none());
+    assert!(t.app.pickers.is_empty() && !t.app.quit && t.app.switch.is_none());
 
     // Another: glos closes this review and opens that one.
     t.keys("space l").typed("other").keys("ret");
@@ -1893,14 +1899,14 @@ fn the_dashboard_lists_reviews_and_opens_another() {
 fn the_dashboard_is_a_command_and_a_key() {
     let mut t = T::files(OLD, NEW);
     t.keys(": d a s h b o a r d ret");
-    assert!(t.app.picker.as_ref().is_some_and(dashboard::is_dashboard));
+    assert!(t.app.pickers.last().is_some_and(dashboard::is_dashboard));
     t.keys("esc");
-    assert!(t.app.picker.is_none());
+    assert!(t.app.pickers.is_empty());
     // C-g over it lists the picker's keys.
     t.keys("space l C-g");
     assert!(t.shows("Filter the list"), "{}", t.screen());
     t.keys("C-g");
-    assert!(t.app.picker.as_ref().is_some_and(dashboard::is_dashboard));
+    assert!(t.app.pickers.last().is_some_and(dashboard::is_dashboard));
 }
 
 #[test]

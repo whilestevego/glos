@@ -65,6 +65,7 @@ pub fn keys_palette(theme: &Theme) -> Picker {
         .collect();
     let mut p = Picker::new(vec!["keys", "Picker"], items);
     p.preview = false;
+    p.palette = true;
     p
 }
 
@@ -87,6 +88,8 @@ pub struct Picker {
     matcher: Matcher,
     /// A preview beside the list, when there's room; the palette has none.
     pub preview: bool,
+    /// The keys palette (`C-g`): it opens over another picker, and closing it goes back there.
+    pub palette: bool,
 }
 
 impl Picker {
@@ -99,6 +102,7 @@ impl Picker {
             cursor: 0,
             matcher: Matcher::new(nucleo::Config::DEFAULT.match_paths()),
             preview: true,
+            palette: false,
         };
         p.refilter();
         p
