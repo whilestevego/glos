@@ -706,6 +706,19 @@ fn mouse_below_notices_and_in_picker() {
     );
     assert!(t.app.pickers.is_empty());
     assert_eq!(t.path(), "b");
+    // The command line and the comment box swallow clicks: the cursor stays.
+    let click = |t: &mut T| {
+        t.mouse(MouseEventKind::Down(MouseButton::Left), gutter + 2, 2);
+    };
+    t.keys(":");
+    click(&mut t);
+    assert_eq!(t.sel(), "one\n#[t|]#wo\n");
+    assert!(t.app.prompt.is_some());
+    t.keys("esc space c");
+    click(&mut t);
+    assert!(t.app.comment_box.is_some());
+    t.keys("esc q");
+    assert_eq!(t.sel(), "one\n#[t|]#wo\n");
 }
 
 #[test]

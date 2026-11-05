@@ -1676,24 +1676,22 @@ impl App {
             }
             return None;
         }
+        // The open picker, the command line or the focused tree takes every key; then the
+        // editor's own state (a pending `f`, the comment box, a count, the keymap) does.
         let cx = self.cx();
-        if let Some(picker) = self.pickers.last_mut() {
-            return match picker.key(key, &cx) {
-                Outcome::Msg(msg) => self.apply(msg),
-                Outcome::Ignored | Outcome::Consumed => None,
-            };
-        }
-        if let Some(p) = &mut self.prompt {
-            return match p.key(key, &cx) {
-                Outcome::Msg(msg) => self.apply(msg),
-                Outcome::Ignored | Outcome::Consumed => None,
-            };
-        }
-        if let Some(t) = self.tree.as_mut().filter(|t| t.focused) {
-            return match t.key(key, &cx) {
-                Outcome::Msg(msg) => self.apply(msg),
-                Outcome::Ignored | Outcome::Consumed => None,
-            };
+        let outcome = if let Some(p) = self.pickers.last_mut() {
+            p.key(key, &cx)
+        } else if let Some(p) = &mut self.prompt {
+            p.key(key, &cx)
+        } else if let Some(t) = self.tree.as_mut().filter(|t| t.focused) {
+            t.key(key, &cx)
+        } else {
+            Outcome::Ignored
+        };
+        match outcome {
+            Outcome::Ignored => {}
+            Outcome::Consumed => return None,
+            Outcome::Msg(msg) => return self.apply(msg),
         }
         if let Some(next) = self.next_key.take() {
             self.pending.clear();
@@ -2440,25 +2438,26 @@ impl App {
     /// Click to move the cursor, drag to select, wheel to scroll; in the picker, the wheel moves
     /// and a click opens.
     fn mouse(&mut self, m: MouseEvent) {
+        // What's on top takes the click: the picker, the command line or the comment box (which
+        // swallow it), then the tree, where a click opens a file.
         let cx = self.cx();
-        if let Some(picker) = self.pickers.last_mut() {
-            if let Outcome::Msg(msg) = picker.mouse(m, self.screen, &cx) {
+        let outcome = if let Some(p) = self.pickers.last_mut() {
+            p.mouse(m, self.screen, &cx)
+        } else if let Some(p) = &mut self.prompt {
+            p.mouse(m, self.screen, &cx)
+        } else if let Some(b) = &mut self.comment_box {
+            b.mouse(m, self.box_area, &cx)
+        } else if let Some(t) = &mut self.tree {
+            t.mouse(m, self.tree_area, &cx)
+        } else {
+            Outcome::Ignored
+        };
+        match outcome {
+            Outcome::Ignored => {}
+            Outcome::Consumed => return,
+            Outcome::Msg(msg) => {
                 self.apply(msg);
-            }
-            return;
-        }
-        if self.prompt.is_some() || self.comment_box.is_some() {
-            return;
-        }
-        // A click in the file tree opens that file.
-        if let Some(t) = &mut self.tree {
-            match t.mouse(m, self.tree_area, &cx) {
-                Outcome::Ignored => {}
-                Outcome::Consumed => return,
-                Outcome::Msg(msg) => {
-                    self.apply(msg);
-                    return;
-                }
+                return;
             }
         }
         // A click on a thread opens or closes it.
