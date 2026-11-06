@@ -149,8 +149,9 @@ reads as one change and not two.
 When a hunk's two sides differ in length, a removed line pairs with an added one only when at
 least half their words are shared (`MIN_SIMILARITY`).
 
-The 18% and 35% amounts haven't been tuned by eye yet. The tests check that the tints differ
-from the background and from each other, but not how they look.
+The line tint is 14%, not 18%. On a real terminal, 18% looked too strong. The word tint stays
+at 35%. The tests check that the tints differ from the background and from each other, but not
+how they look.
 
 Each `File` keeps its changed words as byte ranges within each line (`File::words`). The
 whole-file view works them out in `File::change`, and the unified and split views work them out

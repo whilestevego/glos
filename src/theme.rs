@@ -329,8 +329,8 @@ fn adapt(style: Style, colors: ColorSupport) -> Style {
 /// The diff tints: each key, the style whose colour it leans toward, and how far from the
 /// background it goes. The line tints are subtle, and the changed words stronger.
 const TINTS: &[(&str, &str, f32)] = &[
-    ("diff.plus.line", "diff.plus", 0.18),
-    ("diff.minus.line", "diff.minus", 0.18),
+    ("diff.plus.line", "diff.plus", 0.14),
+    ("diff.minus.line", "diff.minus", 0.14),
     ("diff.plus.word", "diff.plus", 0.35),
     ("diff.minus.word", "diff.minus", 0.35),
 ];
@@ -485,9 +485,9 @@ mod tests {
         let bg = |k| t.get(k).bg;
         assert_eq!(
             bg("diff.plus.line"),
-            Some(rgb_color(mix(base, green, 0.18)))
+            Some(rgb_color(mix(base, green, 0.14)))
         );
-        assert_eq!(bg("diff.minus.line"), Some(rgb_color(mix(base, red, 0.18))));
+        assert_eq!(bg("diff.minus.line"), Some(rgb_color(mix(base, red, 0.14))));
         assert_eq!(
             bg("diff.plus.word"),
             Some(rgb_color(mix(base, green, 0.35)))
