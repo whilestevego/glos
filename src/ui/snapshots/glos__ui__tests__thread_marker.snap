@@ -1,6 +1,6 @@
 ---
 source: src/ui/tests.rs
-assertion_line: 750
+assertion_line: 771
 expression: t.screen()
 ---
     1  fn main() {
@@ -16,4 +16,4 @@ expression: t.screen()
 
 
  NOR  main.rs                          1 unsent  1/1 files  1 sel  2:23
-Comment saved · 1 unsent; space s submits
+Comment saved · 1 unsent; space v s submits

@@ -106,7 +106,7 @@ const PHASES: &[Phase] = &[
         t.keys("x x x % ; m i f ; w w b e");
     }),
     ("unified and split views", |t| {
-        t.keys("space v u C-d C-d ] g ] g space v s C-d ] g space v f");
+        t.keys("space v v u C-d C-d ] g ] g space v v s C-d ] g space v v f");
     }),
     ("changed-file picker", |t| {
         t.keys("space g").typed("file_02").keys("ret");

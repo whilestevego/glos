@@ -1,7 +1,8 @@
 # Review menu: give Helix its keys back
 
-**Status:** Ready to build, in steps. Each step lands with the plan that needs its keys back,
-which is `plan-language-servers.md` or `plan-in-place-editing.md`.
+**Status:** In progress. Step 1 is built on branch `review-menu`. Steps 2 and 3 land with the
+plan that needs their keys back, which is `plan-language-servers.md` or
+`plan-in-place-editing.md`.
 
 When a glos key and a Helix key clash, Helix wins, and glos finds another key for its command
 (decided 2026-11-06, in `DECISIONS.md`). Today glos has taken seven Helix keys for reviewing, and
@@ -49,12 +50,14 @@ the last and first. Helix leaves `]r` free. The unread keys `]u` `[u` and the co
 
 ## Steps
 
-1. **Make room at `space v`.** Today `space v` is the View menu. Move it to `space v v`, add the
-   Review menu around it, and put the scope menu at `space v o`. This step has to come first,
-   whichever plan needs a key first.
-2. **With language servers.** Move `space s`, `space d`, `space D` and the `]d` family into the
-   Review menu and to `]r`. `plan-language-servers.md` then binds Helix's commands to them.
-3. **With editing.** Move `space c`, `space C` and `space r` into the Review menu.
+1. **Build the whole menu.** Move the View menu to `space v v` and the scope menu to
+   `space v o`, and add every review command to the Review menu at `space v`. Add `]r` `[r`
+   `]R` `[R`. The keys that never clashed (`space m`, `space M`, `space x`, `space n`,
+   `space o` and `space l`) leave their old places. The clashing keys stay at their old places
+   too, as duplicates, so nothing you use today stops working.
+2. **With language servers.** Remove the duplicates at `space s`, `space d`, `space D` and the
+   `]d` family. `plan-language-servers.md` then binds Helix's commands to them.
+3. **With editing.** Remove the duplicates at `space c`, `space C` and `space r`.
    `plan-in-place-editing.md` then binds `space c` and `space C` to toggling comments in code.
    `space r` waits for rename in `plan-language-servers.md`.
 
@@ -70,12 +73,11 @@ because it works on actions, not keys.
 - `plans/KEYMAP.md` lists none of the keys in the first table as "replaced" once both plans are
   built.
 
-## Open
+## Decided
 
-- Should the commands that don't clash (`space m`, `space M`, `space x`, `space n`, `space o`,
-  `space l`) move into the menu in step 1 as well, so the menu is complete from the start? Moving
-  them means one change to learn rather than three. Leaving them means fewer keys move until they
-  must.
+- The whole menu is built in step 1, including the commands that don't clash, so you learn the
+  new keys once rather than in three rounds (2026-11-06). The clashing keys keep working at their
+  old places until steps 2 and 3 need them, which is why those steps only remove keys.
 
 ## Relevant code
 

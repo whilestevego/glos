@@ -1,0 +1,28 @@
+---
+source: src/ui/tests.rs
+expression: t.screen()
+---
+    1  fn main() {
+    2 ▍    println!("hello");
+    3 ▍    let x = 1;
+    4  }
+    5 ▔
+
+
+
+
+
+
+
+                                                ┌Review────────────────────────────────────────────┐
+                                                │ c  Comment on the selected lines                 │
+                                                │ C  Comment on the whole review                   │
+                                                │ x  Resolve or reopen the thread under the cursor │
+                                                │ n  Goto the line the agent suggested             │
+                                                │ l  Open the dashboard: every open review         │
+                                                │ s  Submit                                        │
+                                                │ v  View                                          │
+                                                │ o  Scope                                         │
+                                                └──────────────────────────────────────────────────┘
+ NOR  main.rs                                                                 1/1 files  1 sel  2:1
+                                                                                             spacev

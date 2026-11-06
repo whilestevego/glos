@@ -1,4 +1,4 @@
-//! The dashboard (`glos dashboard`, `space l`): every open review on this machine, with what its
+//! The dashboard (`glos dashboard`, `space v l`): every open review on this machine, with what its
 //! agent is doing and what's waiting on you. `ret` opens one. It's a picker, so typing filters.
 
 use std::{path::Path, time::Duration};

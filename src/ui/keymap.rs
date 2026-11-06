@@ -60,42 +60,42 @@ pub enum AppAction {
     RepeatLastMotion,
     RecordMacro,
     ReplayMacro,
-    /// `space c`: comment on the selected lines.
+    /// `space v c`: comment on the selected lines.
     Comment,
-    /// `space C`: a review-level comment.
+    /// `space v C`: a review-level comment.
     ReviewComment,
     Reply,
     EditComment,
-    /// `space M`: delete your latest unsent comment, after pressing it twice.
+    /// `space v M`: delete your latest unsent comment, after pressing it twice.
     DeleteComment,
     Submit(crate::review::Verdict),
-    /// `space d` / `space D`: threads in this file, or the whole review.
+    /// `space v d` / `space v D`: threads in this file, or the whole review.
     ThreadPicker {
         all: bool,
     },
-    /// `]d` / `[d`: `true` goes forward.
+    /// `]r` / `[r`: `true` goes forward.
     NextThread(bool),
-    /// `]D` / `[D`: `true` goes to the last.
+    /// `]R` / `[R`: `true` goes to the last.
     EdgeThread(bool),
     /// `]u` / `[u`: the next or previous thread with an agent's reply you haven't read.
     NextUnread(bool),
-    /// `space x`: resolve the thread under the cursor, or reopen it.
+    /// `space v x`: resolve the thread under the cursor, or reopen it.
     ToggleResolved,
-    /// `space n`: the line an agent suggested.
+    /// `space v n`: the line an agent suggested.
     GotoSuggestion,
-    /// `space v` then `f`, `u` or `s`.
+    /// `space v v` then `f`, `u` or `s`.
     View(super::ViewKind),
-    /// `space o` then `b`, `r` or `c`.
+    /// `space v o` then `b`, `r` or `c`.
     Scope(ScopeKey),
     /// `]C` / `[C`: the next or previous commit, in the per-commit scope.
     NextCommit(bool),
-    /// `space o f`: the `:filter` prompt.
+    /// `space v o f`: the `:filter` prompt.
     FilterPrompt,
     /// `space e`: open, focus or close the file tree.
     FileTree,
     /// `space ?` (and `C-g` anywhere): the palette of keys for where you are.
     CommandPalette,
-    /// `space l`: every open review.
+    /// `space v l`: every open review.
     Dashboard,
     /// The `z` fold keys.
     Fold(super::folding::FoldKey),
@@ -580,6 +580,8 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("d", "goto_prev_diag"),
                 cmd("D", "goto_first_diag"),
+                cmd("r", "goto_prev_diag"),
+                cmd("R", "goto_first_diag"),
                 cmd("u", "goto_prev_unread"),
                 cmd("C", "goto_prev_commit"),
                 cmd("g", "goto_prev_change"),
@@ -600,6 +602,8 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("d", "goto_next_diag"),
                 cmd("D", "goto_last_diag"),
+                cmd("r", "goto_next_diag"),
+                cmd("R", "goto_last_diag"),
                 cmd("u", "goto_next_unread"),
                 cmd("C", "goto_next_commit"),
                 cmd("g", "goto_next_change"),
@@ -658,43 +662,48 @@ fn normal_defs() -> Vec<Def> {
                 cmd("D", "workspace_diagnostics_picker"),
                 cmd("y", "yank_to_clipboard"),
                 cmd("Y", "yank_main_selection_to_clipboard"),
-                // Review actions, where Helix has LSP and editing commands.
+                // These duplicate the Review menu's keys until Helix's language server and
+                // editing commands take them back.
                 cmd("c", "comment"),
                 cmd("C", "review_comment"),
                 cmd("r", "reply"),
-                cmd("m", "edit_comment"),
-                cmd("M", "delete_comment"),
-                cmd("x", "toggle_resolved"),
-                cmd("n", "goto_suggestion"),
+                menu("s", "Submit", submit_defs()),
                 cmd("e", "file_explorer"),
-                cmd("l", "dashboard"),
                 cmd("?", "command_palette"),
                 menu(
                     "v",
-                    "View",
+                    "Review",
                     vec![
-                        cmd("f", "view_file"),
-                        cmd("u", "view_unified"),
-                        cmd("s", "view_split"),
-                    ],
-                ),
-                menu(
-                    "o",
-                    "Scope",
-                    vec![
-                        cmd("b", "scope_base"),
-                        cmd("r", "scope_since_review"),
-                        cmd("c", "scope_commits"),
-                        cmd("f", "filter_files"),
-                    ],
-                ),
-                menu(
-                    "s",
-                    "Submit",
-                    vec![
-                        cmd("a", "submit_approve"),
-                        cmd("r", "submit_changes"),
-                        cmd("c", "submit_comment"),
+                        cmd("c", "comment"),
+                        cmd("C", "review_comment"),
+                        cmd("r", "reply"),
+                        cmd("m", "edit_comment"),
+                        cmd("M", "delete_comment"),
+                        cmd("x", "toggle_resolved"),
+                        cmd("n", "goto_suggestion"),
+                        cmd("d", "diagnostics_picker"),
+                        cmd("D", "workspace_diagnostics_picker"),
+                        cmd("l", "dashboard"),
+                        menu("s", "Submit", submit_defs()),
+                        menu(
+                            "v",
+                            "View",
+                            vec![
+                                cmd("f", "view_file"),
+                                cmd("u", "view_unified"),
+                                cmd("s", "view_split"),
+                            ],
+                        ),
+                        menu(
+                            "o",
+                            "Scope",
+                            vec![
+                                cmd("b", "scope_base"),
+                                cmd("r", "scope_since_review"),
+                                cmd("c", "scope_commits"),
+                                cmd("f", "filter_files"),
+                            ],
+                        ),
                     ],
                 ),
             ],
@@ -706,6 +715,14 @@ fn normal_defs() -> Vec<Def> {
         cmd("C-z", "suspend"),
         // glos: the palette, in every context.
         cmd("C-g", "command_palette"),
+    ]
+}
+
+fn submit_defs() -> Vec<Def> {
+    vec![
+        cmd("a", "submit_approve"),
+        cmd("r", "submit_changes"),
+        cmd("c", "submit_comment"),
     ]
 }
 
@@ -1114,6 +1131,77 @@ mod tests {
             panic!()
         };
         assert!(z.sticky);
+    }
+
+    /// The command a sequence of keys runs in normal mode, if any.
+    fn bound_seq(k: &Keymaps, keys: &str) -> Option<&'static str> {
+        let mut menu = k.get(Context::Normal);
+        let mut keys = keys.split(' ').peekable();
+        while let Some(key) = keys.next() {
+            match menu.get(Key::parse(key).unwrap())? {
+                Node::Cmd(c) if keys.peek().is_none() => return Some(c.name),
+                Node::Menu(m) => menu = m,
+                Node::Cmd(_) => return None,
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn review_commands_live_under_space_v() {
+        let k = Keymaps::default();
+        for (keys, name) in [
+            ("space v c", "comment"),
+            ("space v C", "review_comment"),
+            ("space v r", "reply"),
+            ("space v m", "edit_comment"),
+            ("space v M", "delete_comment"),
+            ("space v x", "toggle_resolved"),
+            ("space v n", "goto_suggestion"),
+            ("space v d", "diagnostics_picker"),
+            ("space v D", "workspace_diagnostics_picker"),
+            ("space v l", "dashboard"),
+            ("space v s a", "submit_approve"),
+            ("space v s r", "submit_changes"),
+            ("space v s c", "submit_comment"),
+            ("space v v f", "view_file"),
+            ("space v v u", "view_unified"),
+            ("space v v s", "view_split"),
+            ("space v o b", "scope_base"),
+            ("space v o r", "scope_since_review"),
+            ("space v o c", "scope_commits"),
+            ("space v o f", "filter_files"),
+            ("] r", "goto_next_diag"),
+            ("[ r", "goto_prev_diag"),
+            ("] R", "goto_last_diag"),
+            ("[ R", "goto_first_diag"),
+            // These stay until Helix's own commands need them.
+            ("space c", "comment"),
+            ("space s a", "submit_approve"),
+            ("space d", "diagnostics_picker"),
+            ("] d", "goto_next_diag"),
+        ] {
+            assert_eq!(bound_seq(&k, keys), Some(name), "{keys}");
+        }
+        // The keys that never clashed with Helix moved outright.
+        for keys in [
+            "space m",
+            "space M",
+            "space x",
+            "space n",
+            "space l",
+            "space o b",
+        ] {
+            assert_eq!(bound_seq(&k, keys), None, "{keys}");
+        }
+        let Some(Node::Menu(space)) = k.get(Context::Normal).get(Key::parse("space").unwrap())
+        else {
+            panic!()
+        };
+        let Some(Node::Menu(v)) = space.get(Key::parse("v").unwrap()) else {
+            panic!()
+        };
+        assert_eq!(v.name, "Review");
     }
 
     #[test]

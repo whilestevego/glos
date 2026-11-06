@@ -791,7 +791,7 @@ fn commenting_on_a_selection_saves_at_once() {
     assert_eq!(t.bodies(), ["why\nnot hi?"]);
     let a = t.app.state.threads[0].anchor.clone().unwrap();
     assert_eq!((a.path.as_str(), a.start, a.end), ("main.rs", 2, 3));
-    assert_eq!(t.said(), "Comment saved · 1 unsent; space s submits");
+    assert_eq!(t.said(), "Comment saved · 1 unsent; space v s submits");
     assert!(t.shows("1 unsent"), "{}", t.screen());
     // It's in the store, so a new app on the same database sees it.
     let n = review::unsent(&t.app.conn, &t.app.review.id).unwrap();
@@ -908,7 +908,7 @@ fn opened_threads_count_when_scrolling() {
 fn editing_and_deleting_a_comment() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("tpyo").keys("esc ret");
-    t.keys("space m");
+    t.keys("space v m");
     assert!(t.shows("Edit comment"));
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "tpyo");
     t.keys("backspace backspace backspace backspace")
@@ -916,7 +916,7 @@ fn editing_and_deleting_a_comment() {
         .keys("esc ret");
     assert_eq!(t.bodies(), ["typo"]);
     // Saving it empty asks once, then deletes it.
-    t.keys("space m");
+    t.keys("space v m");
     for _ in 0..4 {
         t.keys("backspace");
     }
@@ -927,7 +927,7 @@ fn editing_and_deleting_a_comment() {
     assert_eq!(t.said(), "Comment deleted");
     assert!(t.app.state.threads.is_empty());
     // With no thread here, there's nothing to edit or reply to.
-    t.keys("space m");
+    t.keys("space v m");
     assert_eq!(t.said(), "No comment of yours here");
     t.keys("space r");
     assert_eq!(t.said(), "No thread here to reply to");
@@ -938,15 +938,15 @@ fn space_shift_m_twice_deletes_your_latest_unsent_comment() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("first").keys("esc ret");
     t.keys("space r").typed("second").keys("esc ret");
-    t.keys("space M");
-    assert_eq!(t.said(), "space M again deletes your comment: «second»");
+    t.keys("space v M");
+    assert_eq!(t.said(), "space v M again deletes your comment: «second»");
     assert_eq!(t.bodies(), ["first", "second"]);
-    t.keys("space M");
+    t.keys("space v M");
     assert_eq!(t.said(), "Comment deleted");
     assert_eq!(t.bodies(), ["first"]);
     assert_eq!(t.app.unsent, 1);
     // The last comment goes, and the thread with it.
-    t.keys("space M space M");
+    t.keys("space v M space v M");
     assert!(t.app.state.threads.is_empty());
     assert_eq!(t.app.unsent, 0);
 }
@@ -955,17 +955,17 @@ fn space_shift_m_twice_deletes_your_latest_unsent_comment() {
 fn any_other_key_forgets_a_delete() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("keep me").keys("esc ret");
-    t.keys("space M");
+    t.keys("space v M");
     // esc out of the space menu is a key too.
-    t.keys("space esc space M");
+    t.keys("space esc space v M");
     assert!(
-        t.said().starts_with("space M again deletes"),
+        t.said().starts_with("space v M again deletes"),
         "{}",
         t.said()
     );
-    t.keys("l space M");
+    t.keys("l space v M");
     assert!(
-        t.said().starts_with("space M again deletes"),
+        t.said().starts_with("space v M again deletes"),
         "{}",
         t.said()
     );
@@ -981,10 +981,10 @@ fn a_long_comment_is_quoted_by_its_first_line() {
         .keys("ret")
         .typed("more")
         .keys("esc ret");
-    t.keys("space M");
+    t.keys("space v M");
     assert_eq!(
         t.said(),
-        "space M again deletes your comment: «a first line that runs on for well over…»"
+        "space v M again deletes your comment: «a first line that runs on for well over…»"
     );
     t.keys("esc");
     t.keys("space r")
@@ -992,8 +992,8 @@ fn a_long_comment_is_quoted_by_its_first_line() {
         .keys("ret")
         .typed("two")
         .keys("esc ret");
-    t.keys("space M");
-    assert_eq!(t.said(), "space M again deletes your comment: «short…»");
+    t.keys("space v M");
+    assert_eq!(t.said(), "space v M again deletes your comment: «short…»");
 }
 
 #[test]
@@ -1002,7 +1002,7 @@ fn the_typed_command_deletes_too() {
     t.keys("space c").typed("gone").keys("esc ret");
     t.typed(":delete-comment").keys("ret");
     assert!(
-        t.said().starts_with("space M again deletes"),
+        t.said().starts_with("space v M again deletes"),
         "{}",
         t.said()
     );
@@ -1015,26 +1015,26 @@ fn the_typed_command_deletes_too() {
 fn a_sent_comment_is_not_deleted() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("sent").keys("esc ret");
-    t.keys("space s c");
-    t.keys("space M");
+    t.keys("space v s c");
+    t.keys("space v M");
     assert_eq!(
         t.said(),
-        "That comment was already sent to the agent: edit it with space m"
+        "That comment was already sent to the agent: edit it with space v m"
     );
-    t.keys("space M");
+    t.keys("space v M");
     assert_eq!(t.bodies(), ["sent"]);
     // An older unsent comment is not reached past the sent one.
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("old").keys("esc ret");
     let old = t.app.state.threads[0].comments[0].id.clone();
     t.keys("space r").typed("new").keys("esc ret");
-    t.keys("space s c");
+    t.keys("space v s c");
     // Editing a sent comment makes it unsent again. The UI only edits the latest, so the
     // store edits the older one here.
     crate::review::edit(&t.app.conn, &old, "old, edited").unwrap();
     t.app.reload();
     assert!(t.app.state.threads[0].comments[0].unsent());
-    t.keys("space M space M");
+    t.keys("space v M space v M");
     assert!(
         t.said().starts_with("That comment was already sent"),
         "{}",
@@ -1046,7 +1046,7 @@ fn a_sent_comment_is_not_deleted() {
 #[test]
 fn no_comment_of_yours_to_delete() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space M");
+    t.keys("space v M");
     assert_eq!(t.said(), "No comment of yours here");
     assert!(t.app.state.threads.is_empty());
 }
@@ -1055,7 +1055,7 @@ fn no_comment_of_yours_to_delete() {
 fn space_shift_m_waits_for_the_comment_box() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("one").keys("esc ret");
-    t.keys("space r").typed("draft").keys("esc space M");
+    t.keys("space r").typed("draft").keys("esc space v M");
     assert!(
         t.said().starts_with("Close the comment box first"),
         "{}",
@@ -1072,7 +1072,7 @@ fn the_palette_finds_delete_comment() {
     t.keys("esc");
     t.keys("space c").typed("one").keys("esc ret");
     t.keys("C-g").typed("delete");
-    assert!(t.shows("space M"), "{}", t.screen());
+    assert!(t.shows("space v M"), "{}", t.screen());
     assert!(t.shows("Delete your latest comment"), "{}", t.screen());
 }
 
@@ -1081,7 +1081,7 @@ fn replies_and_review_level_comments() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("one").keys("esc ret");
     t.keys("space r").typed("two").keys("esc ret");
-    assert_eq!(t.said(), "Reply saved · 2 unsent; space s submits");
+    assert_eq!(t.said(), "Reply saved · 2 unsent; space v s submits");
     assert_eq!(t.app.state.threads.len(), 1);
     assert_eq!(t.bodies(), ["one", "two"]);
     t.keys("space C");
@@ -1117,14 +1117,14 @@ fn the_final_empty_line_comments_on_the_last_line() {
 fn submitting_with_a_verdict() {
     let mut t = T::files(OLD, NEW);
     // With nothing to send, only approving applies, and the help panel says so.
-    t.keys("space s");
+    t.keys("space v s");
     assert!(t.shows("Approve"));
     assert!(!t.shows("Request changes"), "{}", t.screen());
     t.keys("esc");
-    t.keys("space s r");
+    t.keys("space v s r");
     assert!(t.said().starts_with("nothing to submit"), "{}", t.said());
     t.keys("space c").typed("fix").keys("esc ret");
-    t.keys("space s");
+    t.keys("space v s");
     assert!(t.shows("Request changes") && t.shows("Send comments without a verdict"));
     t.keys("r");
     assert_eq!(
@@ -1211,14 +1211,14 @@ fn a_review_level_thread_opens_its_comment_from_the_picker() {
 #[test]
 fn help_lists_only_what_applies() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space");
+    t.keys("space v");
     assert!(t.shows("Comment on the selected lines"));
     assert!(!t.shows("Reply to the thread"), "no thread here yet");
-    t.keys("esc space c").typed("x").keys("esc ret space");
+    t.keys("esc space v c").typed("x").keys("esc ret space v");
     assert!(t.shows("Reply to the thread"));
     assert!(t.shows("Edit your latest comment"));
     // Off the thread's line, the thread actions go again.
-    t.keys("esc g g space");
+    t.keys("esc g g space v");
     assert!(!t.shows("Reply to the thread"));
 }
 
@@ -1299,7 +1299,7 @@ impl T {
 fn sent(t: &mut T) -> String {
     t.keys("space c")
         .typed("why hello?")
-        .keys("esc ret space s r");
+        .keys("esc ret space v s r");
     t.app.state.threads[0].id.clone()
 }
 
@@ -1381,14 +1381,14 @@ fn next_unread_goes_across_files() {
 fn resolve_and_reopen() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("x").keys("esc ret");
-    t.keys("space x");
+    t.keys("space v x");
     assert_eq!(t.said(), "Thread resolved");
     assert_eq!(t.app.state.threads[0].status, "resolved");
     assert!(t.shows("· resolved"));
-    t.keys("space x");
+    t.keys("space v x");
     assert_eq!(t.said(), "Thread reopened");
     assert_eq!(t.app.state.threads[0].status, "open");
-    t.keys("g g space x");
+    t.keys("g g space v x");
     assert_eq!(t.said(), "No thread here");
 }
 
@@ -1404,10 +1404,10 @@ fn suggestions_show_and_space_n_goes_there() {
     t.app.refresh();
     assert_eq!(
         t.said(),
-        "claude suggests main.rs:30: the loop · space n goes there"
+        "claude suggests main.rs:30: the loop · space v n goes there"
     );
     assert_eq!((t.sel(), t.top()), (sel, top), "the view didn't move");
-    t.keys("space n");
+    t.keys("space v n");
     assert!(t.sel().contains("#[line 30\n|]#"));
     // Back where you were with C-o.
     t.keys("C-o");
@@ -1460,7 +1460,7 @@ fn threads_go_outdated_only_once_files_settle() {
     );
     // Reopened and the text back, it's placed again.
     t.edit(&lines(10));
-    t.keys("space x");
+    t.keys("space v x");
     assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
 }
 
@@ -1554,7 +1554,7 @@ fn git_repo_with(source: impl FnOnce(&Path) -> Source) -> T {
 #[test]
 fn unified_view_screen() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space v u");
+    t.keys("space v v u");
     insta::assert_snapshot!(t.screen());
     // Removed and added lines differ by colour, which the text snapshot doesn't see.
     let sign = t.app.main_file().gutter_width() as u16 - 1;
@@ -1633,7 +1633,7 @@ fn removed_and_added_lines_are_tinted_in_the_unified_and_split_views() {
     let mut t = T::files(OLD, NEW);
     let (plus, minus) = (t.bg("diff.plus.line"), t.bg("diff.minus.line"));
     assert_ne!(plus, minus);
-    t.keys("space v u");
+    t.keys("space v v u");
     let x0 = t.app.main_file().gutter_width() as u16;
     // Rows: same, removed, added, added, same, removed, removed.
     let rows: Vec<_> = (0..7).map(|y| t.cell_bg(70, y)).collect();
@@ -1646,7 +1646,7 @@ fn removed_and_added_lines_are_tinted_in_the_unified_and_split_views() {
         "an empty removed line is tinted too"
     );
     // Side by side: removals on the left, additions on the right, and filler rows plain.
-    t.keys("space v s");
+    t.keys("space v v s");
     let right = col(&t, 1, "2 ▍", true);
     assert_eq!(t.cell_bg(20, 1), minus, "{}", t.screen());
     assert_eq!(t.cell_bg(right + 8, 1), plus);
@@ -1679,12 +1679,12 @@ fn changed_words_get_a_stronger_tint_in_every_view() {
         (x0..x0 + 14).all(|x| t.cell_bg(x, 2) != plus_word),
         "an added line with no pair has no words"
     );
-    t.keys("space v u");
+    t.keys("space v v u");
     let x0 = t.app.main_file().gutter_width() as u16;
     assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, removed");
     assert_eq!(word(&t, x0, 2, 5), vec![plus_word; 5], "hello, added");
     assert_eq!(t.cell_bg(x0 + 16, 1), minus, "the quote after hi");
-    t.keys("space v s");
+    t.keys("space v v s");
     let right = col(&t, 1, "2 ▍", true) + 3;
     assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, on the left");
     assert_eq!(
@@ -1732,7 +1732,7 @@ fn folds_are_not_tinted() {
 #[test]
 fn split_view_screen() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space v s");
+    t.keys("space v v s");
     insta::assert_snapshot!(t.screen());
 }
 
@@ -1743,7 +1743,7 @@ fn views_keep_your_place() {
     let line = |t: &T| t.app.cursor_new_line();
     assert_eq!(line(&t), 29);
     for v in ["u", "s", "f", "u", "f"] {
-        t.keys(&format!("space v {v}"));
+        t.keys(&format!("space v v {v}"));
         assert_eq!(line(&t), 29, "view {v}");
     }
     assert!(
@@ -1757,7 +1757,7 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     let old = lines(20);
     let new = old.replace("line 10\n", "line ten\n");
     let mut t = T::files(&old, &new);
-    t.keys("space v u");
+    t.keys("space v v u");
     assert!(t.shows("↕ lines 1–6 (6)"), "{}", t.screen());
     assert!(t.shows(" unified"));
     // The cursor opens on the change; the line above it is the removed one.
@@ -1777,14 +1777,14 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     assert!(t.shows("▸ you: ten?"));
     let row = |t: &T, s: &str| t.screen().lines().position(|l| l.contains(s)).unwrap();
     assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
-    t.keys("space v f");
+    t.keys("space v v f");
     assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
 }
 
 #[test]
 fn split_keeps_the_sides_level_with_threads() {
     let mut t = T::files("a\nb\nc\n", "a\nB\nnew\nc\n");
-    t.keys("space v s");
+    t.keys("space v v s");
     t.keys("g g j space c").typed("x").keys("esc ret");
     let screen = t.screen();
     let lines: Vec<&str> = screen.lines().collect();
@@ -1808,21 +1808,21 @@ fn since_the_last_review() {
             std::fs::write(n.join(f), "1\n2\n").unwrap();
         }
     });
-    t.keys("space o r");
+    t.keys("space v o r");
     assert!(t.said().starts_with("Nothing submitted yet"));
     assert!(!t.shows("Since your last review"));
-    t.keys("space s a");
+    t.keys("space v s a");
     // The agent changes b.rs after the review.
     std::fs::write(t._dir.path().join("new/b.rs"), "1\n2\n3\n").unwrap();
     t.app.files_changed();
-    t.keys("space o r");
+    t.keys("space v o r");
     assert_eq!(t.said(), "Since round 1: 1 file");
     assert_eq!(t.path(), "b.rs");
     assert!(t.shows("Since round 1"), "{}", t.screen());
     // Only line 3 is new since the review.
     assert_eq!(t.app.base_file().hunks.len(), 1);
     assert_eq!(t.app.base_file().hunks[0].after, 2..3);
-    t.keys("space o b");
+    t.keys("space v o b");
     assert_eq!(t.said(), "Old vs new: 2 files");
 }
 
@@ -1833,7 +1833,7 @@ fn one_commit_at_a_time() {
     // `]C` only shows in the per-commit scope.
     t.keys("]");
     assert!(!t.shows("Goto next commit"));
-    t.keys("esc space o c");
+    t.keys("esc space v o c");
     assert!(t.said().starts_with("Commit 1/2"), "{}", t.said());
     assert_eq!(t.path(), "a.rs");
     assert!(t.shows("two"), "{}", t.screen());
@@ -1848,7 +1848,7 @@ fn one_commit_at_a_time() {
     t.keys("esc q");
     t.keys("[ C [ C");
     assert_eq!(t.said(), "The first commit");
-    t.keys("space o b");
+    t.keys("space v o b");
     assert!(t.said().starts_with("Branch vs base: 3 files"));
 }
 
@@ -2128,9 +2128,9 @@ fn file_tree() {
 #[test]
 fn view_and_scope_help_list_what_applies() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space v");
+    t.keys("space v v");
     assert!(!t.shows("The whole file") && t.shows("Unified") && t.shows("Side by side"));
-    t.keys("esc space o");
+    t.keys("esc space v o");
     assert!(!t.shows("One commit at a time"), "not git");
     assert!(!t.shows("Since your last review"), "nothing submitted");
     assert!(t.shows("Filter files"));
@@ -2222,7 +2222,7 @@ fn comments_on_two_revisions_keep_their_diff() {
 #[test]
 fn comments_on_one_commit_stay_on_it() {
     let mut t = git_repo();
-    t.keys("space o c");
+    t.keys("space v o c");
     assert_eq!(t.path(), "a.rs");
     t.keys("space c").typed("on the commit").keys("esc ret");
     let th = t.app.state.threads[0].clone();
@@ -2236,13 +2236,13 @@ fn comments_on_one_commit_stay_on_it() {
     // The next commit doesn't touch that code; back on your files, it shows where the code is.
     t.keys("] C");
     assert!(!t.shows("on the commit"));
-    t.keys("space o b");
+    t.keys("space v o b");
     t.app.open(Target::Path("a.rs".into()));
     t.draw();
     assert!(t.shows("▸ you: on the commit"), "{}", t.screen());
     // A comment made on your files shows in the commit's view too, marked as such.
     t.keys("space c").typed("on files").keys("esc ret");
-    t.keys("space o c");
+    t.keys("space v o c");
     assert!(
         t.shows("on files · unsent · on your files"),
         "{}",
@@ -2259,7 +2259,7 @@ fn change_motions_work_in_every_view() {
     // The same lines in every view, as the file view (helix-core's motions) finds them.
     let walk = |view: &str| {
         let mut t = T::files(&old, &new);
-        t.keys(&format!("space v {view} g g"));
+        t.keys(&format!("space v v {view} g g"));
         let mut seen = vec![];
         for keys in ["] g", "] g", "] g", "[ g", "] G", "[ G"] {
             t.keys(keys);
@@ -2315,6 +2315,13 @@ impl T {
 fn palette_screen() {
     let mut t = T::files_sized(OLD, NEW, 100, 20);
     t.keys("C-g");
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn review_menu_screen() {
+    let mut t = T::files_sized(OLD, NEW, 100, 24);
+    t.keys("space v");
     insta::assert_snapshot!(t.screen());
 }
 
@@ -2529,7 +2536,7 @@ fn the_dashboard_lists_reviews_and_opens_another() {
     std::fs::write(&n, "b\n").unwrap();
     let other = Review::open(&t.app.conn, &Source::diff(&o, &n).unwrap()).unwrap();
 
-    t.keys("space l");
+    t.keys("space v l");
     assert!(
         t.shows("state") && t.shows("unsent") && t.shows("outdated"),
         "{}",
@@ -2550,7 +2557,7 @@ fn the_dashboard_lists_reviews_and_opens_another() {
     assert!(t.app.pickers.is_empty() && !t.app.quit && t.app.switch.is_none());
 
     // Another: glos closes this review and opens that one.
-    t.keys("space l").typed("other").keys("ret");
+    t.keys("space v l").typed("other").keys("ret");
     assert!(t.app.quit);
     let s = t.app.switch.as_ref().expect("a review to open");
     assert_eq!(s.changes[0].path, "other.rs");
@@ -2564,7 +2571,7 @@ fn the_dashboard_is_a_command_and_a_key() {
     t.keys("esc");
     assert!(t.app.pickers.is_empty());
     // C-g over it lists the picker's keys.
-    t.keys("space l C-g");
+    t.keys("space v l C-g");
     assert!(t.shows("Filter the list"), "{}", t.screen());
     t.keys("C-g");
     assert!(t.app.pickers.last().is_some_and(dashboard::is_dashboard));
@@ -2702,7 +2709,7 @@ fn context_lines_and_the_cursor_staying_put() {
     t.keys("g g z o z +");
     assert!(text(&t).starts_with("line 1\n"), "{}", text(&t));
     // The context applies to every file and view.
-    t.keys("space v u");
+    t.keys("space v v u");
     assert!(t.shows("line twenty"));
     assert!(t.shows("line 19") && !t.shows("line 18"), "{}", t.screen());
 }
@@ -2760,13 +2767,13 @@ fn jumps_open_the_folds_they_land_in() {
     t.keys("g g ] d");
     assert!(t.shows("▸ you: thirty"), "{}", t.screen());
     assert!(t.sel().contains("#[line 30\n|]#"), "{}", t.sel());
-    // space n opens a folded line an agent suggested.
+    // space v n opens a folded line an agent suggested.
     t.app
         .review
         .suggest(&t.agent(), "claude", "main.rs", 5, "look")
         .unwrap();
     t.app.refresh();
-    t.keys("space n");
+    t.keys("space v n");
     assert!(t.sel().contains("#[line 5\n|]#"), "{}", t.sel());
 }
 
@@ -2796,22 +2803,22 @@ fn folds_last_until_the_file_changes() {
 #[test]
 fn unified_and_side_by_side_fold_with_the_same_keys() {
     let mut t = folded();
-    t.keys("space v u");
+    t.keys("space v v u");
     assert!(t.shows("↕ lines 1–16 (16)"));
     t.keys("z R");
     assert!(text(&t).starts_with("line 1\n"));
     assert!(text(&t).contains("line 20\nline twenty\n"));
-    t.keys("z M space v s");
+    t.keys("z M space v v s");
     assert!(t.shows("↕ lines 1–16 (16)"));
     t.keys("g g z o");
     let left = t.app.split_left().unwrap().text.to_string();
     assert!(left.starts_with("line 1\n"), "both sides open: {left}");
     assert_eq!(left.lines().count(), text(&t).lines().count());
     // Each view keeps its own folds.
-    t.keys("space v u");
+    t.keys("space v v u");
     assert!(text(&t).starts_with("↕ lines 1–16"));
     // A comment next to a fold goes on the right line.
-    t.keys("space v f g g j x space c");
+    t.keys("space v v f g g j x space c");
     assert!(t.shows("Comment on main.rs:17 "), "{}", t.screen());
 }
 
@@ -2839,7 +2846,7 @@ fn tree_sitter_objects_and_motions() {
     t.keys("[ f");
     assert!(t.sel().contains("#[|fn a() {\n    1\n}]#"), "{}", t.sel());
     // In the unified view, objects come from the new side and select its rows.
-    t.keys("space v u g g ] f");
+    t.keys("space v v u g g ] f");
     assert!(
         t.sel().contains("#[fn b() {\n    2\n    two\n}|]#"),
         "{}",
