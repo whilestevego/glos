@@ -1829,9 +1829,8 @@ impl App {
         let (context, _) = self.contexts();
         let editor = matches!(
             context,
-            Context::Normal | Context::Select | Context::BoxInsert | Context::BoxNormal
+            Context::Normal | Context::Select | Context::BoxNormal
         );
-        let cx = cx!(self);
         if editor && let Some(next) = self.next_key.take() {
             self.pending.clear();
             let ch = key.char().or(match key.code {
@@ -1866,20 +1865,6 @@ impl App {
             }
             self.count = None;
             return None;
-        }
-        if editor
-            && self.pending.is_empty()
-            && let Some(b) = &mut self.comment_box
-        {
-            let outcome = b.key(key, &cx);
-            if outcome != Outcome::Ignored {
-                self.count = None;
-            }
-            match outcome {
-                Outcome::Ignored => {}
-                Outcome::Consumed => return None,
-                Outcome::Msg(msg) => return self.apply(msg),
-            }
         }
         // A count, as in Helix: digits before a command (a leading 0 isn't one).
         if editor
@@ -1978,6 +1963,7 @@ impl App {
         let outcome = match context {
             Context::Picker => self.pickers.last_mut().map(|p| p.text(c)),
             Context::Prompt => self.prompt.as_mut().map(|p| p.text(c)),
+            Context::BoxInsert => self.comment_box.as_mut().map(|b| b.text(c)),
             _ => None,
         };
         match outcome {
@@ -2069,61 +2055,38 @@ impl App {
 
     /// The keys that work where you are: (keys, what they do, the command to run, if any).
     fn context_keys(&self) -> (&'static str, Vec<KeyRow>) {
-        let fixed = |rows: &[(&str, &'static str)]| -> Vec<KeyRow> {
-            rows.iter()
-                .map(|(k, d)| (k.to_string(), *d, None))
-                .collect()
-        };
-        if let Some(b) = &self.comment_box
-            && b.insert
-        {
-            return (
-                "Comment box: insert mode",
-                fixed(&[
-                    ("type", "Write the comment; it's saved as you type"),
-                    ("esc, C-c", "Normal mode: then ret saves and q closes"),
-                    ("ret", "New line"),
-                    ("backspace", "Delete before the cursor"),
-                    ("del", "Delete under the cursor"),
-                    ("left, right, up, down", "Move"),
-                    ("home, end", "Line start, line end"),
-                    ("C-g", "These keys"),
-                ]),
-            );
-        }
         let (context, fallback) = self.contexts();
         let mut rows = vec![];
         if let Some(doc) = context.text() {
             rows.push(("type".into(), doc, None));
         }
-        if context == Context::BoxNormal {
-            rows.extend(fixed(&[
-                ("ret", "Save the comment"),
-                ("q", "Close the box; the draft is kept"),
-                ("i, a", "Insert before, after the selection"),
-                (":editor", "Edit the comment in $EDITOR"),
-            ]));
-        }
-        self.walk_keys(self.keymaps.get(context), "", &mut rows, false);
+        let root = self.keymaps.get(context);
+        self.walk_keys(root, "", &mut rows, None);
         if let Some(f) = fallback {
-            self.walk_keys(self.keymaps.get(f), "", &mut rows, true);
+            self.walk_keys(self.keymaps.get(f), "", &mut rows, Some(root));
         }
         rows.push(("C-g".into(), "These keys", None));
         (context.title(), rows)
     }
 
     /// Every command under `menu` that applies here, with its full key sequence; keys bound to
-    /// the same command are joined. `boxed` is set when the menu is the fallback of the comment
-    /// box in normal mode.
-    fn walk_keys(&self, menu: &keymap::Menu, prefix: &str, out: &mut Vec<KeyRow>, boxed: bool) {
+    /// the same command are joined. When `menu` is a fallback, `over` is the context it falls
+    /// back from: its keys win, so they're left out here.
+    fn walk_keys(
+        &self,
+        menu: &keymap::Menu,
+        prefix: &str,
+        out: &mut Vec<KeyRow>,
+        over: Option<&keymap::Menu>,
+    ) {
         let start = out.len();
         for (key, node) in &menu.keys {
             let keys = format!("{prefix}{key}");
             match node {
                 Node::Cmd(c) => {
-                    // The box's own keys win over the keymap's, and some actions wait for it.
-                    if boxed
-                        && (matches!(keys.as_str(), "q" | "ret" | "i" | "a")
+                    // The comment box's own keys win, and some actions wait for it to close.
+                    if let Some(over) = over
+                        && ((prefix.is_empty() && over.get(*key).is_some())
                             || matches!(c.action, Action::App(a) if blocked_in_box(a)))
                     {
                         continue;
@@ -2136,7 +2099,7 @@ impl App {
                         None => out.push((keys, c.doc, Some(c.name))),
                     }
                 }
-                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out, boxed),
+                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out, over),
             }
         }
     }
@@ -2197,6 +2160,10 @@ impl App {
                 }
             }
             Action::Prompt(c) => match self.prompt.as_mut().map(|p| p.command(c)) {
+                Some(Outcome::Msg(msg)) => self.apply(msg),
+                _ => None,
+            },
+            Action::Box(c) => match self.comment_box.as_mut().map(|b| b.command(c)) {
                 Some(Outcome::Msg(msg)) => self.apply(msg),
                 _ => None,
             },

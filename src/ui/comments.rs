@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
-use crossterm::event::{KeyCode, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, MouseEvent};
 use glos_helix::{
     layout::LineAnnotation,
     syntax::Loader,
@@ -22,7 +22,6 @@ use ratatui::{
 use super::{
     Mode,
     component::{Component, Cx, Msg, Outcome},
-    keymap::Key,
     view::{self, File, SelectionStyles, clean},
 };
 use crate::{
@@ -62,6 +61,28 @@ impl Place {
             Place::Edit(_) => "Edit comment".into(),
         }
     }
+}
+
+/// What the comment box's keys do. `keymap.rs` binds them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BoxCmd {
+    /// Normal mode: `ret`, `q`, `i` and `a`.
+    Save,
+    Close,
+    Insert,
+    Append,
+    /// Insert mode: `esc`, and the keys that edit or move.
+    NormalMode,
+    Newline,
+    Tab,
+    DeleteBackward,
+    DeleteForward,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
 }
 
 /// The comment box: a small Helix-style buffer, opened in insert mode. In normal mode the
@@ -196,33 +217,47 @@ impl CommentBox {
     }
 }
 
-impl Component for CommentBox {
-    /// In insert mode every key is the box's. In normal mode only `ret`, `q`, `i` and `a` are:
-    /// the others are the editor's, which edits the box's text with Helix's keys.
-    fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
-        let ctrl = key.mods.contains(KeyModifiers::CONTROL);
-        if self.insert {
-            if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+impl CommentBox {
+    /// Runs one of the box's commands. The editing ones change the text in insert mode, and
+    /// `App` saves the draft when the text changed.
+    pub fn command(&mut self, cmd: BoxCmd) -> Outcome {
+        let code = match cmd {
+            BoxCmd::Save => return Outcome::Msg(Msg::SaveBox),
+            BoxCmd::Close => return Outcome::Msg(Msg::CloseBox),
+            BoxCmd::Insert | BoxCmd::Append => {
+                self.enter_insert(cmd == BoxCmd::Append);
+                return Outcome::Msg(Msg::BoxInsert);
+            }
+            BoxCmd::NormalMode => {
                 self.leave_insert();
                 return Outcome::Msg(Msg::BoxMoved);
             }
-            let typed = !key
-                .mods
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && self.insert_key(key.code);
-            return Outcome::Msg(if typed { Msg::BoxEdited } else { Msg::BoxMoved });
-        }
-        match key.code {
-            KeyCode::Enter if key.mods.is_empty() => Outcome::Msg(Msg::SaveBox),
-            KeyCode::Char('q') if key.mods.is_empty() => Outcome::Msg(Msg::CloseBox),
-            KeyCode::Char(c @ ('i' | 'a')) if key.mods.is_empty() => {
-                self.enter_insert(c == 'a');
-                Outcome::Msg(Msg::BoxInsert)
-            }
-            _ => Outcome::Ignored,
-        }
+            BoxCmd::Newline => KeyCode::Enter,
+            BoxCmd::Tab => KeyCode::Tab,
+            BoxCmd::DeleteBackward => KeyCode::Backspace,
+            BoxCmd::DeleteForward => KeyCode::Delete,
+            BoxCmd::Left => KeyCode::Left,
+            BoxCmd::Right => KeyCode::Right,
+            BoxCmd::Up => KeyCode::Up,
+            BoxCmd::Down => KeyCode::Down,
+            BoxCmd::Home => KeyCode::Home,
+            BoxCmd::End => KeyCode::End,
+        };
+        Outcome::Msg(if self.insert_key(code) {
+            Msg::BoxEdited
+        } else {
+            Msg::BoxMoved
+        })
     }
 
+    /// A character typed in insert mode.
+    pub fn text(&mut self, c: char) -> Outcome {
+        self.insert_key(KeyCode::Char(c));
+        Outcome::Msg(Msg::BoxEdited)
+    }
+}
+
+impl Component for CommentBox {
     /// Clicks do nothing while the box is open.
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Consumed
@@ -551,50 +586,22 @@ mod tests {
     #[test]
     fn as_a_component() {
         let l = loader();
-        let theme =
-            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
-        let cx = Cx {
-            screen: Rect::new(0, 0, 80, 24),
-            theme: &theme,
-            state: None,
-        };
-        let key = |code, mods| Key { code, mods };
-        let none = KeyModifiers::NONE;
         let mut b = CommentBox::new(Place::Review, "", &l);
-        // Insert mode: every key is the box's; typing asks App to save the draft.
+        // Insert mode: typing asks App to save the draft, and moving doesn't.
+        assert_eq!(b.text('x'), Outcome::Msg(Msg::BoxEdited));
+        assert_eq!(b.command(BoxCmd::Left), Outcome::Msg(Msg::BoxMoved));
         assert_eq!(
-            b.key(key(KeyCode::Char('x'), none), &cx),
+            b.command(BoxCmd::DeleteForward),
             Outcome::Msg(Msg::BoxEdited)
         );
-        assert_eq!(
-            b.key(key(KeyCode::Left, none), &cx),
-            Outcome::Msg(Msg::BoxMoved)
-        );
-        assert_eq!(
-            b.key(key(KeyCode::Char('w'), KeyModifiers::CONTROL), &cx),
-            Outcome::Msg(Msg::BoxMoved),
-            "ctrl keys aren't typed"
-        );
-        assert_eq!(b.body(), "x");
-        assert_eq!(
-            b.key(key(KeyCode::Esc, none), &cx),
-            Outcome::Msg(Msg::BoxMoved)
-        );
+        assert_eq!(b.body(), "");
+        b.text('x');
+        assert_eq!(b.command(BoxCmd::NormalMode), Outcome::Msg(Msg::BoxMoved));
         assert!(!b.insert);
-        // Normal mode: its own keys, and the rest go on to the editor.
-        assert_eq!(b.key(key(KeyCode::Char('w'), none), &cx), Outcome::Ignored);
-        assert_eq!(
-            b.key(key(KeyCode::Enter, none), &cx),
-            Outcome::Msg(Msg::SaveBox)
-        );
-        assert_eq!(
-            b.key(key(KeyCode::Char('q'), none), &cx),
-            Outcome::Msg(Msg::CloseBox)
-        );
-        assert_eq!(
-            b.key(key(KeyCode::Char('a'), none), &cx),
-            Outcome::Msg(Msg::BoxInsert)
-        );
+        // Normal mode: its own keys.
+        assert_eq!(b.command(BoxCmd::Save), Outcome::Msg(Msg::SaveBox));
+        assert_eq!(b.command(BoxCmd::Close), Outcome::Msg(Msg::CloseBox));
+        assert_eq!(b.command(BoxCmd::Append), Outcome::Msg(Msg::BoxInsert));
         assert!(b.insert);
     }
 

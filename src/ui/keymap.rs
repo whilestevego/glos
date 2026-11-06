@@ -25,6 +25,8 @@ pub enum Action {
     Picker(super::picker::PickerCmd),
     /// A command for the command line.
     Prompt(super::prompt::PromptCmd),
+    /// A command for the comment box.
+    Box(super::comments::BoxCmd),
 }
 
 /// Commands that act on glos itself rather than one file's selection.
@@ -124,11 +126,12 @@ macro_rules! commands {
     };
 }
 
+use super::comments::BoxCmd as B;
 use super::folding::FoldKey as F;
 use super::picker::PickerCmd as P;
 use super::prompt::PromptCmd as L;
 use super::tree::TreeCmd as T;
-use Action::{App, Doc, NextChar, Picker, Prompt, Tree};
+use Action::{App, Box, Doc, NextChar, Picker, Prompt, Tree};
 commands! {
     move_char_left, "Move left", Doc(c::move_char_left);
     move_char_right, "Move right", Doc(c::move_char_right);
@@ -281,6 +284,23 @@ commands! {
     prompt_complete_next, "Complete: the next match", Prompt(L::Complete(true));
     prompt_complete_prev, "Complete: the previous match", Prompt(L::Complete(false));
     prompt_delete_char, "Delete; on an empty line, cancel", Prompt(L::DeleteChar);
+    // The comment box in normal mode, ahead of the editor's keys.
+    box_save, "Save the comment", Box(B::Save);
+    box_close, "Close the box; the draft is kept", Box(B::Close);
+    box_insert, "Insert before the selection", Box(B::Insert);
+    box_append, "Insert after the selection", Box(B::Append);
+    // The comment box in insert mode.
+    box_normal_mode, "Normal mode: then ret saves and q closes", Box(B::NormalMode);
+    box_newline, "New line", Box(B::Newline);
+    box_tab, "Insert a tab", Box(B::Tab);
+    box_delete_char_backward, "Delete before the cursor", Box(B::DeleteBackward);
+    box_delete_char_forward, "Delete under the cursor", Box(B::DeleteForward);
+    box_move_left, "Move left", Box(B::Left);
+    box_move_right, "Move right", Box(B::Right);
+    box_move_up, "Move up", Box(B::Up);
+    box_move_down, "Move down", Box(B::Down);
+    box_line_start, "Line start", Box(B::Home);
+    box_line_end, "Line end", Box(B::End);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
     // Folding: Vim's keys, in Helix's view menu.
     fold_open, "Open the fold at the cursor", App(AppAction::Fold(F::Open));
@@ -713,6 +733,34 @@ fn prompt_defs() -> Vec<Def> {
     ]
 }
 
+/// The comment box's own keys in normal mode. Every other key is the editor's, which edits the
+/// box's text with Helix's keys.
+fn box_normal_defs() -> Vec<Def> {
+    vec![
+        cmd("ret", "box_save"),
+        cmd("q", "box_close"),
+        cmd("i", "box_insert"),
+        cmd("a", "box_append"),
+    ]
+}
+
+/// The comment box's keys in insert mode. Characters that aren't bound are typed.
+fn box_insert_defs() -> Vec<Def> {
+    vec![
+        cmd("esc|C-c", "box_normal_mode"),
+        cmd("ret", "box_newline"),
+        cmd("tab", "box_tab"),
+        cmd("backspace", "box_delete_char_backward"),
+        cmd("del", "box_delete_char_forward"),
+        cmd("left", "box_move_left"),
+        cmd("right", "box_move_right"),
+        cmd("up", "box_move_up"),
+        cmd("down", "box_move_down"),
+        cmd("home", "box_line_start"),
+        cmd("end", "box_line_end"),
+    ]
+}
+
 /// The file tree's keys. `h` and `l` follow Helix's file explorer and yazi.
 fn tree_defs() -> Vec<Def> {
     vec![
@@ -819,7 +867,8 @@ impl Context {
             Context::Tree => tree_defs(),
             Context::Picker => picker_defs(),
             Context::Prompt => prompt_defs(),
-            Context::BoxInsert | Context::BoxNormal => vec![],
+            Context::BoxInsert => box_insert_defs(),
+            Context::BoxNormal => box_normal_defs(),
         }
     }
 }
