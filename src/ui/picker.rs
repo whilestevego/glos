@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use nucleo::{
     Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -19,13 +19,27 @@ use unicode_width::UnicodeWidthStr;
 use super::{
     comments::Threads,
     component::{Component, Cx, Msg, Outcome},
-    keymap::Key,
+    keymap::{Action, Context, Key, Keymaps, Node},
     view::{self, clean},
 };
 use crate::theme::Theme;
 
 /// Below this width Helix drops the preview.
 const MIN_WIDTH_FOR_PREVIEW: u16 = 72;
+
+/// What a picker's keys do. `keymap.rs` binds them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PickerCmd {
+    Next,
+    Prev,
+    PageDown,
+    PageUp,
+    First,
+    Last,
+    Choose,
+    Close,
+    DeleteChar,
+}
 
 /// What choosing an item opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,23 +57,22 @@ pub enum Target {
 }
 
 /// The picker's keys, as `C-g` lists them.
-pub const KEYS: &[(&str, &str)] = &[
-    ("type", "Filter the list"),
-    ("up, down, C-p, C-n, S-tab, tab", "Move"),
-    ("pageup, pagedown, C-u, C-d", "Move a page"),
-    ("home, end", "First, last"),
-    ("ret", "Open the selected item"),
-    ("esc, C-c", "Close"),
-    ("C-g", "These keys"),
-];
-
-/// `C-g` over a picker: its keys, in a picker.
-pub fn keys_palette(theme: &Theme) -> Picker {
+/// `C-g` over a picker in `glos dashboard`: the picker's keys from `keymaps`, in a picker.
+pub fn keys_palette(theme: &Theme, keymaps: &Keymaps) -> Picker {
     let style = theme.get("ui.text.focus");
-    let items = KEYS
-        .iter()
+    let mut rows = vec![("type".to_string(), "Filter the list")];
+    rows.extend(
+        keymaps
+            .get(Context::Picker)
+            .help()
+            .into_iter()
+            .map(|(k, d, _)| (k, d)),
+    );
+    rows.push(("C-g".into(), "These keys"));
+    let items = rows
+        .into_iter()
         .map(|(k, d)| Item {
-            tags: vec![(k.to_string(), style)],
+            tags: vec![(k, style)],
             text: d.to_string(),
             target: Target::Nothing,
         })
@@ -154,39 +167,66 @@ impl Picker {
     }
 
     /// Helix's picker keys; `page` is how far a page key moves.
-    fn key_paged(&mut self, key: Key, page: usize) -> Outcome {
-        let ctrl = key.mods.contains(KeyModifiers::CONTROL);
-        let n = self.matched.len();
-        match key.code {
-            KeyCode::Esc => return Outcome::Msg(Msg::Close),
-            KeyCode::Char('c') if ctrl => return Outcome::Msg(Msg::Close),
-            KeyCode::Enter => {
+    /// Runs one of the picker's commands. `page` is how many rows a page moves.
+    fn run(&mut self, cmd: PickerCmd, page: usize) -> Outcome {
+        let n = self.matched.len().max(1);
+        let last = self.matched.len().saturating_sub(1);
+        match cmd {
+            PickerCmd::Close => return Outcome::Msg(Msg::Close),
+            PickerCmd::Choose => {
                 return Outcome::Msg(self.selected().cloned().map_or(Msg::Close, Msg::Open));
             }
-            KeyCode::BackTab | KeyCode::Up => self.cursor = (self.cursor + n.max(1) - 1) % n.max(1),
-            KeyCode::Char('p') if ctrl => self.cursor = (self.cursor + n.max(1) - 1) % n.max(1),
-            KeyCode::Tab | KeyCode::Down => self.cursor = (self.cursor + 1) % n.max(1),
-            KeyCode::Char('n') if ctrl => self.cursor = (self.cursor + 1) % n.max(1),
-            KeyCode::PageDown => self.cursor = (self.cursor + page).min(n.saturating_sub(1)),
-            KeyCode::Char('d') if ctrl => {
-                self.cursor = (self.cursor + page).min(n.saturating_sub(1))
-            }
-            KeyCode::PageUp => self.cursor = self.cursor.saturating_sub(page),
-            KeyCode::Char('u') if ctrl => self.cursor = self.cursor.saturating_sub(page),
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = n.saturating_sub(1),
-            KeyCode::Backspace => {
+            PickerCmd::Prev => self.cursor = (self.cursor + n - 1) % n,
+            PickerCmd::Next => self.cursor = (self.cursor + 1) % n,
+            PickerCmd::PageDown => self.cursor = (self.cursor + page).min(last),
+            PickerCmd::PageUp => self.cursor = self.cursor.saturating_sub(page),
+            PickerCmd::First => self.cursor = 0,
+            PickerCmd::Last => self.cursor = last,
+            PickerCmd::DeleteChar => {
                 self.query.pop();
                 self.refilter();
             }
-            KeyCode::Char(c) if !ctrl && !key.mods.contains(KeyModifiers::ALT) => {
-                self.query.push(c);
-                self.cursor = 0;
-                self.refilter();
-            }
-            _ => {}
         }
         Outcome::Consumed
+    }
+
+    pub fn command(&mut self, cmd: PickerCmd, cx: &Cx) -> Outcome {
+        let page = self.page(self.areas(cx.screen).0);
+        self.run(cmd, page)
+    }
+
+    /// A character typed into the filter.
+    pub fn text(&mut self, c: char) -> Outcome {
+        self.query.push(c);
+        self.cursor = 0;
+        self.refilter();
+        Outcome::Consumed
+    }
+
+    /// A key, through the picker's keys in `keymaps`: a command, or a character for the
+    /// filter. A command for anything other than the picker is `Ignored`, for the caller.
+    pub fn press(&mut self, keymaps: &Keymaps, key: Key, cx: &Cx) -> Outcome {
+        let page = self.page(self.areas(cx.screen).0);
+        self.press_paged(keymaps, key, page)
+    }
+
+    fn press_paged(&mut self, keymaps: &Keymaps, key: Key, page: usize) -> Outcome {
+        match keymaps.get(Context::Picker).get(key) {
+            Some(Node::Cmd(c)) => match c.action {
+                Action::Picker(cmd) => self.run(cmd, page),
+                _ => Outcome::Ignored,
+            },
+            Some(Node::Menu(_)) => Outcome::Consumed,
+            None => match key.char() {
+                Some(c) => self.text(c),
+                None => Outcome::Consumed,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn key_paged(&mut self, key: Key, page: usize) -> Outcome {
+        self.press_paged(&Keymaps::default(), key, page)
     }
 
     /// Where the picker and its preview go: 90% of the screen above the bottom two rows.
@@ -381,18 +421,9 @@ impl Picker {
 }
 
 impl Component for Picker {
-    fn key(&mut self, key: Key, cx: &Cx) -> Outcome {
-        let page = self.page(self.areas(cx.screen).0);
-        self.key_paged(key, page)
-    }
-
     /// The wheel moves; a click opens the item under it. The picker places itself on the
     /// screen, so `area` isn't used.
     fn mouse(&mut self, m: MouseEvent, _area: Rect, cx: &Cx) -> Outcome {
-        let step = |code| Key {
-            code,
-            mods: KeyModifiers::NONE,
-        };
         let (_, preview) = self.areas(cx.screen);
         if let Some(p) = preview
             && p.contains((m.column, m.row).into())
@@ -406,8 +437,8 @@ impl Component for Picker {
             return Outcome::Consumed;
         }
         match m.kind {
-            MouseEventKind::ScrollDown => self.key_paged(step(KeyCode::Down), 1),
-            MouseEventKind::ScrollUp => self.key_paged(step(KeyCode::Up), 1),
+            MouseEventKind::ScrollDown => self.run(PickerCmd::Next, 1),
+            MouseEventKind::ScrollUp => self.run(PickerCmd::Prev, 1),
             MouseEventKind::Down(MouseButton::Left) => {
                 let (list, _) = self.areas(cx.screen);
                 match self.target_at(list, m.column, m.row) {
@@ -478,6 +509,7 @@ pub fn preview_frame(buf: &mut Buffer, area: Rect, theme: &Theme) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     fn picker(paths: &[&str]) -> Picker {
         let items = paths
@@ -596,7 +628,7 @@ mod tests {
         p.key_paged(key(KeyCode::Tab), 10);
         assert_eq!(at(&p), Some(Target::Path("f02".into())));
         p.key_paged(ctrl('p'), 10);
-        p.key_paged(key(KeyCode::BackTab), 10);
+        p.key_paged(Key::parse("S-tab").unwrap(), 10);
         assert_eq!(at(&p), Some(Target::Path("f00".into())));
         p.key_paged(ctrl('d'), 10);
         assert_eq!(at(&p), Some(Target::Path("f10".into())));
@@ -690,11 +722,7 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         };
-        let key = |code| Key {
-            code,
-            mods: KeyModifiers::NONE,
-        };
-        assert_eq!(p.key(key(KeyCode::Down), &cx), Outcome::Consumed);
+        assert_eq!(p.command(PickerCmd::Next, &cx), Outcome::Consumed);
         assert_eq!(p.selected(), Some(&Target::Path("b".into())));
         let wheel = mouse(MouseEventKind::ScrollDown, 10, 5);
         assert_eq!(p.mouse(wheel, cx.screen, &cx), Outcome::Consumed);
@@ -708,6 +736,6 @@ mod tests {
         );
         let off = mouse(MouseEventKind::Down(MouseButton::Left), 0, 0);
         assert_eq!(p.mouse(off, cx.screen, &cx), Outcome::Consumed);
-        assert_eq!(p.key(key(KeyCode::Esc), &cx), Outcome::Msg(Msg::Close));
+        assert_eq!(p.command(PickerCmd::Close, &cx), Outcome::Msg(Msg::Close));
     }
 }

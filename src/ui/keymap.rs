@@ -21,6 +21,8 @@ pub enum Action {
     App(AppAction),
     /// A command for the focused file tree.
     Tree(super::tree::TreeCmd),
+    /// A command for the open picker.
+    Picker(super::picker::PickerCmd),
 }
 
 /// Commands that act on glos itself rather than one file's selection.
@@ -121,8 +123,9 @@ macro_rules! commands {
 }
 
 use super::folding::FoldKey as F;
+use super::picker::PickerCmd as P;
 use super::tree::TreeCmd as T;
-use Action::{App, Doc, NextChar, Tree};
+use Action::{App, Doc, NextChar, Picker, Tree};
 commands! {
     move_char_left, "Move left", Doc(c::move_char_left);
     move_char_right, "Move right", Doc(c::move_char_right);
@@ -259,6 +262,16 @@ commands! {
     tree_search_prev, "Previous match", Tree(T::SearchNext(false));
     tree_unfocus, "Back to the file", Tree(T::Unfocus);
     tree_close, "Close the tree", Tree(T::Close);
+    // Pickers, the palette among them.
+    picker_next, "Next item", Picker(P::Next);
+    picker_prev, "Previous item", Picker(P::Prev);
+    picker_page_down, "Move a page down", Picker(P::PageDown);
+    picker_page_up, "Move a page up", Picker(P::PageUp);
+    picker_first, "First item", Picker(P::First);
+    picker_last, "Last item", Picker(P::Last);
+    picker_choose, "Open the selected item", Picker(P::Choose);
+    picker_close, "Close", Picker(P::Close);
+    picker_delete_char, "Delete the last character of the filter", Picker(P::DeleteChar);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
     // Folding: Vim's keys, in Helix's view menu.
     fold_open, "Open the fold at the cursor", App(AppAction::Fold(F::Open));
@@ -304,6 +317,13 @@ impl From<KeyEvent> for Key {
         // Shift is already in the character (`G`, `%`), as Helix normalises it.
         if matches!(e.code, KeyCode::Char(_)) {
             mods.remove(KeyModifiers::SHIFT);
+        }
+        // Terminals send shift-tab as its own key. Helix writes it `S-tab`.
+        if e.code == KeyCode::BackTab {
+            return Key {
+                code: KeyCode::Tab,
+                mods: mods | KeyModifiers::SHIFT,
+            };
         }
         Key { code: e.code, mods }
     }
@@ -658,6 +678,21 @@ fn normal_defs() -> Vec<Def> {
     ]
 }
 
+/// A picker's keys, which are Helix's. Characters that aren't bound filter the list.
+fn picker_defs() -> Vec<Def> {
+    vec![
+        cmd("down|tab|C-n", "picker_next"),
+        cmd("up|S-tab|C-p", "picker_prev"),
+        cmd("pagedown|C-d", "picker_page_down"),
+        cmd("pageup|C-u", "picker_page_up"),
+        cmd("home", "picker_first"),
+        cmd("end", "picker_last"),
+        cmd("ret", "picker_choose"),
+        cmd("esc|C-c", "picker_close"),
+        cmd("backspace", "picker_delete_char"),
+    ]
+}
+
 /// The file tree's keys. `h` and `l` follow Helix's file explorer and yazi.
 fn tree_defs() -> Vec<Def> {
     vec![
@@ -740,6 +775,16 @@ impl Context {
         }
     }
 
+    /// What typing does, in a context where an unbound character is text.
+    pub fn text(self) -> Option<&'static str> {
+        match self {
+            Context::Picker => Some("Filter the list"),
+            Context::Prompt => Some("Write the command or pattern"),
+            Context::BoxInsert => Some("Write the comment; it's saved as you type"),
+            _ => None,
+        }
+    }
+
     fn defs(self) -> Vec<Def> {
         match self {
             Context::Normal => normal_defs(),
@@ -752,7 +797,8 @@ impl Context {
                 select
             }
             Context::Tree => tree_defs(),
-            Context::Picker | Context::Prompt | Context::BoxInsert | Context::BoxNormal => vec![],
+            Context::Picker => picker_defs(),
+            Context::Prompt | Context::BoxInsert | Context::BoxNormal => vec![],
         }
     }
 }
@@ -790,6 +836,8 @@ mod tests {
         }
         let shifted = Key::from(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
         assert_eq!(shifted, Key::parse("G").unwrap());
+        let backtab = Key::from(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(backtab, Key::parse("S-tab").unwrap(), "shift-tab is S-tab");
     }
 
     #[test]

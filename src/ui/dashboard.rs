@@ -130,6 +130,7 @@ pub fn run(
             .unwrap_or(0)
     };
     let mut seen = version();
+    let keymaps = super::keymap::Keymaps::default();
     let mut screen = Rect::default();
     loop {
         terminal.draw(|f| {
@@ -168,11 +169,11 @@ pub fn run(
                     if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
                         keys = match keys {
                             Some(_) => None,
-                            None => Some(picker::keys_palette(theme)),
+                            None => Some(picker::keys_palette(theme, &keymaps)),
                         };
                         continue;
                     }
-                    keys.as_mut().unwrap_or(&mut list).key(key, &cx)
+                    keys.as_mut().unwrap_or(&mut list).press(&keymaps, key, &cx)
                 }
                 Event::Mouse(m) => keys.as_mut().unwrap_or(&mut list).mouse(m, screen, &cx),
                 _ => Outcome::Consumed,

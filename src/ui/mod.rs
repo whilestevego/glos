@@ -1820,16 +1820,16 @@ impl App {
             }
             return None;
         }
-        // The open picker or the command line takes every key; then the editor's own state (a
-        // pending `f`, the comment box, a count) does, and then the keymap.
+        // The command line takes every key; then the editor's own state (a pending `f`, the
+        // comment box, a count) does, and then the keymap.
         let (context, _) = self.contexts();
         let editor = matches!(
             context,
             Context::Normal | Context::Select | Context::BoxInsert | Context::BoxNormal
         );
         let cx = cx!(self);
-        let outcome = if let Some(p) = self.pickers.last_mut() {
-            p.key(key, &cx)
+        let outcome = if !self.pickers.is_empty() {
+            Outcome::Ignored
         } else if let Some(p) = &mut self.prompt {
             p.key(key, &cx)
         } else {
@@ -1900,6 +1900,13 @@ impl App {
             return None;
         }
         let Some(keymap) = self.root_for(self.pending.first().unwrap_or(&key)) else {
+            // Where text goes, an unbound character is typed.
+            if self.pending.is_empty()
+                && context.text().is_some()
+                && let Some(c) = key.char()
+            {
+                return self.text(context, c);
+            }
             // Unbound: drop the sequence, as Helix does.
             self.pending.clear();
             self.count = None;
@@ -1974,6 +1981,16 @@ impl App {
             .find(|m| m.get(*first).is_some())
     }
 
+    /// A character typed where text goes in `context`.
+    fn text(&mut self, context: Context, c: char) -> Option<AppAction> {
+        if context == Context::Picker
+            && let Some(p) = self.pickers.last_mut()
+        {
+            p.text(c);
+        }
+        None
+    }
+
     /// What a component asked for.
     fn apply(&mut self, msg: Msg) -> Option<AppAction> {
         match msg {
@@ -2017,8 +2034,11 @@ impl App {
         let chosen = self.pickers.pop();
         let under = std::mem::take(&mut self.pickers);
         match t {
+            // A command chosen in the palette runs where the palette was opened, so a picker
+            // it covered comes back first.
             Target::Command(name) => {
                 let command = keymap::command(name)?;
+                self.pickers = under;
                 self.pending.clear();
                 return self.execute(command);
             }
@@ -2059,9 +2079,6 @@ impl App {
                 .map(|(k, d)| (k.to_string(), *d, None))
                 .collect()
         };
-        if !self.pickers.is_empty() {
-            return ("Picker", fixed(picker::KEYS));
-        }
         if let Some(p) = &self.prompt {
             let mut rows = vec![
                 ("type", "Write the command or pattern"),
@@ -2094,6 +2111,9 @@ impl App {
         }
         let (context, fallback) = self.contexts();
         let mut rows = vec![];
+        if let Some(doc) = context.text() {
+            rows.push(("type".into(), doc, None));
+        }
         if context == Context::BoxNormal {
             rows.extend(fixed(&[
                 ("ret", "Save the comment"),
@@ -2183,6 +2203,13 @@ impl App {
             Action::Tree(c) => {
                 let cx = cx!(self);
                 match self.tree.as_mut().map(|t| t.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
+            Action::Picker(c) => {
+                let cx = cx!(self);
+                match self.pickers.last_mut().map(|p| p.command(c, &cx)) {
                     Some(Outcome::Msg(msg)) => self.apply(msg),
                     _ => None,
                 }
