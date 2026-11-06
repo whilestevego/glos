@@ -35,6 +35,23 @@ pub struct Row {
     pub threads: usize,
 }
 
+/// Where the tree was when a search started, so `esc` can put it back.
+#[derive(Clone)]
+pub struct Origin {
+    cursor: usize,
+    top: usize,
+    collapsed: HashSet<String>,
+}
+
+/// A search pattern, with the smart case of the code's search: it ignores case unless it has
+/// an uppercase letter.
+pub fn search_regex(query: &str) -> Option<regex::Regex> {
+    regex::RegexBuilder::new(query)
+        .case_insensitive(!query.chars().any(char::is_uppercase))
+        .build()
+        .ok()
+}
+
 pub struct Tree {
     pub rows: Vec<Row>,
     /// The selected row, an index into `rows`. It's always on a visible row.
@@ -207,6 +224,39 @@ impl Tree {
         }
     }
 
+    pub fn origin(&self) -> Origin {
+        Origin {
+            cursor: self.cursor,
+            top: self.top,
+            collapsed: self.collapsed.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, o: Origin) {
+        (self.cursor, self.top, self.collapsed) = (o.cursor, o.top, o.collapsed);
+    }
+
+    /// Moves the cursor to the next row whose name matches, or the previous one, wrapping at
+    /// the ends. Rows inside closed folders count, and the folders holding the match open.
+    /// Only the name is matched, so `src` finds the `src/` folder and not the files in it.
+    /// Returns whether anything matched.
+    pub fn search(&mut self, regex: &regex::Regex, forward: bool) -> bool {
+        let n = self.rows.len();
+        let found = (1..=n)
+            .map(|k| {
+                if forward {
+                    (self.cursor + k) % n
+                } else {
+                    (self.cursor + n - k) % n
+                }
+            })
+            .find(|&i| regex.is_match(&self.rows[i].name));
+        if let Some(i) = found {
+            self.go(i);
+        }
+        found.is_some()
+    }
+
     pub fn selected(&self) -> Option<&str> {
         self.rows.get(self.cursor)?.file()
     }
@@ -305,6 +355,10 @@ impl Component for Tree {
             }
             (KeyCode::Esc, _) => self.focused = false,
             (_, Some('q')) => return Outcome::Msg(Msg::CloseTree),
+            (_, Some('/')) => return Outcome::Msg(Msg::TreeSearch(true)),
+            (_, Some('?')) => return Outcome::Msg(Msg::TreeSearch(false)),
+            (_, Some('n')) => return Outcome::Msg(Msg::TreeSearchNext(true)),
+            (_, Some('N')) => return Outcome::Msg(Msg::TreeSearchNext(false)),
             _ => {}
         }
         Outcome::Consumed

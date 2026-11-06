@@ -2,7 +2,7 @@
 //! `#[h|]#ello` notation), the view and the screen checked. Screen snapshots lock the parts that
 //! must look like Helix.
 
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use glos_helix::test::plain;
@@ -1771,6 +1771,143 @@ fn a_rebuild_keeps_closed_folders_closed() {
     let tree = t.app.tree.as_ref().unwrap();
     assert!(tree.collapsed.contains("b/"));
     assert!(!t.shows("y.rs"), "{}", t.screen());
+}
+
+/// A focused tree over `README.md`, `src/main.rs`, `src/ui/mod.rs`, `src/ui/view.rs` and
+/// `tests/mcp.rs`.
+fn nested_tree() -> T {
+    let mut t = T::folders(|_, n| {
+        for f in [
+            "README.md",
+            "src/main.rs",
+            "src/ui/mod.rs",
+            "src/ui/view.rs",
+            "tests/mcp.rs",
+        ] {
+            let p = n.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x\n").unwrap();
+        }
+    });
+    t.keys("space e");
+    t
+}
+
+impl T {
+    /// The path under the tree's cursor, a folder's included.
+    fn tree_at(&self) -> String {
+        let tree = self.app.tree.as_ref().unwrap();
+        tree.rows[tree.cursor].path.clone()
+    }
+
+    fn closed(&mut self, folders: &[&str]) -> &mut Self {
+        let tree = self.app.tree.as_mut().unwrap();
+        tree.collapsed = folders.iter().map(|f| f.to_string()).collect();
+        self.draw();
+        self
+    }
+}
+
+#[test]
+fn searching_the_tree_jumps_as_you_type() {
+    let mut t = nested_tree();
+    assert_eq!(t.tree_at(), "README.md");
+    t.keys("/");
+    assert!(t.shows("search:"));
+    t.typed("m");
+    assert_eq!(t.tree_at(), "src/main.rs", "the first name with an m");
+    t.typed("o");
+    assert_eq!(t.tree_at(), "src/ui/mod.rs");
+    // esc puts the cursor back.
+    t.keys("esc");
+    assert_eq!(t.tree_at(), "README.md");
+    assert!(t.app.prompt.is_none());
+}
+
+#[test]
+fn tree_search_matches_only_the_shown_name() {
+    let mut t = nested_tree();
+    t.keys("/").typed("src").keys("ret");
+    assert_eq!(t.tree_at(), "src/");
+    t.keys("n");
+    assert_eq!(t.tree_at(), "src/", "no file's name has src in it");
+}
+
+#[test]
+fn tree_search_opens_closed_folders_holding_the_match() {
+    let mut t = nested_tree();
+    t.closed(&["src/", "src/ui/", "tests/"]);
+    t.keys("/").typed("view").keys("ret");
+    assert_eq!(t.tree_at(), "src/ui/view.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert_eq!(
+        tree.collapsed,
+        HashSet::from(["tests/".to_string()]),
+        "folders without a match stay closed"
+    );
+    assert!(t.shows("view.rs"), "{}", t.screen());
+    // Typing past an earlier match doesn't leave its folders open.
+    t.closed(&["src/", "src/ui/", "tests/"]);
+    t.app.tree.as_mut().unwrap().select("README.md");
+    t.keys("/").typed("m");
+    assert_eq!(t.tree_at(), "src/main.rs");
+    t.typed("c");
+    assert_eq!(t.tree_at(), "tests/mcp.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert_eq!(
+        tree.collapsed,
+        HashSet::from(["src/".to_string(), "src/ui/".to_string()])
+    );
+    t.keys("esc");
+    assert_eq!(
+        t.app.tree.as_ref().unwrap().collapsed.len(),
+        3,
+        "esc closes them again"
+    );
+}
+
+#[test]
+fn n_and_shift_n_step_through_tree_matches_and_wrap() {
+    let mut t = nested_tree();
+    t.keys("/").typed("\\.rs$").keys("ret");
+    assert_eq!(t.tree_at(), "src/main.rs");
+    t.keys("n");
+    assert_eq!(t.tree_at(), "src/ui/mod.rs");
+    t.keys("n n");
+    assert_eq!(t.tree_at(), "tests/mcp.rs");
+    t.keys("n");
+    assert_eq!(t.tree_at(), "src/main.rs", "wraps to the top");
+    t.keys("N");
+    assert_eq!(t.tree_at(), "tests/mcp.rs", "and back to the bottom");
+}
+
+#[test]
+fn tree_search_backwards_and_without_a_match() {
+    let mut t = nested_tree();
+    t.keys("?").typed("rs");
+    assert_eq!(
+        t.tree_at(),
+        "tests/mcp.rs",
+        "backwards from the top wraps to the end"
+    );
+    t.keys("esc");
+    t.keys("/").typed("nothing");
+    assert_eq!(t.tree_at(), "README.md");
+    assert_eq!(t.status(), Some("No matches"));
+    t.keys("ret");
+    assert_eq!(t.tree_at(), "README.md");
+}
+
+#[test]
+fn a_search_in_the_code_repeats_in_the_tree() {
+    let mut t = nested_tree();
+    t.keys("esc / v i e w ret");
+    assert_eq!(t.app.last_search.as_deref(), Some("view"));
+    t.keys("space e n");
+    assert_eq!(t.tree_at(), "src/ui/view.rs");
+    // And the other way round: a tree search is the code's next search.
+    t.keys("/").typed("x").keys("ret");
+    assert_eq!(t.app.last_search.as_deref(), Some("x"));
 }
 
 #[test]
