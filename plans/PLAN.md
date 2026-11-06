@@ -189,6 +189,11 @@ Scopes, switched with `space o` or `:scope`, which you can combine with a files 
 - **Per commit** (git only): step through the branch's commits with `]C` / `[C`.
 - **Files filter:** by path or glob, or only files with open threads.
 
+In every view, a changed line has a background tinted toward the theme's addition or removal
+colour, and the words that changed within it get a stronger tint, as on GitHub and in `delta`.
+In the whole-file view, added and modified lines take the addition tint, since they're the new
+text. `DIFF-HIGHLIGHT.md` has the details.
+
 Navigation: the changed-file picker (`space g`) is primary; `gn` / `gp` step through changed files;
 `space f` opens any file in the repo, read-only, for context; `space e` toggles a file tree with
 change counts and thread badges. Threads are drawn inline under their lines as virtual text,

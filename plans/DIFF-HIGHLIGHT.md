@@ -131,3 +131,27 @@ One PR on a `diff-highlight` branch. Each commit passes `cargo fmt`, `clippy` an
 
 - Detecting moved lines (`diff --color-moved`).
 - Asking the terminal for its background colour (OSC 11) to tint themes that don't set one.
+
+## As built
+
+The work follows the plan, with these differences.
+
+Steps 3 and 4 went in as one commit. On its own, `diff_words.rs` had no callers, so clippy
+warned about dead code.
+
+A changed range is trimmed of whitespace at both ends. Otherwise an inserted `b, ` would end in
+a highlighted space, which shows nothing. A change that was only whitespace, such as
+re-indenting, gets the line tint and no words.
+
+Changes with only whitespace between them join into one range, so `two three` → `TWO THREE`
+reads as one change and not two.
+
+When a hunk's two sides differ in length, a removed line pairs with an added one only when at
+least half their words are shared (`MIN_SIMILARITY`).
+
+The 18% and 35% amounts haven't been tuned by eye yet. The tests check that the tints differ
+from the background and from each other, but not how they look.
+
+Each `File` keeps its changed words as byte ranges within each line (`File::words`). The
+whole-file view works them out in `File::change`, and the unified and split views work them out
+in `diffview::build`, alongside the hunks they already compute there.

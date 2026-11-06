@@ -171,6 +171,21 @@ by itself, and the agent will ask you to run `glos` instead.
 You can put your own themes in `~/.config/glos/themes/`, in Helix's format. Folds use
 `ui.virtual.fold` if your theme sets it, and the current-line colour otherwise.
 
+Changed lines get a tinted background, and the words that changed within them get a stronger
+tint. Helix themes have no keys for these, so glos works them out from your theme. It mixes
+`ui.background` toward `diff.plus` or `diff.minus`. A theme can set its own with four keys that
+Helix ignores:
+
+| Key | Used for |
+|---|---|
+| `diff.plus.line` | Added and modified lines |
+| `diff.minus.line` | Removed lines |
+| `diff.plus.word` | Changed words in an added line |
+| `diff.minus.word` | Changed words in a removed line |
+
+A theme that leaves `ui.background` unset uses the terminal's own background, which glos can't
+know. Changed lines in such a theme are marked only in the gutter, unless it sets these keys.
+
 ## Other commands
 
 | Command | What it does |
