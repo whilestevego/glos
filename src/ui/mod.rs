@@ -893,14 +893,7 @@ impl App {
         self.reanchor(false);
         self.ensure_alt();
         if let Some(t) = &self.tree {
-            let (focused, top) = (t.focused, t.top);
-            let selected = t.selected().map(str::to_string);
-            let mut t = tree::Tree::new(self.tree_entries());
-            (t.focused, t.top) = (focused, top);
-            if let Some(p) = selected {
-                t.select(&p);
-            }
-            self.tree = Some(t);
+            self.tree = Some(t.rebuilt(self.tree_entries()));
         }
     }
 

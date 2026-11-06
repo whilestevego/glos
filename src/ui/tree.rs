@@ -48,6 +48,9 @@ pub struct Tree {
     pub collapsed: HashSet<String>,
     /// Set when the cursor moves, so that the next draw scrolls to show it.
     follow: bool,
+    /// The file on screen when the tree was last drawn. When it changes, the folders holding
+    /// the new one open.
+    shown: String,
 }
 
 impl Row {
@@ -108,7 +111,25 @@ impl Tree {
             top: 0,
             collapsed: HashSet::new(),
             follow: true,
+            shown: String::new(),
         }
+    }
+
+    /// A new tree over `entries` that keeps this one's focus, scroll, cursor and closed
+    /// folders. Closed folders that are gone are dropped.
+    pub fn rebuilt(&self, entries: Vec<Entry>) -> Tree {
+        let mut t = Tree::new(entries);
+        t.collapsed = self
+            .collapsed
+            .iter()
+            .filter(|c| t.rows.iter().any(|r| &&r.path == c))
+            .cloned()
+            .collect();
+        (t.focused, t.top, t.shown) = (self.focused, self.top, self.shown.clone());
+        if let Some(r) = self.rows.get(self.cursor) {
+            t.select(&r.path);
+        }
+        t
     }
 
     /// The rows not inside a closed folder, as indexes into `rows`.
@@ -120,10 +141,15 @@ impl Tree {
 
     /// Moves the cursor to row `i`, opening the folders it's in.
     fn go(&mut self, i: usize) {
-        let row = &self.rows[i];
-        self.collapsed.retain(|c| !row.inside(c));
+        self.reveal(i);
         self.cursor = i;
         self.follow = true;
+    }
+
+    /// Opens the folders that row `i` is in.
+    fn reveal(&mut self, i: usize) {
+        let row = &self.rows[i];
+        self.collapsed.retain(|c| !row.inside(c));
     }
 
     /// Puts the cursor on the row for `path`, a file or a folder, if it's listed. The folders
@@ -284,8 +310,9 @@ impl Component for Tree {
         Outcome::Consumed
     }
 
-    /// A click anywhere in the tree focuses it, and a click on a file also opens that file.
-    /// The wheel scrolls the rows without moving the cursor.
+    /// A click anywhere in the tree focuses it. A click on a file also opens that file, and a
+    /// click on a folder opens or closes it. The wheel scrolls the rows without moving the
+    /// cursor.
     fn mouse(&mut self, m: MouseEvent, area: Rect, _cx: &Cx) -> Outcome {
         if !area.contains((m.column, m.row).into()) {
             return Outcome::Ignored;
@@ -293,13 +320,12 @@ impl Component for Tree {
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focused = true;
-                if let Some(p) = self
-                    .row_at(area, m.row)
-                    .and_then(|i| self.rows[i].file())
-                    .map(str::to_string)
-                {
-                    self.select(&p);
-                    return Outcome::Msg(Msg::Open(Target::Path(p)));
+                if let Some(i) = self.row_at(area, m.row) {
+                    self.go(i);
+                    match self.rows[i].file() {
+                        Some(p) => return Outcome::Msg(Msg::Open(Target::Path(p.to_string()))),
+                        None => self.toggle(i),
+                    }
                 }
             }
             MouseEventKind::ScrollDown => {
@@ -312,9 +338,19 @@ impl Component for Tree {
         Outcome::Consumed
     }
 
-    /// Draws the tree in `area`, the file on screen marked.
+    /// Draws the tree in `area`, the file on screen marked. When that file has changed since
+    /// the last draw, the folders holding it open. If the tree isn't focused, its cursor moves
+    /// to the file too. Doing this here covers every way of changing the file.
     fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
         let current = cx.state.map_or("", |s| s.main_path());
+        if current != self.shown {
+            self.shown = current.to_string();
+            match self.rows.iter().position(|r| r.path == current) {
+                Some(i) if self.focused => self.reveal(i),
+                Some(i) => self.go(i),
+                None => {}
+            }
+        }
         self.render_in(buf, area, current, cx.theme);
     }
 }
@@ -433,6 +469,24 @@ mod tests {
         assert_eq!((src.added, src.removed, src.threads), (9, 3, 3), "totals");
         let ui = &t.rows[3];
         assert_eq!((ui.added, ui.removed, ui.threads), (7, 2, 2));
+    }
+
+    #[test]
+    fn a_rebuild_keeps_closed_folders_and_the_cursor() {
+        let mut t = nested();
+        t.collapsed
+            .extend(["src/ui/".to_string(), "tests/".to_string()]);
+        t.select("src/");
+        t.focused = false;
+        // tests/ is gone from the new tree, so it's no longer closed.
+        let t = t.rebuilt(vec![
+            e("src/main.rs", 0, 0, 0),
+            e("src/ui/mod.rs", 0, 0, 0),
+            e("z.rs", 0, 0, 0),
+        ]);
+        assert_eq!(t.collapsed, HashSet::from(["src/ui/".to_string()]));
+        assert_eq!(at(&t), "src/");
+        assert!(!t.focused);
     }
 
     #[test]
@@ -598,6 +652,10 @@ mod tests {
             Outcome::Consumed,
             "a folder"
         );
+        assert!(t.collapsed.contains("src/"), "a click closes a folder");
+        assert_eq!(at(&t), "src/");
+        t.mouse(click(3, 2), area, &cx);
+        assert!(t.collapsed.is_empty(), "and opens it again");
         assert_eq!(
             t.mouse(click(30, 1), area, &cx),
             Outcome::Ignored,

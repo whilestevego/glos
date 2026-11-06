@@ -1708,6 +1708,71 @@ fn filtering_files() {
     assert!(t.said().starts_with("Bad glob"));
 }
 
+/// Two folders, `a/` and `b/`, with a file each, and the tree open but not focused.
+fn two_folder_tree() -> T {
+    let mut t = T::folders(|o, n| {
+        for d in ["a", "b"] {
+            std::fs::create_dir_all(o.join(d)).unwrap();
+            std::fs::create_dir_all(n.join(d)).unwrap();
+            std::fs::write(n.join(d).join("x.rs"), format!("{d}\n")).unwrap();
+        }
+    });
+    t.keys("space e esc");
+    t
+}
+
+#[test]
+fn opening_a_file_in_a_closed_folder_opens_the_folder() {
+    let mut t = two_folder_tree();
+    assert_eq!(t.path(), "a/x.rs");
+    t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
+    t.draw();
+    assert_eq!(t.screen().matches("x.rs").count(), 2, "{}", t.screen());
+    t.keys("g n");
+    assert_eq!(t.path(), "b/x.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.is_empty(), "b/ opened");
+    assert_eq!(
+        tree.selected(),
+        Some("b/x.rs"),
+        "the unfocused tree follows"
+    );
+    // Through a picker too.
+    t.app.tree.as_mut().unwrap().collapsed.insert("a/".into());
+    t.keys("space g").typed("a/x").keys("ret");
+    assert_eq!(t.path(), "a/x.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.is_empty());
+    assert_eq!(tree.selected(), Some("a/x.rs"));
+}
+
+#[test]
+fn a_focused_tree_keeps_its_cursor_when_the_file_changes() {
+    let mut t = two_folder_tree();
+    t.keys("space e");
+    // The file changes without the tree's help, as it does after a suggestion or a jump.
+    t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
+    t.app.open(Target::Path("b/x.rs".into()));
+    t.draw();
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.is_empty(), "the file's folder opens");
+    assert_eq!(tree.selected(), Some("a/x.rs"), "the cursor stays");
+}
+
+#[test]
+fn a_rebuild_keeps_closed_folders_closed() {
+    let mut t = two_folder_tree();
+    t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
+    let new = t._dir.path().join("new");
+    std::fs::write(new.join("b/y.rs"), "y\n").unwrap();
+    t.app.files_changed();
+    t.draw();
+    assert_eq!(t.app.state.source.changes.len(), 3);
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.contains("b/"));
+    assert!(!t.shows("y.rs"), "{}", t.screen());
+}
+
 #[test]
 fn file_tree() {
     let mut t = T::folders(|o, n| {
