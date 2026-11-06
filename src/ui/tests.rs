@@ -1564,6 +1564,101 @@ fn unified_view_screen() {
     assert_ne!(fg("diff.minus.gutter"), fg("diff.plus.gutter"));
 }
 
+impl T {
+    /// A theme key's background colour.
+    fn bg(&self, key: &str) -> Option<Color> {
+        self.app.theme.get(key).bg
+    }
+
+    /// The background of the cell at (x, y), `None` for the terminal's own.
+    fn cell_bg(&self, x: u16, y: u16) -> Option<Color> {
+        Some(self.cell(x, y).bg).filter(|c| *c != Color::Reset)
+    }
+}
+
+#[test]
+fn changed_lines_are_tinted_in_the_file_view() {
+    let mut t = T::files(OLD, NEW);
+    let plus = t.bg("diff.plus.line");
+    assert!(plus.is_some() && plus != t.bg("ui.background"));
+    let x0 = t.app.main_file().gutter_width() as u16;
+    // Lines 2 and 3 are modified and added; both are the new text, so both take the plus tint.
+    for y in [1, 2] {
+        assert_eq!(t.cell_bg(x0 + 4, y), plus, "line {}", y + 1);
+        assert_eq!(
+            t.cell_bg(71, y),
+            plus,
+            "the tint reaches the edge on line {}",
+            y + 1
+        );
+        assert_ne!(t.cell_bg(0, y), plus, "the gutter isn't tinted");
+        assert_ne!(t.cell_bg(x0 - 1, y), plus, "nor the diff sign");
+    }
+    for y in [0, 3] {
+        assert_ne!(t.cell_bg(x0 + 1, y), plus, "line {} is unchanged", y + 1);
+    }
+    // The cursor opens on line 2, and is drawn over the tint, as is a selection. A theme draws
+    // them with a background of their own, or by reversing the colours.
+    let drawn_over = |t: &T, x, style: ratatui::style::Style| {
+        let cell = t.cell(x, 1);
+        match style.bg {
+            Some(bg) => cell.bg == bg,
+            None => cell.modifier.contains(style.add_modifier),
+        }
+    };
+    let (_, selection, _, cursor) = view::selection_styles(&t.app.theme, "normal");
+    assert!(cursor.bg.is_some() || !cursor.add_modifier.is_empty());
+    assert!(drawn_over(&t, x0, cursor));
+    t.keys("x");
+    assert!(selection.bg.is_some());
+    assert!(drawn_over(&t, x0 + 4, selection));
+}
+
+#[test]
+fn removed_and_added_lines_are_tinted_in_the_unified_and_split_views() {
+    let mut t = T::files(OLD, NEW);
+    let (plus, minus) = (t.bg("diff.plus.line"), t.bg("diff.minus.line"));
+    assert_ne!(plus, minus);
+    t.keys("space v u");
+    let x0 = t.app.main_file().gutter_width() as u16;
+    // Rows: same, removed, added, added, same, removed, removed.
+    let rows: Vec<_> = (0..7).map(|y| t.cell_bg(70, y)).collect();
+    let none = t.cell_bg(70, 0);
+    assert_eq!(rows, [none, minus, plus, plus, none, minus, minus]);
+    assert_ne!(t.cell_bg(1, 1), minus, "the gutter isn't tinted");
+    assert_eq!(
+        t.cell_bg(x0 + 2, 5),
+        minus,
+        "an empty removed line is tinted too"
+    );
+    // Side by side: removals on the left, additions on the right, and filler rows plain.
+    t.keys("space v s");
+    let right = t.screen().lines().nth(1).unwrap().rfind("2 ▍").unwrap() as u16;
+    assert_eq!(t.cell_bg(20, 1), minus, "{}", t.screen());
+    assert_eq!(t.cell_bg(right + 8, 1), plus);
+    assert_ne!(t.cell_bg(20, 2), minus, "a filler row");
+    assert_eq!(t.cell_bg(right + 8, 2), plus);
+}
+
+#[test]
+fn folds_are_not_tinted() {
+    let old = lines(20);
+    let new = old.replace("line 10\n", "line ten\n");
+    let t = T::files(&old, &new);
+    let fold = t
+        .screen()
+        .lines()
+        .position(|l| l.contains("↕"))
+        .expect("a fold") as u16;
+    assert_ne!(t.cell_bg(30, fold), t.bg("diff.plus.line"));
+    let changed = t
+        .screen()
+        .lines()
+        .position(|l| l.contains("line ten"))
+        .unwrap() as u16;
+    assert_eq!(t.cell_bg(30, changed), t.bg("diff.plus.line"));
+}
+
 #[test]
 fn split_view_screen() {
     let mut t = T::files(OLD, NEW);

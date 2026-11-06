@@ -505,6 +505,9 @@ pub fn draw(
         theme.get("diff.minus.gutter"),
         theme.get("diff.delta.gutter"),
     );
+    // A theme without an RGB background has no tints: their styles are empty.
+    let tint_of = |key| Some(theme.get(key)).filter(|s: &Style| s.bg.is_some());
+    let (plus_line, minus_line) = (tint_of("diff.plus.line"), tint_of("diff.minus.line"));
 
     let x0 = area.x + gutter;
     let width = area.width.saturating_sub(gutter);
@@ -558,11 +561,28 @@ pub fn draw(
             .iter()
             .find(|(s, e, _)| *s <= line && line <= *e)
             .map(|m| m.2);
+        // A changed line's background. In the whole-file view the added and modified lines
+        // are tinted as additions, since they're the new text, and removed lines aren't shown.
+        let tint = match kind {
+            Some(Row::Added(_)) => plus_line,
+            Some(Row::Removed(_)) => minus_line,
+            Some(Row::Line(_)) | None => file
+                .hunks
+                .get(hunk_i)
+                .filter(|h| h.after.contains(&l))
+                .and(plus_line),
+            Some(_) => None,
+        };
         let fold = kind.filter(|k| matches!(k, Row::Fold { .. }));
         let gutter_row = |buf: &mut Buffer, row: usize, y: u16| {
             // A fold is a band across the whole view, gutter and all.
             if fold.is_some() {
                 buf.set_style(Rect::new(area.x, y, area.width, 1), band);
+            }
+            // The tint fills the text area past the end of the line, so a change reads as a
+            // band. The gutter isn't tinted.
+            if let Some(t) = tint {
+                buf.set_style(Rect::new(x0, y, width, 1), t);
             }
             if main.is_none() || gutter == 0 {
                 return;
@@ -630,6 +650,10 @@ pub fn draw(
             let mut style = text_style;
             if let Some((_, s)) = spans.get(span) {
                 style = style.patch(*s);
+            }
+            // The tint sits behind the selections and the cursor, which are drawn over it.
+            if let Some(t) = tint {
+                style = style.patch(t);
             }
             for (i, (from, to, cur)) in ranges.iter().enumerate() {
                 if *from <= ch && ch < *to {
