@@ -1,14 +1,13 @@
 //! The command line while you type into it: `:` commands with Helix's tab completion, `/` and `?`
 //! searches, and the regex prompts (`s`, `S`, `K`, `A-K`).
 
-use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{MouseEvent, MouseEventKind};
 use glos_helix::{commands, text::Selection};
 use ratatui::{buffer::Buffer, layout::Rect};
 use unicode_width::UnicodeWidthStr;
 
 use super::{
     component::{Component, Cx, Msg, Outcome},
-    keymap::Key,
     view::clean,
 };
 use crate::theme::Theme;
@@ -112,6 +111,17 @@ pub fn completions(line: &str) -> (usize, Vec<(String, &'static str)>) {
             )
         }
     }
+}
+
+/// What the command line's keys do. `keymap.rs` binds them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PromptCmd {
+    Submit,
+    Cancel,
+    /// `tab` (`true`) or `S-tab`: the next or previous `:` completion.
+    Complete(bool),
+    /// `backspace`; on an empty line, it cancels.
+    DeleteChar,
 }
 
 pub enum PromptKind {
@@ -234,16 +244,16 @@ impl Prompt {
 }
 
 impl Component for Prompt {
-    /// Every key is the prompt's while it's open. What it does to the file (previewing a search,
+    type Cmd = PromptCmd;
+
+    /// Runs one of the command line's commands. What it does to the file (previewing a search,
     /// putting the selection back, running the line) is `App`'s.
-    fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
-        let ctrl = key.mods.contains(KeyModifiers::CONTROL);
+    fn command(&mut self, cmd: PromptCmd, _cx: &Cx) -> Outcome {
         self.scrolled = None;
-        match key.code {
-            KeyCode::Esc => Outcome::Msg(Msg::CancelPrompt),
-            KeyCode::Char('c') if ctrl => Outcome::Msg(Msg::CancelPrompt),
-            KeyCode::Enter => Outcome::Msg(Msg::SubmitPrompt),
-            KeyCode::Tab | KeyCode::BackTab if matches!(self.kind, PromptKind::Command) => {
+        match cmd {
+            PromptCmd::Cancel => Outcome::Msg(Msg::CancelPrompt),
+            PromptCmd::Submit => Outcome::Msg(Msg::SubmitPrompt),
+            PromptCmd::Complete(forward) if matches!(self.kind, PromptKind::Command) => {
                 // Helix's completion: each tab shows the next match for what was typed.
                 let typed = match &self.completion {
                     Some((t, _)) => t.clone(),
@@ -254,35 +264,33 @@ impl Component for Prompt {
                     return Outcome::Consumed;
                 }
                 let n = items.len();
-                let back = key.code == KeyCode::BackTab || key.mods.contains(KeyModifiers::SHIFT);
-                let i = match (&self.completion, back) {
-                    (None, true) => n - 1,
-                    (None, false) => 0,
-                    (Some((_, i)), true) => (i + n - 1) % n,
-                    (Some((_, i)), false) => (i + 1) % n,
+                let i = match (&self.completion, forward) {
+                    (None, false) => n - 1,
+                    (None, true) => 0,
+                    (Some((_, i)), false) => (i + n - 1) % n,
+                    (Some((_, i)), true) => (i + 1) % n,
                 };
                 self.line = format!("{}{}", &typed[..start], items[i].0);
                 self.completion = Some((typed, i));
                 Outcome::Consumed
             }
-            KeyCode::Backspace => {
+            PromptCmd::Complete(_) => Outcome::Consumed,
+            PromptCmd::DeleteChar => {
                 self.completion = None;
                 match self.line.pop() {
                     Some(_) => Outcome::Msg(Msg::PreviewPrompt),
                     None => Outcome::Msg(Msg::CancelPrompt),
                 }
             }
-            KeyCode::Char(c)
-                if !key
-                    .mods
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.completion = None;
-                self.line.push(c);
-                Outcome::Msg(Msg::PreviewPrompt)
-            }
-            _ => Outcome::Consumed,
         }
+    }
+
+    /// A character typed into the line.
+    fn text(&mut self, c: char, _cx: &Cx) -> Outcome {
+        self.scrolled = None;
+        self.completion = None;
+        self.line.push(c);
+        Outcome::Msg(Msg::PreviewPrompt)
     }
 
     /// Clicks are ignored while you type. The wheel scrolls the completion list when the
@@ -318,12 +326,10 @@ impl Component for Prompt {
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode, mods: KeyModifiers) -> Key {
-        Key { code, mods }
-    }
-
-    #[test]
-    fn keys_edit_the_line_and_ask_app_for_the_rest() {
+    /// Presses `key` on the command line as `App` does: a bound command, or a plain character
+    /// typed. Anything else does nothing.
+    fn press(p: &mut Prompt, key: &str) -> Outcome {
+        use crate::ui::keymap::{Action, Context, Key, Keymaps, Node};
         let theme =
             crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
         let cx = Cx {
@@ -331,57 +337,49 @@ mod tests {
             theme: &theme,
             state: None,
         };
-        let none = KeyModifiers::NONE;
+        let key = Key::parse(key).unwrap();
+        match Keymaps::default().get(Context::Prompt).get(key) {
+            Some(Node::Cmd(c)) => match c.action {
+                Action::Prompt(cmd) => p.command(cmd, &cx),
+                _ => panic!("{} isn't a command line command", c.name),
+            },
+            _ => key.char().map_or(Outcome::Consumed, |c| p.text(c, &cx)),
+        }
+    }
+
+    #[test]
+    fn keys_edit_the_line_and_ask_app_for_the_rest() {
         let mut p = Prompt::new(PromptKind::Command);
-        assert_eq!(
-            p.key(key(KeyCode::Char('q'), none), &cx),
-            Outcome::Msg(Msg::PreviewPrompt)
-        );
+        assert_eq!(press(&mut p, "q"), Outcome::Msg(Msg::PreviewPrompt));
         assert_eq!(p.line, "q");
-        // Ctrl and alt characters aren't typed, and every key stays the prompt's.
-        assert_eq!(
-            p.key(key(KeyCode::Char('x'), KeyModifiers::ALT), &cx),
-            Outcome::Consumed
-        );
-        assert_eq!(p.key(key(KeyCode::F(1), none), &cx), Outcome::Consumed);
+        // Ctrl and alt characters aren't typed.
+        assert_eq!(press(&mut p, "A-x"), Outcome::Consumed);
         assert_eq!(p.line, "q");
         // Tab walks the completions; shift-tab walks back; typing starts again from the text.
-        assert_eq!(p.key(key(KeyCode::Tab, none), &cx), Outcome::Consumed);
+        assert_eq!(press(&mut p, "tab"), Outcome::Consumed);
         assert_eq!(p.line, "quit");
-        p.key(key(KeyCode::Tab, none), &cx);
+        press(&mut p, "tab");
         assert_eq!(p.line, "quit!");
-        p.key(key(KeyCode::BackTab, none), &cx);
+        press(&mut p, "S-tab");
         assert_eq!(p.line, "quit");
-        assert_eq!(
-            p.key(key(KeyCode::Enter, none), &cx),
-            Outcome::Msg(Msg::SubmitPrompt)
-        );
+        assert_eq!(press(&mut p, "ret"), Outcome::Msg(Msg::SubmitPrompt));
         for _ in 0..4 {
-            assert_eq!(
-                p.key(key(KeyCode::Backspace, none), &cx),
-                Outcome::Msg(Msg::PreviewPrompt)
-            );
+            assert_eq!(press(&mut p, "backspace"), Outcome::Msg(Msg::PreviewPrompt));
         }
         assert_eq!(
-            p.key(key(KeyCode::Backspace, none), &cx),
+            press(&mut p, "backspace"),
             Outcome::Msg(Msg::CancelPrompt),
             "backspace on an empty line cancels"
         );
-        assert_eq!(
-            p.key(key(KeyCode::Esc, none), &cx),
-            Outcome::Msg(Msg::CancelPrompt)
-        );
-        assert_eq!(
-            p.key(key(KeyCode::Char('c'), KeyModifiers::CONTROL), &cx),
-            Outcome::Msg(Msg::CancelPrompt)
-        );
+        assert_eq!(press(&mut p, "esc"), Outcome::Msg(Msg::CancelPrompt));
+        assert_eq!(press(&mut p, "C-c"), Outcome::Msg(Msg::CancelPrompt));
         // A search has no completions: tab does nothing.
         let mut s = Prompt::new(PromptKind::Search {
             forward: true,
             origin: Selection::point(0),
             top: 0,
         });
-        assert_eq!(s.key(key(KeyCode::Tab, none), &cx), Outcome::Consumed);
+        assert_eq!(press(&mut s, "tab"), Outcome::Consumed);
         assert_eq!(s.line, "");
     }
 

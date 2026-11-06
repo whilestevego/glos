@@ -47,7 +47,7 @@ use crate::{
 };
 use comments::{CommentBox, Place, ThreadLines, Threads};
 use component::{Component, Cx, Msg, Outcome};
-use keymap::{Action, AppAction, Key, Keymaps, Node};
+use keymap::{Action, AppAction, Context, Key, Keymaps, Node};
 use picker::{Item, Picker, Target};
 use prompt::{Prompt, PromptKind};
 use view::{File, clean};
@@ -1765,6 +1765,10 @@ impl App {
         };
         match name {
             "reply" => self.thread_here().is_some(),
+            "prompt_complete_next" | "prompt_complete_prev" => self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::Command)),
             "edit_comment" | "delete_comment" => self
                 .thread_here()
                 .is_some_and(|i| self.state.threads[i].latest_yours().is_some()),
@@ -1812,32 +1816,21 @@ impl App {
             self.status = None;
         }
         self.help_top = 0;
-        // Ctrl-G anywhere: the keys for where you are. Again, or esc, goes back.
-        if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
-            match self.pickers.last() {
-                Some(p) if p.palette => drop(self.pickers.pop()),
-                _ => self.open_palette(),
-            }
-            return None;
+        // The palette's key works anywhere, even partway through a sequence or before the
+        // character that `f` waits for.
+        if let Some(Node::Cmd(c)) = self.root_for(&key).and_then(|m| m.get(key))
+            && c.name == "command_palette"
+        {
+            return self.execute(c);
         }
-        // The open picker, the command line or the focused tree takes every key; then the
-        // editor's own state (a pending `f`, the comment box, a count, the keymap) does.
-        let cx = cx!(self);
-        let outcome = if let Some(p) = self.pickers.last_mut() {
-            p.key(key, &cx)
-        } else if let Some(p) = &mut self.prompt {
-            p.key(key, &cx)
-        } else if let Some(t) = self.tree.as_mut().filter(|t| t.focused) {
-            t.key(key, &cx)
-        } else {
-            Outcome::Ignored
-        };
-        match outcome {
-            Outcome::Ignored => {}
-            Outcome::Consumed => return None,
-            Outcome::Msg(msg) => return self.apply(msg),
-        }
-        if let Some(next) = self.next_key.take() {
+        // The editor's own state (a pending `f`, the comment box, a count) comes first, and
+        // then the keymap.
+        let (context, _) = self.contexts();
+        let editor = matches!(
+            context,
+            Context::Normal | Context::Select | Context::BoxNormal
+        );
+        if editor && let Some(next) = self.next_key.take() {
             self.pending.clear();
             let ch = key.char().or(match key.code {
                 KeyCode::Enter => Some('\n'),
@@ -1872,21 +1865,9 @@ impl App {
             self.count = None;
             return None;
         }
-        if self.pending.is_empty()
-            && let Some(b) = &mut self.comment_box
-        {
-            let outcome = b.key(key, &cx);
-            if outcome != Outcome::Ignored {
-                self.count = None;
-            }
-            match outcome {
-                Outcome::Ignored => {}
-                Outcome::Consumed => return None,
-                Outcome::Msg(msg) => return self.apply(msg),
-            }
-        }
         // A count, as in Helix: digits before a command (a leading 0 isn't one).
-        if self.pending.is_empty()
+        if editor
+            && self.pending.is_empty()
             && let Some(d) = key.char().and_then(|c| c.to_digit(10))
             && (d != 0 || self.count.is_some())
         {
@@ -1894,10 +1875,18 @@ impl App {
             self.count = NonZeroUsize::new(n.min(100_000_000));
             return None;
         }
-        let keymap = if self.state.mode == Mode::Select {
-            &self.keymaps.select
-        } else {
-            &self.keymaps.normal
+        let Some(keymap) = self.root_for(self.pending.first().unwrap_or(&key)) else {
+            // Where text goes, an unbound character is typed.
+            if self.pending.is_empty()
+                && context.text().is_some()
+                && let Some(c) = key.char()
+            {
+                return self.text(context, c);
+            }
+            // Unbound: drop the sequence, as Helix does.
+            self.pending.clear();
+            self.count = None;
+            return None;
         };
         let mut node = None;
         let mut menu = keymap;
@@ -1930,6 +1919,57 @@ impl App {
             .unwrap_or_default();
         self.pending = keep;
         self.execute(command)
+    }
+
+    /// The context in use, and the one its unbound keys fall back to. The order is the order
+    /// keys have always gone in: a picker, the command line, the focused tree, the comment box,
+    /// then the mode.
+    fn contexts(&self) -> (Context, Option<Context>) {
+        let mode = if self.state.mode == Mode::Select {
+            Context::Select
+        } else {
+            Context::Normal
+        };
+        if !self.pickers.is_empty() {
+            (Context::Picker, None)
+        } else if self.prompt.is_some() {
+            (Context::Prompt, None)
+        } else if self.tree.as_ref().is_some_and(|t| t.focused) {
+            (Context::Tree, None)
+        } else if let Some(b) = &self.comment_box {
+            if b.insert {
+                (Context::BoxInsert, None)
+            } else {
+                (Context::BoxNormal, Some(mode))
+            }
+        } else {
+            (mode, None)
+        }
+    }
+
+    /// The root menu that a sequence starting with `first` is walked in: the context's own, or
+    /// its fallback's when the context doesn't bind `first`.
+    fn root_for(&self, first: &Key) -> Option<&keymap::Menu> {
+        let (context, fallback) = self.contexts();
+        std::iter::once(context)
+            .chain(fallback)
+            .map(|c| self.keymaps.get(c))
+            .find(|m| m.get(*first).is_some())
+    }
+
+    /// A character typed where text goes in `context`.
+    fn text(&mut self, context: Context, c: char) -> Option<AppAction> {
+        let cx = cx!(self);
+        let outcome = match context {
+            Context::Picker => self.pickers.last_mut().map(|p| p.text(c, &cx)),
+            Context::Prompt => self.prompt.as_mut().map(|p| p.text(c, &cx)),
+            Context::BoxInsert => self.comment_box.as_mut().map(|b| b.text(c, &cx)),
+            _ => None,
+        };
+        match outcome {
+            Some(Outcome::Msg(msg)) => self.apply(msg),
+            _ => None,
+        }
     }
 
     /// What a component asked for.
@@ -1975,8 +2015,11 @@ impl App {
         let chosen = self.pickers.pop();
         let under = std::mem::take(&mut self.pickers);
         match t {
+            // A command chosen in the palette runs where the palette was opened, so a picker
+            // it covered comes back first.
             Target::Command(name) => {
                 let command = keymap::command(name)?;
+                self.pickers = under;
                 self.pending.clear();
                 return self.execute(command);
             }
@@ -1991,17 +2034,22 @@ impl App {
     /// `Ctrl-G` and `space ?`: the palette, listing the keys for where you are (Helix's
     /// command palette, made contextual). In the file view, choosing a command runs it.
     fn open_palette(&mut self) {
-        let (title, rows) = self.context_keys();
+        let (_, rows) = self.context_keys();
         let style = self.theme.get("ui.text.focus");
+        // Choosing the palette's own key just goes back, rather than opening it again.
         let items = rows
             .into_iter()
             .map(|(keys, doc, name)| Item {
                 tags: vec![(keys, style)],
                 text: doc.to_string(),
-                target: name.map_or(Target::Nothing, Target::Command),
+                target: name
+                    .filter(|n| *n != "command_palette")
+                    .map_or(Target::Nothing, Target::Command),
             })
             .collect();
-        let mut p = Picker::new(vec!["keys", title], items);
+        let context = self.contexts().0;
+        let mut p = Picker::new(vec!["keys", context.title()], items);
+        p.title = Some(context.border_title());
         p.preview = false;
         self.pending.clear();
         self.next_key = None;
@@ -2012,101 +2060,37 @@ impl App {
 
     /// The keys that work where you are: (keys, what they do, the command to run, if any).
     fn context_keys(&self) -> (&'static str, Vec<KeyRow>) {
-        let fixed = |rows: &[(&str, &'static str)]| -> Vec<KeyRow> {
-            rows.iter()
-                .map(|(k, d)| (k.to_string(), *d, None))
-                .collect()
-        };
-        if !self.pickers.is_empty() {
-            return ("Picker", fixed(picker::KEYS));
-        }
-        if let Some(p) = &self.prompt {
-            let mut rows = vec![
-                ("type", "Write the command or pattern"),
-                ("ret", "Run it"),
-                ("esc, C-c", "Cancel"),
-                ("backspace", "Delete; on an empty line, cancel"),
-            ];
-            if matches!(p.kind, PromptKind::Command) {
-                rows.push(("tab, S-tab", "Complete: the next or previous match"));
-            }
-            rows.push(("C-g", "These keys"));
-            return ("Command line", fixed(&rows));
-        }
-        if self.tree.as_ref().is_some_and(|t| t.focused) {
-            return (
-                "File tree",
-                fixed(&[
-                    ("j, down", "Next row"),
-                    ("k, up", "Previous row"),
-                    ("ret, l", "Open the file; the tree stays"),
-                    ("ret", "On a folder: open or close it"),
-                    ("l, right", "On a folder: open it, or go into it"),
-                    ("h, left", "Close the folder, or go to the one it's in"),
-                    ("/", "Search the names"),
-                    ("?", "Search the names backwards"),
-                    ("n", "Next match"),
-                    ("N", "Previous match"),
-                    ("esc", "Back to the file"),
-                    ("q", "Close the tree"),
-                    ("space e", "From the file: back to the tree"),
-                    ("C-g", "These keys"),
-                ]),
-            );
-        }
-        if let Some(b) = &self.comment_box
-            && b.insert
-        {
-            return (
-                "Comment box: insert mode",
-                fixed(&[
-                    ("type", "Write the comment; it's saved as you type"),
-                    ("esc, C-c", "Normal mode: then ret saves and q closes"),
-                    ("ret", "New line"),
-                    ("backspace", "Delete before the cursor"),
-                    ("del", "Delete under the cursor"),
-                    ("left, right, up, down", "Move"),
-                    ("home, end", "Line start, line end"),
-                    ("C-g", "These keys"),
-                ]),
-            );
-        }
+        let (context, fallback) = self.contexts();
         let mut rows = vec![];
-        let title = if self.comment_box.is_some() {
-            rows.extend(fixed(&[
-                ("ret", "Save the comment"),
-                ("q", "Close the box; the draft is kept"),
-                ("i, a", "Insert before, after the selection"),
-                (":editor", "Edit the comment in $EDITOR"),
-            ]));
-            "Comment box: normal mode"
-        } else if self.state.mode == Mode::Select {
-            "Select mode"
-        } else {
-            "Normal mode"
-        };
-        let keymap = if self.state.mode == Mode::Select {
-            &self.keymaps.select
-        } else {
-            &self.keymaps.normal
-        };
-        self.walk_keys(keymap, "", &mut rows);
-        rows.push(("C-g".into(), "These keys", None));
-        (title, rows)
+        if let Some(doc) = context.text() {
+            rows.push(("type".into(), doc, None));
+        }
+        let root = self.keymaps.get(context);
+        self.walk_keys(root, "", &mut rows, None);
+        if let Some(f) = fallback {
+            self.walk_keys(self.keymaps.get(f), "", &mut rows, Some(root));
+        }
+        (context.title(), rows)
     }
 
     /// Every command under `menu` that applies here, with its full key sequence; keys bound to
-    /// the same command are joined.
-    fn walk_keys(&self, menu: &keymap::Menu, prefix: &str, out: &mut Vec<KeyRow>) {
+    /// the same command are joined. When `menu` is a fallback, `over` is the context it falls
+    /// back from: its keys win, so they're left out here.
+    fn walk_keys(
+        &self,
+        menu: &keymap::Menu,
+        prefix: &str,
+        out: &mut Vec<KeyRow>,
+        over: Option<&keymap::Menu>,
+    ) {
         let start = out.len();
         for (key, node) in &menu.keys {
             let keys = format!("{prefix}{key}");
             match node {
                 Node::Cmd(c) => {
-                    let boxed = self.comment_box.is_some();
-                    // The box's own keys win over the keymap's, and some actions wait for it.
-                    if boxed
-                        && (matches!(keys.as_str(), "q" | "ret" | "i" | "a")
+                    // The comment box's own keys win, and some actions wait for it to close.
+                    if let Some(over) = over
+                        && ((prefix.is_empty() && over.get(*key).is_some())
                             || matches!(c.action, Action::App(a) if blocked_in_box(a)))
                     {
                         continue;
@@ -2119,7 +2103,7 @@ impl App {
                         None => out.push((keys, c.doc, Some(c.name))),
                     }
                 }
-                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out),
+                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out, over),
             }
         }
     }
@@ -2165,6 +2149,34 @@ impl App {
                 return None;
             }
             Action::App(a) => self.app_command(a),
+            Action::Tree(c) => {
+                let cx = cx!(self);
+                match self.tree.as_mut().map(|t| t.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
+            Action::Picker(c) => {
+                let cx = cx!(self);
+                match self.pickers.last_mut().map(|p| p.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
+            Action::Prompt(c) => {
+                let cx = cx!(self);
+                match self.prompt.as_mut().map(|p| p.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
+            Action::Box(c) => {
+                let cx = cx!(self);
+                match self.comment_box.as_mut().map(|b| b.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
         };
         self.count = None;
         result
@@ -2421,7 +2433,11 @@ impl App {
                 p.line = "filter ".into();
                 self.prompt = Some(p);
             }
-            A::CommandPalette => self.open_palette(),
+            // Again, over the palette, it goes back.
+            A::CommandPalette => match self.pickers.last() {
+                Some(p) if p.palette => drop(self.pickers.pop()),
+                _ => self.open_palette(),
+            },
             A::FileTree => match &mut self.tree {
                 Some(t) if !t.focused => t.focused = true,
                 Some(_) => self.tree = None,
@@ -3293,12 +3309,7 @@ impl App {
                 ),
                 NextKey::Char(_, doc) => (doc, vec![]),
             }
-        } else if !self.pending.is_empty() {
-            let keymap = if self.state.mode == Mode::Select {
-                &self.keymaps.select
-            } else {
-                &self.keymaps.normal
-            };
+        } else if let Some(keymap) = self.pending.first().and_then(|k| self.root_for(k)) {
             let mut menu = keymap;
             for k in &self.pending {
                 if let Some(Node::Menu(m)) = menu.get(*k) {

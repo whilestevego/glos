@@ -69,7 +69,18 @@ fn parse_helix(src: &str) -> Vec<(String, String)> {
 
 /// (key path, command) pairs from `normal_defs()` in glos's keymap, with helper menus like
 /// `view_defs()` expanded.
-fn parse_glos(src: &str) -> Vec<(String, String)> {
+/// The contexts glos adds beside normal mode, as the checklist titles them, and the function in
+/// `keymap.rs` that lists each one's keys.
+const CONTEXTS: &[(&str, &str)] = &[
+    ("the file tree", "tree_defs"),
+    ("pickers", "picker_defs"),
+    ("the command line", "prompt_defs"),
+    ("the comment box in normal mode", "box_normal_defs"),
+    ("the comment box in insert mode", "box_insert_defs"),
+];
+
+/// The keys that `defs` (such as `normal_defs`) binds in glos's `keymap.rs`, as key paths.
+fn parse_glos(src: &str, defs: &str) -> Vec<(String, String)> {
     let defs_of = |f: &str| -> String {
         let start = src.find(&format!("fn {f}()")).expect(f);
         let end = start + src[start..].find("\n}\n").expect(f);
@@ -113,7 +124,7 @@ fn parse_glos(src: &str) -> Vec<(String, String)> {
     }
     let mut out = vec![];
     walk(
-        &defs_of("normal_defs"),
+        &defs_of(defs),
         vec![],
         &mut out,
         (&helper, &menu, &cmd),
@@ -140,7 +151,7 @@ fn checklist(helix_src: &str, glos_src: &str) -> (String, Vec<(String, usize)>) 
         .find("let mut select")
         .expect("Helix's select keymap");
     let helix = parse_helix(&helix_src[start..end]);
-    let glos = parse_glos(glos_src);
+    let glos = parse_glos(glos_src, "normal_defs");
     let glos_cmd = |k: &str| {
         glos.iter()
             .find(|(key, _)| key == k)
@@ -207,6 +218,24 @@ fn checklist(helix_src: &str, glos_src: &str) -> (String, Vec<(String, usize)>) 
         "|---|---|".into(),
     ]);
     out.extend(extra);
+    // The other contexts have no Helix keymap to compare with, so they're only listed.
+    for (title, defs) in CONTEXTS {
+        if !glos_src.contains(&format!("fn {defs}()")) {
+            continue;
+        }
+        out.extend([
+            String::new(),
+            format!("## Keys in {title}"),
+            String::new(),
+            "| Key | glos command |".into(),
+            "|---|---|".into(),
+        ]);
+        out.extend(
+            parse_glos(glos_src, defs)
+                .iter()
+                .map(|(k, c)| format!("| `{}` | `{c}` |", k.replace('|', "\\|"))),
+        );
+    }
     out.push(String::new());
     (out.join("\n"), counts)
 }
@@ -275,6 +304,12 @@ fn view_defs() -> Vec<Def> {
         cmd("z|c", "align_view_center"),
     ]
 }
+
+fn tree_defs() -> Vec<Def> {
+    vec![
+        cmd("j|down", "tree_next"),
+    ]
+}
 "#;
 
     #[test]
@@ -293,7 +328,7 @@ fn view_defs() -> Vec<Def> {
             ]
             .map(|(k, c)| (k.to_string(), c.to_string()))
         );
-        let glos = parse_glos(GLOS);
+        let glos = parse_glos(GLOS, "normal_defs");
         let keys: Vec<&str> = glos.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
             keys,
@@ -321,5 +356,18 @@ fn view_defs() -> Vec<Def> {
             "{md}"
         );
         assert_eq!(counts[0], ("done".to_string(), 3));
+        // Each context glos adds gets a table, after the keys glos adds to normal mode.
+        let tree = md
+            .find("## Keys in the file tree")
+            .expect("a table for the tree");
+        assert!(md.find("## Keys glos adds").unwrap() < tree);
+        assert!(
+            md[tree..].contains("| `j` | `tree_next` |\n| `down` | `tree_next` |"),
+            "{md}"
+        );
+        assert!(
+            !md.contains("## Keys in pickers"),
+            "no picker_defs in the fixture"
+        );
     }
 }

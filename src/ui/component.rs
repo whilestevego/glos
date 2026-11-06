@@ -6,7 +6,7 @@
 use crossterm::event::MouseEvent;
 use ratatui::{buffer::Buffer, layout::Rect};
 
-use super::{State, keymap::Key, picker::Target};
+use super::{State, picker::Target};
 use crate::theme::Theme;
 
 /// What a component did with a key or click.
@@ -61,8 +61,16 @@ pub struct Cx<'a> {
 }
 
 pub trait Component {
-    fn key(&mut self, key: Key, cx: &Cx) -> Outcome;
+    /// What its keys do. `keymap.rs` binds each key to one of these, in the component's context.
+    type Cmd;
 
+    fn command(&mut self, cmd: Self::Cmd, cx: &Cx) -> Outcome;
+
+    /// A character typed where text goes: a character that isn't bound, in a context with text
+    /// input. Components without text input ignore it.
+    fn text(&mut self, _c: char, _cx: &Cx) -> Outcome {
+        Outcome::Ignored
+    }
     /// A click or the wheel; `area` is where the component was drawn.
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Ignored

@@ -372,3 +372,86 @@ Summary: 154 done, 147 not applicable, 16 to do, 4 replaced.
 | `space s a` | `submit_approve` |
 | `space s r` | `submit_changes` |
 | `space s c` | `submit_comment` |
+| `C-g` | `command_palette` |
+
+## Keys in the file tree
+
+| Key | glos command |
+|---|---|
+| `j` | `tree_next` |
+| `down` | `tree_next` |
+| `k` | `tree_prev` |
+| `up` | `tree_prev` |
+| `ret` | `tree_open` |
+| `l` | `tree_open_or_into` |
+| `right` | `tree_open_or_into` |
+| `h` | `tree_close_or_up` |
+| `left` | `tree_close_or_up` |
+| `/` | `tree_search` |
+| `?` | `tree_rsearch` |
+| `n` | `tree_search_next` |
+| `N` | `tree_search_prev` |
+| `esc` | `tree_unfocus` |
+| `q` | `tree_close` |
+| `C-g` | `command_palette` |
+
+## Keys in pickers
+
+| Key | glos command |
+|---|---|
+| `down` | `picker_next` |
+| `tab` | `picker_next` |
+| `C-n` | `picker_next` |
+| `up` | `picker_prev` |
+| `S-tab` | `picker_prev` |
+| `C-p` | `picker_prev` |
+| `pagedown` | `picker_page_down` |
+| `C-d` | `picker_page_down` |
+| `pageup` | `picker_page_up` |
+| `C-u` | `picker_page_up` |
+| `home` | `picker_first` |
+| `end` | `picker_last` |
+| `ret` | `picker_choose` |
+| `esc` | `picker_close` |
+| `C-c` | `picker_close` |
+| `backspace` | `picker_delete_char` |
+| `C-g` | `command_palette` |
+
+## Keys in the command line
+
+| Key | glos command |
+|---|---|
+| `ret` | `prompt_submit` |
+| `esc` | `prompt_cancel` |
+| `C-c` | `prompt_cancel` |
+| `tab` | `prompt_complete_next` |
+| `S-tab` | `prompt_complete_prev` |
+| `backspace` | `prompt_delete_char` |
+| `C-g` | `command_palette` |
+
+## Keys in the comment box in normal mode
+
+| Key | glos command |
+|---|---|
+| `ret` | `box_save` |
+| `q` | `box_close` |
+| `i` | `box_insert` |
+| `a` | `box_append` |
+
+## Keys in the comment box in insert mode
+
+| Key | glos command |
+|---|---|
+| `esc` | `box_normal_mode` |
+| `C-c` | `box_normal_mode` |
+| `ret` | `box_newline` |
+| `tab` | `box_tab` |
+| `backspace` | `box_delete_char_backward` |
+| `del` | `box_delete_char_forward` |
+| `left` | `box_move_left` |
+| `right` | `box_move_right` |
+| `up` | `box_move_up` |
+| `down` | `box_move_down` |
+| `home` | `box_line_start` |
+| `end` | `box_line_end` |
+| `C-g` | `command_palette` |

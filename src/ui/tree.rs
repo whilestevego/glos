@@ -3,13 +3,12 @@
 
 use std::collections::HashSet;
 
-use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{buffer::Buffer, layout::Rect};
 use unicode_width::UnicodeWidthStr;
 
 use super::{
     component::{Component, Cx, Msg, Outcome},
-    keymap::Key,
     picker::Target,
     view::clean,
 };
@@ -33,6 +32,26 @@ pub struct Row {
     pub added: usize,
     pub removed: usize,
     pub threads: usize,
+}
+
+/// What the tree's keys do. `keymap.rs` binds them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TreeCmd {
+    Next,
+    Prev,
+    /// `ret`: open the file, or open or close the folder.
+    Open,
+    /// `l`: open the file, or open the folder, or go into it if it's open.
+    OpenOrInto,
+    /// `h`: close the folder, or go to the folder it's in.
+    CloseOrUp,
+    /// `/` (`true`) or `?`.
+    Search(bool),
+    /// `n` (`true`) or `N`.
+    SearchNext(bool),
+    /// `esc`: the keys go back to the file.
+    Unfocus,
+    Close,
 }
 
 /// Where the tree was when a search started, so `esc` can put it back.
@@ -338,28 +357,27 @@ impl Tree {
 }
 
 impl Component for Tree {
-    /// Every key is the tree's while it's focused.
-    fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
+    type Cmd = TreeCmd;
+
+    /// Runs one of the tree's commands. Opening a file gives the keys back to it.
+    fn command(&mut self, cmd: TreeCmd, _cx: &Cx) -> Outcome {
         let folder = self.rows.get(self.cursor).is_some_and(Row::is_folder);
-        match (key.code, key.char()) {
-            (KeyCode::Down, _) | (_, Some('j')) => self.step(true),
-            (KeyCode::Up, _) | (_, Some('k')) => self.step(false),
-            (KeyCode::Enter, _) if folder => self.toggle(self.cursor),
-            (KeyCode::Right, _) | (_, Some('l')) if folder => self.right(),
-            (KeyCode::Left, _) | (_, Some('h')) => self.left(),
-            (KeyCode::Enter | KeyCode::Right, _) | (_, Some('l')) => {
+        match cmd {
+            TreeCmd::Next => self.step(true),
+            TreeCmd::Prev => self.step(false),
+            TreeCmd::Open if folder => self.toggle(self.cursor),
+            TreeCmd::OpenOrInto if folder => self.right(),
+            TreeCmd::CloseOrUp => self.left(),
+            TreeCmd::Open | TreeCmd::OpenOrInto => {
                 if let Some(p) = self.selected().map(str::to_string) {
                     self.focused = false;
                     return Outcome::Msg(Msg::Open(Target::Path(p)));
                 }
             }
-            (KeyCode::Esc, _) => self.focused = false,
-            (_, Some('q')) => return Outcome::Msg(Msg::CloseTree),
-            (_, Some('/')) => return Outcome::Msg(Msg::TreeSearch(true)),
-            (_, Some('?')) => return Outcome::Msg(Msg::TreeSearch(false)),
-            (_, Some('n')) => return Outcome::Msg(Msg::TreeSearchNext(true)),
-            (_, Some('N')) => return Outcome::Msg(Msg::TreeSearchNext(false)),
-            _ => {}
+            TreeCmd::Unfocus => self.focused = false,
+            TreeCmd::Close => return Outcome::Msg(Msg::CloseTree),
+            TreeCmd::Search(forward) => return Outcome::Msg(Msg::TreeSearch(forward)),
+            TreeCmd::SearchNext(forward) => return Outcome::Msg(Msg::TreeSearchNext(forward)),
         }
         Outcome::Consumed
     }
@@ -412,6 +430,19 @@ impl Component for Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::keymap::{Action, Context, Key, Keymaps, Node};
+
+    /// Presses `key` in the tree, through the tree's keymap. An unbound key does nothing.
+    fn press(t: &mut Tree, key: &str, cx: &Cx) -> Outcome {
+        let keymaps = Keymaps::default();
+        match keymaps.get(Context::Tree).get(Key::parse(key).unwrap()) {
+            Some(Node::Cmd(c)) => match c.action {
+                Action::Tree(cmd) => t.command(cmd, cx),
+                _ => panic!("{} isn't a tree command", c.name),
+            },
+            _ => Outcome::Consumed,
+        }
+    }
 
     fn e(path: &str, added: usize, removed: usize, threads: usize) -> Entry {
         Entry {
@@ -563,50 +594,42 @@ mod tests {
             theme: &cx_theme,
             state: None,
         };
-        let key = |c| Key {
-            code: KeyCode::Char(c),
-            mods: crossterm::event::KeyModifiers::NONE,
-        };
         let mut t = nested();
         // At the top: h on a top-level file has nowhere to go.
         t.select("README.md");
-        t.key(key('h'), &cx);
+        press(&mut t, "h", &cx);
         assert_eq!(at(&t), "README.md");
         // In the middle: h on a file goes to its folder, then closes it, then goes up.
         t.select("src/ui/view.rs");
-        t.key(key('h'), &cx);
+        press(&mut t, "h", &cx);
         assert_eq!(at(&t), "src/ui/");
-        t.key(key('h'), &cx);
+        press(&mut t, "h", &cx);
         assert!(t.collapsed.contains("src/ui/"));
-        t.key(key('h'), &cx);
+        press(&mut t, "h", &cx);
         assert_eq!(at(&t), "src/");
         // l opens a closed folder, then goes to its first row.
         t.select("src/ui/");
-        t.key(key('l'), &cx);
+        press(&mut t, "l", &cx);
         assert!(!t.collapsed.contains("src/ui/"));
         assert_eq!(at(&t), "src/ui/");
-        t.key(key('l'), &cx);
+        press(&mut t, "l", &cx);
         assert_eq!(at(&t), "src/ui/mod.rs");
         // l on a file opens it.
         assert_eq!(
-            t.key(key('l'), &cx),
+            press(&mut t, "l", &cx),
             Outcome::Msg(Msg::Open(Target::Path("src/ui/mod.rs".into())))
         );
         // At the bottom: ret toggles a folder, and h on a top-level closed folder stays.
         t.select("tests/");
-        let ret = Key {
-            code: KeyCode::Enter,
-            mods: crossterm::event::KeyModifiers::NONE,
-        };
-        assert_eq!(t.key(ret, &cx), Outcome::Consumed);
+        assert_eq!(press(&mut t, "ret", &cx), Outcome::Consumed);
         assert!(t.collapsed.contains("tests/"));
-        t.key(key('h'), &cx);
+        press(&mut t, "h", &cx);
         assert_eq!(at(&t), "tests/");
-        t.key(ret, &cx);
+        press(&mut t, "ret", &cx);
         assert!(!t.collapsed.contains("tests/"));
-        t.key(key('j'), &cx);
+        press(&mut t, "j", &cx);
         assert_eq!(at(&t), "tests/mcp.rs");
-        t.key(key('j'), &cx);
+        press(&mut t, "j", &cx);
         assert_eq!(at(&t), "tests/mcp.rs", "the last row");
     }
 
@@ -666,26 +689,22 @@ mod tests {
             theme: &theme,
             state: None,
         };
-        let key = |c| Key {
-            code: KeyCode::Char(c),
-            mods: KeyModifiers::NONE,
-        };
         let mut t = Tree::new(vec![e("a.rs", 1, 0, 0), e("src/b.rs", 1, 0, 0)]);
-        assert_eq!(t.key(key('j'), &cx), Outcome::Consumed);
+        assert_eq!(press(&mut t, "j", &cx), Outcome::Consumed);
         assert_eq!(at(&t), "src/", "j lands on a folder");
-        t.key(key('j'), &cx);
+        press(&mut t, "j", &cx);
         assert_eq!(t.selected(), Some("src/b.rs"));
         assert_eq!(
-            t.key(key('x'), &cx),
+            press(&mut t, "x", &cx),
             Outcome::Consumed,
             "every key is the tree's"
         );
         assert_eq!(
-            t.key(key('l'), &cx),
+            press(&mut t, "l", &cx),
             Outcome::Msg(Msg::Open(Target::Path("src/b.rs".into())))
         );
         assert!(!t.focused, "opening a file gives the keys back to it");
-        assert_eq!(t.key(key('q'), &cx), Outcome::Msg(Msg::CloseTree));
+        assert_eq!(press(&mut t, "q", &cx), Outcome::Msg(Msg::CloseTree));
 
         // Rows: the title, then a.rs, src/, b.rs.
         let area = Rect::new(0, 0, 20, 10);

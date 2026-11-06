@@ -1,5 +1,6 @@
-//! Helix's keymap: a trie of keys per mode, with menus (`g`, `m`, `[`, …) that open the key
-//! help panel. Built from Helix's default keymap at 25.07.1, keeping only what applies to glos.
+//! Every key glos knows: a trie of keys per context, with menus (`g`, `m`, `[`, …) that open the
+//! key help panel. The editor's keys are Helix's default keymap at 25.07.1, keeping only what
+//! applies to glos. The other contexts are glos's own.
 
 use std::fmt;
 
@@ -18,6 +19,14 @@ pub enum Action {
     /// `mi` / `ma`: waits for the text object's character; `true` for around.
     Textobject(bool),
     App(AppAction),
+    /// A command for the focused file tree.
+    Tree(super::tree::TreeCmd),
+    /// A command for the open picker.
+    Picker(super::picker::PickerCmd),
+    /// A command for the command line.
+    Prompt(super::prompt::PromptCmd),
+    /// A command for the comment box.
+    Box(super::comments::BoxCmd),
 }
 
 /// Commands that act on glos itself rather than one file's selection.
@@ -117,8 +126,12 @@ macro_rules! commands {
     };
 }
 
+use super::comments::BoxCmd as B;
 use super::folding::FoldKey as F;
-use Action::{App, Doc, NextChar};
+use super::picker::PickerCmd as P;
+use super::prompt::PromptCmd as L;
+use super::tree::TreeCmd as T;
+use Action::{App, Box, Doc, NextChar, Picker, Prompt, Tree};
 commands! {
     move_char_left, "Move left", Doc(c::move_char_left);
     move_char_right, "Move right", Doc(c::move_char_right);
@@ -242,7 +255,52 @@ commands! {
     goto_next_commit, "Goto next commit", App(AppAction::NextCommit(true));
     goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
     file_explorer, "Open, focus or close the file tree", App(AppAction::FileTree);
-    command_palette, "Open command palette", App(AppAction::CommandPalette);
+    command_palette, "Show the keys for where you are", App(AppAction::CommandPalette);
+    // The file tree, while it has focus.
+    tree_next, "Next row", Tree(T::Next);
+    tree_prev, "Previous row", Tree(T::Prev);
+    tree_open, "Open the file, or open or close the folder", Tree(T::Open);
+    tree_open_or_into, "Open the file; on a folder, open it or go into it", Tree(T::OpenOrInto);
+    tree_close_or_up, "Close the folder, or go to the one it's in", Tree(T::CloseOrUp);
+    tree_search, "Search the names", Tree(T::Search(true));
+    tree_rsearch, "Search the names backwards", Tree(T::Search(false));
+    tree_search_next, "Next match", Tree(T::SearchNext(true));
+    tree_search_prev, "Previous match", Tree(T::SearchNext(false));
+    tree_unfocus, "Back to the file", Tree(T::Unfocus);
+    tree_close, "Close the tree", Tree(T::Close);
+    // Pickers, the palette among them.
+    picker_next, "Next item", Picker(P::Next);
+    picker_prev, "Previous item", Picker(P::Prev);
+    picker_page_down, "Move a page down", Picker(P::PageDown);
+    picker_page_up, "Move a page up", Picker(P::PageUp);
+    picker_first, "First item", Picker(P::First);
+    picker_last, "Last item", Picker(P::Last);
+    picker_choose, "Open the selected item", Picker(P::Choose);
+    picker_close, "Close", Picker(P::Close);
+    picker_delete_char, "Delete the last character of the filter", Picker(P::DeleteChar);
+    // The command line: `:`, searches and regex prompts.
+    prompt_submit, "Run it", Prompt(L::Submit);
+    prompt_cancel, "Cancel", Prompt(L::Cancel);
+    prompt_complete_next, "Complete: the next match", Prompt(L::Complete(true));
+    prompt_complete_prev, "Complete: the previous match", Prompt(L::Complete(false));
+    prompt_delete_char, "Delete; on an empty line, cancel", Prompt(L::DeleteChar);
+    // The comment box in normal mode, ahead of the editor's keys.
+    box_save, "Save the comment", Box(B::Save);
+    box_close, "Close the box; the draft is kept", Box(B::Close);
+    box_insert, "Insert before the selection", Box(B::Insert);
+    box_append, "Insert after the selection", Box(B::Append);
+    // The comment box in insert mode.
+    box_normal_mode, "Normal mode: then ret saves and q closes", Box(B::NormalMode);
+    box_newline, "New line", Box(B::Newline);
+    box_tab, "Insert a tab", Box(B::Tab);
+    box_delete_char_backward, "Delete before the cursor", Box(B::DeleteBackward);
+    box_delete_char_forward, "Delete under the cursor", Box(B::DeleteForward);
+    box_move_left, "Move left", Box(B::Left);
+    box_move_right, "Move right", Box(B::Right);
+    box_move_up, "Move up", Box(B::Up);
+    box_move_down, "Move down", Box(B::Down);
+    box_line_start, "Line start", Box(B::Home);
+    box_line_end, "Line end", Box(B::End);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
     // Folding: Vim's keys, in Helix's view menu.
     fold_open, "Open the fold at the cursor", App(AppAction::Fold(F::Open));
@@ -288,6 +346,13 @@ impl From<KeyEvent> for Key {
         // Shift is already in the character (`G`, `%`), as Helix normalises it.
         if matches!(e.code, KeyCode::Char(_)) {
             mods.remove(KeyModifiers::SHIFT);
+        }
+        // Terminals send shift-tab as its own key. Helix writes it `S-tab`.
+        if e.code == KeyCode::BackTab {
+            return Key {
+                code: KeyCode::Tab,
+                mods: mods | KeyModifiers::SHIFT,
+            };
         }
         Key { code: e.code, mods }
     }
@@ -639,6 +704,83 @@ fn normal_defs() -> Vec<Def> {
         cmd("C-u", "page_cursor_half_up"),
         cmd("C-d", "page_cursor_half_down"),
         cmd("C-z", "suspend"),
+        // glos: the palette, in every context.
+        cmd("C-g", "command_palette"),
+    ]
+}
+
+/// A picker's keys, which are Helix's. Characters that aren't bound filter the list.
+fn picker_defs() -> Vec<Def> {
+    vec![
+        cmd("down|tab|C-n", "picker_next"),
+        cmd("up|S-tab|C-p", "picker_prev"),
+        cmd("pagedown|C-d", "picker_page_down"),
+        cmd("pageup|C-u", "picker_page_up"),
+        cmd("home", "picker_first"),
+        cmd("end", "picker_last"),
+        cmd("ret", "picker_choose"),
+        cmd("esc|C-c", "picker_close"),
+        cmd("backspace", "picker_delete_char"),
+        cmd("C-g", "command_palette"),
+    ]
+}
+
+/// The command line's keys. Characters that aren't bound are typed.
+fn prompt_defs() -> Vec<Def> {
+    vec![
+        cmd("ret", "prompt_submit"),
+        cmd("esc|C-c", "prompt_cancel"),
+        cmd("tab", "prompt_complete_next"),
+        cmd("S-tab", "prompt_complete_prev"),
+        cmd("backspace", "prompt_delete_char"),
+        cmd("C-g", "command_palette"),
+    ]
+}
+
+/// The comment box's own keys in normal mode. Every other key is the editor's, which edits the
+/// box's text with Helix's keys.
+fn box_normal_defs() -> Vec<Def> {
+    vec![
+        cmd("ret", "box_save"),
+        cmd("q", "box_close"),
+        cmd("i", "box_insert"),
+        cmd("a", "box_append"),
+    ]
+}
+
+/// The comment box's keys in insert mode. Characters that aren't bound are typed.
+fn box_insert_defs() -> Vec<Def> {
+    vec![
+        cmd("esc|C-c", "box_normal_mode"),
+        cmd("ret", "box_newline"),
+        cmd("tab", "box_tab"),
+        cmd("backspace", "box_delete_char_backward"),
+        cmd("del", "box_delete_char_forward"),
+        cmd("left", "box_move_left"),
+        cmd("right", "box_move_right"),
+        cmd("up", "box_move_up"),
+        cmd("down", "box_move_down"),
+        cmd("home", "box_line_start"),
+        cmd("end", "box_line_end"),
+        cmd("C-g", "command_palette"),
+    ]
+}
+
+/// The file tree's keys. `h` and `l` follow Helix's file explorer and yazi.
+fn tree_defs() -> Vec<Def> {
+    vec![
+        cmd("j|down", "tree_next"),
+        cmd("k|up", "tree_prev"),
+        cmd("ret", "tree_open"),
+        cmd("l|right", "tree_open_or_into"),
+        cmd("h|left", "tree_close_or_up"),
+        cmd("/", "tree_search"),
+        cmd("?", "tree_rsearch"),
+        cmd("n", "tree_search_next"),
+        cmd("N", "tree_search_prev"),
+        cmd("esc", "tree_unfocus"),
+        cmd("q", "tree_close"),
+        cmd("C-g", "command_palette"),
     ]
 }
 
@@ -671,22 +813,107 @@ fn view_defs() -> Vec<Def> {
     ]
 }
 
+/// A place that takes keys. Each has its own keys, and `App::contexts` says which one is in use.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Context {
+    Normal,
+    Select,
+    Picker,
+    Prompt,
+    Tree,
+    BoxInsert,
+    BoxNormal,
+}
+
+impl Context {
+    pub const ALL: [Context; 7] = [
+        Context::Normal,
+        Context::Select,
+        Context::Picker,
+        Context::Prompt,
+        Context::Tree,
+        Context::BoxInsert,
+        Context::BoxNormal,
+    ];
+
+    /// The title of the palette's list of keys.
+    pub fn title(self) -> &'static str {
+        match self {
+            Context::Normal => "Normal mode",
+            Context::Select => "Select mode",
+            Context::Picker => "Picker",
+            Context::Prompt => "Command line",
+            Context::Tree => "File tree",
+            Context::BoxInsert => "Comment box: insert mode",
+            Context::BoxNormal => "Comment box: normal mode",
+        }
+    }
+
+    /// The context's name: what a setting that rebinds its keys would call it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Context::Normal => "normal",
+            Context::Select => "select",
+            Context::Picker => "picker",
+            Context::Prompt => "prompt",
+            Context::Tree => "tree",
+            Context::BoxInsert => "box_insert",
+            Context::BoxNormal => "box_normal",
+        }
+    }
+
+    /// The palette's top border: the context's name, so you can tell which keys you'd rebind.
+    pub fn border_title(self) -> String {
+        format!("Keys · context: {}", self.name())
+    }
+
+    /// What typing does, in a context where an unbound character is text.
+    pub fn text(self) -> Option<&'static str> {
+        match self {
+            Context::Picker => Some("Filter the list"),
+            Context::Prompt => Some("Write the command or pattern"),
+            Context::BoxInsert => Some("Write the comment; it's saved as you type"),
+            _ => None,
+        }
+    }
+
+    fn defs(self) -> Vec<Def> {
+        match self {
+            Context::Normal => normal_defs(),
+            Context::Select => {
+                // Select mode is normal mode with motions extending; `v` and `esc` leave it.
+                let mut select = normal_defs();
+                select.retain(|d| !matches!(d, Def::Cmd("v" | "esc", _)));
+                select.push(cmd("v", "normal_mode"));
+                select.push(cmd("esc", "exit_select_mode"));
+                select
+            }
+            Context::Tree => tree_defs(),
+            Context::Picker => picker_defs(),
+            Context::Prompt => prompt_defs(),
+            Context::BoxInsert => box_insert_defs(),
+            Context::BoxNormal => box_normal_defs(),
+        }
+    }
+}
+
+/// Every context's keys.
 pub struct Keymaps {
-    pub normal: Menu,
-    pub select: Menu,
+    menus: Vec<(Context, Menu)>,
 }
 
 impl Keymaps {
     pub fn default() -> Keymaps {
-        let mut select = normal_defs();
-        // Select mode is normal mode with motions extending; `v` and `esc` leave it.
-        select.retain(|d| !matches!(d, Def::Cmd("v" | "esc", _)));
-        select.push(cmd("v", "normal_mode"));
-        select.push(cmd("esc", "exit_select_mode"));
         Keymaps {
-            normal: build("Normal mode", false, normal_defs()),
-            select: build("Select mode", false, select),
+            menus: Context::ALL
+                .iter()
+                .map(|&c| (c, build(c.title(), false, c.defs())))
+                .collect(),
         }
+    }
+
+    pub fn get(&self, context: Context) -> &Menu {
+        &self.menus.iter().find(|(c, _)| *c == context).unwrap().1
     }
 }
 
@@ -703,20 +930,23 @@ mod tests {
         }
         let shifted = Key::from(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
         assert_eq!(shifted, Key::parse("G").unwrap());
+        let backtab = Key::from(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(backtab, Key::parse("S-tab").unwrap(), "shift-tab is S-tab");
     }
 
     #[test]
     fn help_joins_aliases() {
         let k = Keymaps::default();
-        let help = k.normal.help();
+        let (normal, select) = (k.get(Context::Normal), k.get(Context::Select));
+        let help = normal.help();
         assert!(help.contains(&("h, left".to_string(), "Move left", Some("move_char_left"))));
         assert!(help.contains(&("g".to_string(), "Goto", None)));
-        let Some(Node::Menu(g)) = k.normal.get(Key::parse("g").unwrap()) else {
+        let Some(Node::Menu(g)) = normal.get(Key::parse("g").unwrap()) else {
             panic!()
         };
         assert_eq!(g.name, "Goto");
         assert!(
-            matches!(k.select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode")
+            matches!(select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode")
         );
     }
 
@@ -732,7 +962,7 @@ mod tests {
     #[test]
     fn no_key_is_bound_twice_in_a_menu() {
         let k = Keymaps::default();
-        for root in [&k.normal, &k.select] {
+        for root in Context::ALL.map(|c| k.get(c)) {
             let mut menus = vec![];
             all_menus(root, &mut menus);
             for m in menus {
@@ -750,8 +980,9 @@ mod tests {
         let k = Keymaps::default();
         let mut bound = std::collections::HashSet::new();
         let mut menus = vec![];
-        all_menus(&k.normal, &mut menus);
-        all_menus(&k.select, &mut menus);
+        for c in Context::ALL {
+            all_menus(k.get(c), &mut menus);
+        }
         for m in menus {
             for (_, n) in &m.keys {
                 if let Node::Cmd(c) = n {
@@ -765,6 +996,104 @@ mod tests {
         }
     }
 
+    /// The command `key` runs at the root of `context`, if any.
+    fn bound(k: &Keymaps, context: Context, key: &str) -> Option<&'static str> {
+        match k.get(context).get(Key::parse(key).unwrap()) {
+            Some(Node::Cmd(c)) => Some(c.name),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn each_context_resolves_its_keys() {
+        let k = Keymaps::default();
+        for (context, key, name) in [
+            (Context::Tree, "h", "tree_close_or_up"),
+            (Context::Tree, "ret", "tree_open"),
+            (Context::Picker, "C-n", "picker_next"),
+            (Context::Picker, "S-tab", "picker_prev"),
+            (Context::Prompt, "S-tab", "prompt_complete_prev"),
+            (Context::Prompt, "C-c", "prompt_cancel"),
+            (Context::BoxInsert, "del", "box_delete_char_forward"),
+            (Context::BoxInsert, "esc", "box_normal_mode"),
+            (Context::BoxNormal, "ret", "box_save"),
+            (Context::Normal, "w", "move_next_word_start"),
+        ] {
+            assert_eq!(bound(&k, context, key), Some(name), "{key} in {context:?}");
+        }
+        // Characters aren't bound where text goes, so they're typed.
+        for context in [Context::Picker, Context::Prompt, Context::BoxInsert] {
+            assert!(context.text().is_some());
+            for key in ["a", "q", "space", "/", "1"] {
+                assert_eq!(bound(&k, context, key), None, "{key} in {context:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_context_binds_only_its_own_commands() {
+        let k = Keymaps::default();
+        for context in Context::ALL {
+            let mut menus = vec![];
+            all_menus(k.get(context), &mut menus);
+            for m in menus {
+                for (key, n) in &m.keys {
+                    let Node::Cmd(c) = n else { continue };
+                    let own = matches!(
+                        (context, c.action),
+                        (_, Action::App(AppAction::CommandPalette))
+                            | (Context::Tree, Action::Tree(_))
+                            | (Context::Picker, Action::Picker(_))
+                            | (Context::Prompt, Action::Prompt(_))
+                            | (Context::BoxInsert | Context::BoxNormal, Action::Box(_))
+                            | (
+                                Context::Normal | Context::Select,
+                                Action::Doc(_)
+                                    | Action::NextChar(_)
+                                    | Action::Textobject(_)
+                                    | Action::App(_),
+                            )
+                    );
+                    assert!(own, "{key} runs {} in {context:?}", c.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_box_in_normal_mode_binds_only_its_own_keys() {
+        let k = Keymaps::default();
+        let own: Vec<String> = k
+            .get(Context::BoxNormal)
+            .keys
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .collect();
+        assert_eq!(
+            own,
+            ["ret", "q", "i", "a"],
+            "the rest fall back to the mode"
+        );
+    }
+
+    #[test]
+    fn every_context_reaches_the_palette() {
+        let k = Keymaps::default();
+        for context in Context::ALL {
+            // The box in normal mode reaches it through normal mode, which it falls back to.
+            let reached = if context == Context::BoxNormal {
+                Context::Normal
+            } else {
+                context
+            };
+            assert_eq!(
+                bound(&k, reached, "C-g"),
+                Some("command_palette"),
+                "{context:?}"
+            );
+        }
+    }
+
     #[test]
     fn select_mode_differs_only_where_helix_does() {
         let k = Keymaps::default();
@@ -773,14 +1102,15 @@ mod tests {
             Some(Node::Menu(m)) => Some(m.name),
             None => None,
         };
-        assert_eq!(get(&k.normal, "v"), Some("select_mode"));
-        assert_eq!(get(&k.select, "v"), Some("normal_mode"));
-        assert_eq!(get(&k.normal, "esc"), Some("normal_mode"));
-        assert_eq!(get(&k.select, "esc"), Some("exit_select_mode"));
+        let (normal, select) = (k.get(Context::Normal), k.get(Context::Select));
+        assert_eq!(get(normal, "v"), Some("select_mode"));
+        assert_eq!(get(select, "v"), Some("normal_mode"));
+        assert_eq!(get(normal, "esc"), Some("normal_mode"));
+        assert_eq!(get(select, "esc"), Some("exit_select_mode"));
         for key in ["h", "w", "x", "g", "space", "z", "/", "n", "f"] {
-            assert_eq!(get(&k.normal, key), get(&k.select, key), "{key}");
+            assert_eq!(get(normal, key), get(select, key), "{key}");
         }
-        let Some(Node::Menu(z)) = k.normal.get(Key::parse("Z").unwrap()) else {
+        let Some(Node::Menu(z)) = normal.get(Key::parse("Z").unwrap()) else {
             panic!()
         };
         assert!(z.sticky);

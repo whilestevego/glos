@@ -2214,6 +2214,100 @@ fn palette_in_the_comment_box() {
     assert!(!t.shows("Replay macro"), "q closes the box here");
 }
 
+/// Opens each context in turn on `t`, runs `check` in it, and leaves it.
+fn each_context(t: &mut T, mut check: impl FnMut(&mut T, Context)) {
+    let steps: [(Context, &str, &str); 7] = [
+        (Context::Normal, "", ""),
+        (Context::Select, "v", "esc"),
+        (Context::Tree, "space e", "q"),
+        (Context::Picker, "space g", "esc"),
+        (Context::Prompt, ":", "esc"),
+        (Context::BoxInsert, "space C", "esc q"),
+        (Context::BoxNormal, "space C esc", "q"),
+    ];
+    for (context, open, close) in steps {
+        t.keys(open);
+        assert_eq!(t.app.contexts().0, context, "after {open:?}");
+        check(t, context);
+        t.keys(close);
+        assert_eq!(t.app.contexts().0, Context::Normal, "after {close:?}");
+    }
+}
+
+#[test]
+fn the_palette_lists_every_key_from_the_keymap() {
+    let mut t = T::files(OLD, NEW);
+    let keymaps = keymap::Keymaps::default();
+    each_context(&mut t, |t, context| {
+        let (title, rows) = t.app.context_keys();
+        assert_eq!(title, context.title());
+        // The palette's top border says which context's keys these are, by the name a
+        // rebinding would use. The column header is just the title.
+        t.keys("C-g");
+        assert_eq!(t.palette().0, title);
+        let border = format!("Keys · context: {}", context.name());
+        assert!(t.shows(&border), "{border} missing:\n{}", t.screen());
+        t.keys("C-g");
+        for (keys, doc, name) in keymaps.get(context).help() {
+            let Some(name) = name else { continue };
+            if !t.app.applies(name) {
+                continue;
+            }
+            assert!(
+                rows.iter()
+                    .any(|r| r.1 == doc && keys.split(", ").all(|k| r.0.contains(k))),
+                "{keys} ({name}) missing from the palette in {context:?}"
+            );
+        }
+        // A context with text input says so first.
+        assert_eq!(rows[0].0 == "type", context.text().is_some(), "{context:?}");
+    });
+}
+
+#[test]
+fn c_g_opens_and_closes_the_palette_everywhere() {
+    let mut t = T::files(OLD, NEW);
+    each_context(&mut t, |t, context| {
+        let pickers = t.app.pickers.len();
+        t.keys("C-g");
+        assert!(t.app.pickers.last().unwrap().palette, "{context:?}");
+        t.keys("C-g");
+        assert_eq!(
+            t.app.pickers.len(),
+            pickers,
+            "C-g again closes it in {context:?}"
+        );
+    });
+    // Partway through a sequence too, and before the character `f` waits for.
+    for keys in ["space C-g", "f C-g", "Z C-g"] {
+        t.keys(keys);
+        assert!(t.app.pickers.last().is_some_and(|p| p.palette), "{keys}");
+        t.keys("esc");
+        assert!(
+            t.app.pending.is_empty() && t.app.next_key.is_none(),
+            "{keys}"
+        );
+    }
+}
+
+#[test]
+fn unbound_characters_are_typed_where_text_goes() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space g").typed("xq");
+    assert!(t.shows("xq"), "the picker's filter: {}", t.screen());
+    t.keys("esc :").typed("xq");
+    assert_eq!(t.app.prompt.as_ref().unwrap().line, "xq");
+    t.keys("esc space C").typed("xq");
+    assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "xq");
+    t.keys("esc q");
+    // The tree has no text input, so a character it doesn't bind does nothing.
+    t.keys("space e");
+    let (sel, at) = (t.sel(), t.app.tree.as_ref().unwrap().cursor);
+    t.keys("x");
+    assert_eq!((t.sel(), t.app.tree.as_ref().unwrap().cursor), (sel, at));
+    assert!(t.app.prompt.is_none() && t.app.pickers.is_empty());
+}
+
 #[test]
 fn palette_in_the_tree_picker_and_prompt() {
     // Tall enough to list every tree key.
@@ -2223,14 +2317,23 @@ fn palette_in_the_tree_picker_and_prompt() {
     t.keys("C-g");
     assert_eq!(t.palette().0, "File tree");
     assert!(t.shows("Close the tree"));
-    assert!(t.shows("On a folder: open or close it"), "{}", t.screen());
+    assert!(
+        t.shows("Open the file, or open or close the folder"),
+        "{}",
+        t.screen()
+    );
     assert!(t.shows("Close the folder, or go to the one it's in"));
     assert!(t.shows("Search the names"));
-    t.keys("esc C-g").typed("close");
-    assert!(t.shows("Close the tree"), "{}", t.screen());
-    t.keys("ret"); // a listed key: back to the tree, still focused
+    // Choosing a key runs its command in the tree, which keeps focus.
+    t.keys("esc C-g")
+        .typed("search the names backwards")
+        .keys("ret");
     assert!(t.app.pickers.is_empty() && t.app.tree.as_ref().unwrap().focused);
-    t.keys("q");
+    assert!(t.shows("search:"), "{}", t.screen());
+    t.keys("esc C-g").typed("close the tree");
+    assert!(t.shows("Close the tree"), "{}", t.screen());
+    t.keys("ret");
+    assert!(t.app.tree.is_none(), "the palette closed the tree");
     // A picker: the palette covers it, and esc brings it back with its query.
     t.keys("space g").typed("main").keys("C-g");
     assert_eq!(t.palette().0, "Picker");
