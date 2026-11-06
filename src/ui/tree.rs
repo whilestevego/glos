@@ -37,7 +37,10 @@ pub struct Tree {
     pub cursor: usize,
     /// Keys go to the tree while it's focused; otherwise it's only shown.
     pub focused: bool,
-    top: usize,
+    /// The first row shown below the title. The wheel changes it without moving the cursor.
+    pub top: usize,
+    /// Set when the cursor moves, so that the next draw scrolls to show it.
+    follow: bool,
 }
 
 impl Tree {
@@ -75,6 +78,7 @@ impl Tree {
             cursor,
             focused: true,
             top: 0,
+            follow: true,
         }
     }
 
@@ -86,6 +90,7 @@ impl Tree {
             .position(|r| r.path.as_deref() == Some(path))
         {
             self.cursor = i;
+            self.follow = true;
         }
     }
 
@@ -99,6 +104,7 @@ impl Tree {
         };
         if let Some(i) = next {
             self.cursor = i;
+            self.follow = true;
         }
     }
 
@@ -118,11 +124,14 @@ impl Tree {
         let title = theme.get("ui.text").patch(ratatui::style::Style::default());
         buf.set_stringn(area.x, area.y, " Changed files", area.width as usize, title);
         let height = area.height.saturating_sub(1) as usize;
-        if self.cursor < self.top {
-            self.top = self.cursor;
-        } else if height > 0 && self.cursor >= self.top + height {
-            self.top = self.cursor + 1 - height;
+        if std::mem::take(&mut self.follow) {
+            if self.cursor < self.top {
+                self.top = self.cursor;
+            } else if height > 0 && self.cursor >= self.top + height {
+                self.top = self.cursor + 1 - height;
+            }
         }
+        self.top = self.top.min(self.rows.len().saturating_sub(height));
         let w = area.width.saturating_sub(1) as usize; // the last column separates it
         for (row, r) in self.rows.iter().enumerate().skip(self.top).take(height) {
             let y = area.y + 1 + (row - self.top) as u16;
@@ -192,17 +201,26 @@ impl Component for Tree {
         Outcome::Consumed
     }
 
-    /// A click on a file opens it; anything else over the tree does nothing.
+    /// A click anywhere in the tree focuses it, and a click on a file also opens that file.
+    /// The wheel scrolls the rows without moving the cursor.
     fn mouse(&mut self, m: MouseEvent, area: Rect, _cx: &Cx) -> Outcome {
-        if m.column >= area.right() {
+        if !area.contains((m.column, m.row).into()) {
             return Outcome::Ignored;
         }
-        if m.kind == MouseEventKind::Down(MouseButton::Left)
-            && let Some(p) = self.path_at(area, m.row).map(str::to_string)
-        {
-            self.select(&p);
-            self.focused = false;
-            return Outcome::Msg(Msg::Open(Target::Path(p)));
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.focused = true;
+                if let Some(p) = self.path_at(area, m.row).map(str::to_string) {
+                    self.select(&p);
+                    return Outcome::Msg(Msg::Open(Target::Path(p)));
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                let height = area.height.saturating_sub(1) as usize;
+                self.top = (self.top + 3).min(self.rows.len().saturating_sub(height));
+            }
+            MouseEventKind::ScrollUp => self.top = self.top.saturating_sub(3),
+            _ => {}
         }
         Outcome::Consumed
     }
@@ -338,13 +356,12 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         };
-        t.focused = true;
         assert_eq!(
             t.mouse(click(3, 1), area, &cx),
             Outcome::Msg(Msg::Open(Target::Path("a.rs".into())))
         );
         assert_eq!(t.selected(), Some("a.rs"));
-        assert!(!t.focused);
+        assert!(t.focused, "a click focuses the tree, and it keeps focus");
         assert_eq!(
             t.mouse(click(3, 2), area, &cx),
             Outcome::Consumed,
@@ -354,6 +371,56 @@ mod tests {
             t.mouse(click(30, 1), area, &cx),
             Outcome::Ignored,
             "beside the tree"
+        );
+    }
+
+    #[test]
+    fn the_wheel_scrolls_apart_from_the_cursor() {
+        use crossterm::event::KeyModifiers;
+        let theme = Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
+        let cx = Cx {
+            screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
+        };
+        let files: Vec<Entry> = (0..20).map(|i| e(&format!("f{i:02}"), 0, 0, 0)).collect();
+        let mut t = Tree::new(files);
+        // The area has room for the title and 5 rows.
+        let area = Rect::new(0, 0, 20, 6);
+        let mut buf = Buffer::empty(area);
+        let wheel = |kind| MouseEvent {
+            kind,
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        t.render_in(&mut buf, area, "", &theme);
+        t.mouse(wheel(MouseEventKind::ScrollDown), area, &cx);
+        t.mouse(wheel(MouseEventKind::ScrollDown), area, &cx);
+        t.render_in(&mut buf, area, "", &theme);
+        assert_eq!(
+            (t.top, t.selected()),
+            (6, Some("f00")),
+            "the cursor stays put"
+        );
+        for _ in 0..10 {
+            t.mouse(wheel(MouseEventKind::ScrollDown), area, &cx);
+        }
+        assert_eq!(t.top, 15, "no further than the last row");
+        t.mouse(wheel(MouseEventKind::ScrollUp), area, &cx);
+        assert_eq!(t.top, 12);
+        // Moving the cursor brings it back into view.
+        t.step(true);
+        t.render_in(&mut buf, area, "", &theme);
+        assert_eq!((t.top, t.selected()), (1, Some("f01")));
+        assert_eq!(
+            t.mouse(
+                wheel(MouseEventKind::ScrollDown),
+                Rect::new(30, 0, 20, 6),
+                &cx
+            ),
+            Outcome::Ignored,
+            "outside the tree"
         );
     }
 }

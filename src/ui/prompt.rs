@@ -1,7 +1,7 @@
 //! The command line while you type into it: `:` commands with Helix's tab completion, `/` and `?`
 //! searches, and the regex prompts (`s`, `S`, `K`, `A-K`).
 
-use crossterm::event::{KeyCode, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use glos_helix::{commands, text::Selection};
 use ratatui::{buffer::Buffer, layout::Rect};
 use unicode_width::UnicodeWidthStr;
@@ -124,11 +124,17 @@ pub enum PromptKind {
     },
 }
 
+/// The `:` command completions, as pairs of command name and description.
+type Completions = Vec<(String, &'static str)>;
+
 pub struct Prompt {
     pub kind: PromptKind,
     pub line: String,
     /// While tabbing through `:` completions: what was typed, and which completion is shown.
     completion: Option<(String, usize)>,
+    /// The first completion shown after the wheel scrolls the list. `None` means the list
+    /// follows the selected completion. Any key press sets it back to `None`.
+    scrolled: Option<usize>,
 }
 
 impl Prompt {
@@ -137,6 +143,7 @@ impl Prompt {
             kind,
             line: String::new(),
             completion: None,
+            scrolled: None,
         }
     }
 
@@ -162,28 +169,40 @@ impl Prompt {
     }
 
     /// `:` completions above the command line, as Helix lists them, with what each does.
+    /// Returns the completions for the typed text, the rectangle to draw them in, and the
+    /// index of the first one to show. The list sits at the bottom of `area` and has at most
+    /// 10 rows.
+    fn completion_list(&self, area: Rect) -> Option<(Completions, Rect, usize)> {
+        if !matches!(self.kind, PromptKind::Command) {
+            return None;
+        }
+        let typed = self
+            .completion
+            .as_ref()
+            .map_or(self.line.as_str(), |(t, _)| t.as_str());
+        let (_, items) = completions(typed);
+        let rows = items.len().min(area.height as usize).min(10);
+        if rows == 0 {
+            return None;
+        }
+        // Keep the selected completion in view, unless the wheel has scrolled the list.
+        let selected = self.completion.as_ref().map(|(_, i)| *i);
+        let first = self
+            .scrolled
+            .unwrap_or(selected.map_or(0, |i| (i + 1).saturating_sub(rows)))
+            .min(items.len() - rows);
+        let rect = Rect::new(area.x, area.bottom() - rows as u16, area.width, rows as u16);
+        Some((items, rect, first))
+    }
+
     fn render_completion(&self, buf: &mut Buffer, area: Rect, t: &Theme) {
-        let Prompt {
-            kind: PromptKind::Command,
-            line,
-            completion,
-        } = self
-        else {
+        let Some((items, rect, first)) = self.completion_list(area) else {
             return;
         };
-        let typed = completion
-            .as_ref()
-            .map_or(line.as_str(), |(t, _)| t.as_str());
-        let (_, items) = completions(typed);
-        if items.is_empty() || area.height == 0 {
-            return;
-        }
-        let rows = items.len().min(area.height as usize).min(10);
+        let rows = rect.height as usize;
         let name_w = items.iter().map(|(n, _)| n.width()).max().unwrap_or(0);
-        let selected = completion.as_ref().map(|(_, i)| *i);
-        // The selected one stays in view.
-        let first = selected.map_or(0, |i| (i + 1).saturating_sub(rows));
-        let y0 = area.bottom() - rows as u16;
+        let selected = self.completion.as_ref().map(|(_, i)| *i);
+        let y0 = rect.y;
         for (row, (i, (name, doc))) in items.iter().enumerate().skip(first).take(rows).enumerate() {
             let style = if Some(i) == selected {
                 t.get("ui.menu.selected")
@@ -208,6 +227,7 @@ impl Component for Prompt {
     /// putting the selection back, running the line) is `App`'s.
     fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
         let ctrl = key.mods.contains(KeyModifiers::CONTROL);
+        self.scrolled = None;
         match key.code {
             KeyCode::Esc => Outcome::Msg(Msg::CancelPrompt),
             KeyCode::Char('c') if ctrl => Outcome::Msg(Msg::CancelPrompt),
@@ -254,8 +274,20 @@ impl Component for Prompt {
         }
     }
 
-    /// Clicks do nothing while typing.
-    fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
+    /// Clicks are ignored while you type. The wheel scrolls the completion list when the
+    /// pointer is over it.
+    fn mouse(&mut self, m: MouseEvent, area: Rect, _cx: &Cx) -> Outcome {
+        let above = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
+        if let Some((items, rect, first)) = self.completion_list(above)
+            && rect.contains((m.column, m.row).into())
+        {
+            let last = items.len() - rect.height as usize;
+            match m.kind {
+                MouseEventKind::ScrollDown => self.scrolled = Some((first + 3).min(last)),
+                MouseEventKind::ScrollUp => self.scrolled = Some(first.saturating_sub(3)),
+                _ => {}
+            }
+        }
         Outcome::Consumed
     }
 

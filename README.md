@@ -127,7 +127,11 @@ You don't need to remember these. Press `space` (or `g`, `]`, and so on) and wai
 lists the keys that can follow. Press **`Ctrl-G` anywhere** to see every key that works where you
 are, whether that's the file view, the comment box, the file tree or a list.
 
-The mouse works too. Click to move, drag to select, and click a thread to open it.
+The mouse works too. Click to move the cursor, drag to select, and click a thread to open it.
+Clicking the file tree or the code moves keyboard focus there. The scroll wheel scrolls whatever
+is under the pointer, including the tree, the comment box, the key menu and the picker's preview.
+When lines aren't wrapped, you can scroll the code sideways with a touchpad swipe or by holding
+Shift while you turn the wheel.
 
 ## Several agents at once
 
