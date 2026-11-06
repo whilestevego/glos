@@ -57,6 +57,8 @@ pub enum AppAction {
     ReviewComment,
     Reply,
     EditComment,
+    /// `space M`: delete your latest unsent comment, after pressing it twice.
+    DeleteComment,
     Submit(crate::review::Verdict),
     /// `space d` / `space D`: threads in this file, or the whole review.
     ThreadPicker {
@@ -215,6 +217,7 @@ commands! {
     review_comment, "Comment on the whole review", App(AppAction::ReviewComment);
     reply, "Reply to the thread under the cursor", App(AppAction::Reply);
     edit_comment, "Edit your latest comment on the thread under the cursor", App(AppAction::EditComment);
+    delete_comment, "Delete your latest comment on the thread under the cursor, if it isn't sent", App(AppAction::DeleteComment);
     submit_approve, "Approve", App(AppAction::Submit(Verdict::Approved));
     submit_changes, "Request changes", App(AppAction::Submit(Verdict::Changes));
     submit_comment, "Send comments without a verdict", App(AppAction::Submit(Verdict::Comment));
@@ -595,6 +598,7 @@ fn normal_defs() -> Vec<Def> {
                 cmd("C", "review_comment"),
                 cmd("r", "reply"),
                 cmd("m", "edit_comment"),
+                cmd("M", "delete_comment"),
                 cmd("x", "toggle_resolved"),
                 cmd("n", "goto_suggestion"),
                 cmd("e", "file_explorer"),

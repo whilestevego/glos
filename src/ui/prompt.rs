@@ -34,6 +34,11 @@ const TYPABLE: &[(&str, &[&str], &str)] = &[
         "Edit your latest comment on the thread under the cursor",
     ),
     (
+        "delete-comment",
+        &[],
+        "Delete your latest comment on the thread under the cursor, if it isn't sent",
+    ),
+    (
         "submit",
         &[],
         "Submit the review to the agent: approve, changes or comment",

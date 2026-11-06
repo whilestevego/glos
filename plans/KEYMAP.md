@@ -358,6 +358,7 @@ Summary: 154 done, 147 not applicable, 16 to do, 4 replaced.
 | `Z minus` | `fold_less_context` |
 | `ret` | `toggle_collapse` |
 | `space m` | `edit_comment` |
+| `space M` | `delete_comment` |
 | `space x` | `toggle_resolved` |
 | `space n` | `goto_suggestion` |
 | `space l` | `dashboard` |

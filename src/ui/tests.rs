@@ -934,6 +934,149 @@ fn editing_and_deleting_a_comment() {
 }
 
 #[test]
+fn space_shift_m_twice_deletes_your_latest_unsent_comment() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("first").keys("esc ret");
+    t.keys("space r").typed("second").keys("esc ret");
+    t.keys("space M");
+    assert_eq!(t.said(), "space M again deletes your comment: «second»");
+    assert_eq!(t.bodies(), ["first", "second"]);
+    t.keys("space M");
+    assert_eq!(t.said(), "Comment deleted");
+    assert_eq!(t.bodies(), ["first"]);
+    assert_eq!(t.app.unsent, 1);
+    // The last comment goes, and the thread with it.
+    t.keys("space M space M");
+    assert!(t.app.state.threads.is_empty());
+    assert_eq!(t.app.unsent, 0);
+}
+
+#[test]
+fn any_other_key_forgets_a_delete() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("keep me").keys("esc ret");
+    t.keys("space M");
+    // esc out of the space menu is a key too.
+    t.keys("space esc space M");
+    assert!(
+        t.said().starts_with("space M again deletes"),
+        "{}",
+        t.said()
+    );
+    t.keys("l space M");
+    assert!(
+        t.said().starts_with("space M again deletes"),
+        "{}",
+        t.said()
+    );
+    assert_eq!(t.bodies(), ["keep me"]);
+}
+
+#[test]
+fn a_long_comment_is_quoted_by_its_first_line() {
+    let mut t = T::files(OLD, NEW);
+    let long = "a first line that runs on for well over forty characters";
+    t.keys("space c")
+        .typed(long)
+        .keys("ret")
+        .typed("more")
+        .keys("esc ret");
+    t.keys("space M");
+    assert_eq!(
+        t.said(),
+        "space M again deletes your comment: «a first line that runs on for well over…»"
+    );
+    t.keys("esc");
+    t.keys("space r")
+        .typed("short")
+        .keys("ret")
+        .typed("two")
+        .keys("esc ret");
+    t.keys("space M");
+    assert_eq!(t.said(), "space M again deletes your comment: «short…»");
+}
+
+#[test]
+fn the_typed_command_deletes_too() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("gone").keys("esc ret");
+    t.typed(":delete-comment").keys("ret");
+    assert!(
+        t.said().starts_with("space M again deletes"),
+        "{}",
+        t.said()
+    );
+    t.typed(":delete-comment").keys("ret");
+    assert_eq!(t.said(), "Comment deleted");
+    assert!(t.app.state.threads.is_empty());
+}
+
+#[test]
+fn a_sent_comment_is_not_deleted() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("sent").keys("esc ret");
+    t.keys("space s c");
+    t.keys("space M");
+    assert_eq!(
+        t.said(),
+        "That comment was already sent to the agent: edit it with space m"
+    );
+    t.keys("space M");
+    assert_eq!(t.bodies(), ["sent"]);
+    // An older unsent comment is not reached past the sent one.
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("old").keys("esc ret");
+    let old = t.app.state.threads[0].comments[0].id.clone();
+    t.keys("space r").typed("new").keys("esc ret");
+    t.keys("space s c");
+    // Editing a sent comment makes it unsent again. The UI only edits the latest, so the
+    // store edits the older one here.
+    crate::review::edit(&t.app.conn, &old, "old, edited").unwrap();
+    t.app.reload();
+    assert!(t.app.state.threads[0].comments[0].unsent());
+    t.keys("space M space M");
+    assert!(
+        t.said().starts_with("That comment was already sent"),
+        "{}",
+        t.said()
+    );
+    assert_eq!(t.bodies(), ["old, edited", "new"]);
+}
+
+#[test]
+fn no_comment_of_yours_to_delete() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space M");
+    assert_eq!(t.said(), "No comment of yours here");
+    assert!(t.app.state.threads.is_empty());
+}
+
+#[test]
+fn space_shift_m_waits_for_the_comment_box() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("space c").typed("one").keys("esc ret");
+    t.keys("space r").typed("draft").keys("esc space M");
+    assert!(
+        t.said().starts_with("Close the comment box first"),
+        "{}",
+        t.said()
+    );
+    assert_eq!(t.bodies(), ["one"]);
+}
+
+#[test]
+fn the_palette_finds_delete_comment() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("C-g").typed("delete");
+    assert!(!t.shows("Delete your latest comment"), "no thread here yet");
+    t.keys("esc");
+    t.keys("space c").typed("one").keys("esc ret");
+    t.keys("C-g").typed("delete");
+    assert!(t.shows("space M"), "{}", t.screen());
+    assert!(t.shows("Delete your latest comment"), "{}", t.screen());
+}
+
+#[test]
 fn replies_and_review_level_comments() {
     let mut t = T::files(OLD, NEW);
     t.keys("space c").typed("one").keys("esc ret");
