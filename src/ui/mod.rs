@@ -893,14 +893,7 @@ impl App {
         self.reanchor(false);
         self.ensure_alt();
         if let Some(t) = &self.tree {
-            let (focused, top) = (t.focused, t.top);
-            let selected = t.selected().map(str::to_string);
-            let mut t = tree::Tree::new(self.tree_entries());
-            (t.focused, t.top) = (focused, top);
-            if let Some(p) = selected {
-                t.select(&p);
-            }
-            self.tree = Some(t);
+            self.tree = Some(t.rebuilt(self.tree_entries()));
         }
     }
 
@@ -1951,6 +1944,16 @@ impl App {
                 self.tree = None;
                 self.layout();
             }
+            Msg::TreeSearch(forward) => {
+                if let Some(t) = &self.tree {
+                    let origin = t.origin();
+                    self.prompt = Some(Prompt::new(PromptKind::TreeSearch { forward, origin }));
+                }
+            }
+            Msg::TreeSearchNext(forward) => match self.last_search.clone() {
+                Some(q) => self.tree_search(&q, forward),
+                None => self.status = Some(("No previous search".into(), true)),
+            },
             Msg::BoxEdited => {
                 if let Some(b) = &mut self.comment_box {
                     b.file.reparse(&self.state.loader);
@@ -2034,9 +2037,16 @@ impl App {
             return (
                 "File tree",
                 fixed(&[
-                    ("j, down", "Next file"),
-                    ("k, up", "Previous file"),
+                    ("j, down", "Next row"),
+                    ("k, up", "Previous row"),
                     ("ret, l", "Open the file; the tree stays"),
+                    ("ret", "On a folder: open or close it"),
+                    ("l, right", "On a folder: open it, or go into it"),
+                    ("h, left", "Close the folder, or go to the one it's in"),
+                    ("/", "Search the names"),
+                    ("?", "Search the names backwards"),
+                    ("n", "Next match"),
+                    ("N", "Previous match"),
                     ("esc", "Back to the file"),
                     ("q", "Close the tree"),
                     ("space e", "From the file: back to the tree"),
@@ -2175,6 +2185,14 @@ impl App {
                 kind: PromptKind::Regex { origin, .. },
                 ..
             }) => self.file_mut().sel = origin,
+            Some(Prompt {
+                kind: PromptKind::TreeSearch { origin, .. },
+                ..
+            }) => {
+                if let Some(t) = &mut self.tree {
+                    t.restore(origin);
+                }
+            }
             _ => {}
         }
     }
@@ -2193,6 +2211,17 @@ impl App {
                     self.doc_command(|cx| commands::regex_selections(cx, action, &regex));
                 }
             }
+            PromptKind::TreeSearch { forward, .. } if line.is_empty() => {
+                match self.last_search.clone() {
+                    Some(q) => self.tree_search(&q, forward),
+                    None => self.status = Some(("No previous search".into(), true)),
+                }
+            }
+            // The search shares the `/` register with the code's, as Helix has one.
+            PromptKind::TreeSearch { .. } => match tree::search_regex(&line) {
+                Some(_) => self.last_search = Some(line),
+                None => self.status = Some(("Invalid regex".into(), true)),
+            },
             PromptKind::Search { .. } => {
                 // An empty search repeats the last one, as in Helix.
                 if !line.is_empty() {
@@ -2205,9 +2234,37 @@ impl App {
         }
     }
 
+    /// `n`/`N` in the file tree, or `ret` on an empty tree search: the next match of `query`.
+    fn tree_search(&mut self, query: &str, forward: bool) {
+        let Some(t) = &mut self.tree else { return };
+        match tree::search_regex(query) {
+            Some(r) if t.search(&r, forward) => {}
+            Some(_) => self.status = Some(("No matches".into(), true)),
+            None => self.status = Some(("Invalid regex".into(), true)),
+        }
+    }
+
     /// As you type a search, the selection jumps to the first match from where you started; a
-    /// regex prompt applies to the selections it started from.
+    /// regex prompt applies to the selections it started from. A search in the file tree
+    /// moves the tree's cursor the same way.
     fn search_preview(&mut self) {
+        if let Some(Prompt {
+            kind: PromptKind::TreeSearch { forward, origin },
+            line,
+            ..
+        }) = &self.prompt
+        {
+            let (forward, regex) = (*forward, tree::search_regex(line));
+            let Some(t) = &mut self.tree else { return };
+            t.restore(origin.clone());
+            if !line.is_empty()
+                && let Some(r) = regex
+                && !t.search(&r, forward)
+            {
+                self.status = Some(("No matches".into(), true));
+            }
+            return;
+        }
         if let Some(Prompt {
             kind: PromptKind::Regex { action, origin },
             line,

@@ -1,6 +1,8 @@
 //! The file tree (`space e`): the review's changed files by folder, each with the lines it adds
 //! and removes and its open threads.
 
+use std::collections::HashSet;
+
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{buffer::Buffer, layout::Rect};
 use unicode_width::UnicodeWidthStr;
@@ -22,29 +24,71 @@ pub struct Entry {
 }
 
 pub struct Row {
-    /// Indented folder or file name.
+    /// The name as the tree shows it: `mod.rs` for a file, `ui/` for a folder.
     pub name: String,
-    /// The file's path; `None` for a folder.
-    pub path: Option<String>,
+    /// The full path. A folder's ends in `/`, as in `src/ui/`.
+    pub path: String,
+    /// How many folders it's inside.
+    pub depth: usize,
     pub added: usize,
     pub removed: usize,
     pub threads: usize,
 }
 
+/// Where the tree was when a search started, so `esc` can put it back.
+#[derive(Clone)]
+pub struct Origin {
+    cursor: usize,
+    top: usize,
+    collapsed: HashSet<String>,
+}
+
+/// A search pattern, with the smart case of the code's search: it ignores case unless it has
+/// an uppercase letter.
+pub fn search_regex(query: &str) -> Option<regex::Regex> {
+    regex::RegexBuilder::new(query)
+        .case_insensitive(!query.chars().any(char::is_uppercase))
+        .build()
+        .ok()
+}
+
 pub struct Tree {
     pub rows: Vec<Row>,
-    /// The selected row.
+    /// The selected row, an index into `rows`. It's always on a visible row.
     pub cursor: usize,
     /// Keys go to the tree while it's focused; otherwise it's only shown.
     pub focused: bool,
-    /// The first row shown below the title. The wheel changes it without moving the cursor.
+    /// The first visible row shown below the title. The wheel changes it without moving the
+    /// cursor.
     pub top: usize,
+    /// The paths of closed folders. Rows inside them aren't shown.
+    pub collapsed: HashSet<String>,
     /// Set when the cursor moves, so that the next draw scrolls to show it.
     follow: bool,
+    /// The file on screen when the tree was last drawn. When it changes, the folders holding
+    /// the new one open.
+    shown: String,
+}
+
+impl Row {
+    pub fn is_folder(&self) -> bool {
+        self.path.ends_with('/')
+    }
+
+    /// The file's path; `None` for a folder.
+    pub fn file(&self) -> Option<&str> {
+        (!self.is_folder()).then_some(self.path.as_str())
+    }
+
+    /// Whether this row is somewhere inside the folder `folder`.
+    fn inside(&self, folder: &str) -> bool {
+        self.path.len() > folder.len() && self.path.starts_with(folder)
+    }
 }
 
 impl Tree {
-    /// Folders first-seen in path order, each file under its folder, indented by depth.
+    /// Folders first-seen in path order, each file under its folder. A folder's counts are the
+    /// totals of the files under it, so a closed folder still says what's in it.
     pub fn new(mut entries: Vec<Entry>) -> Tree {
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         let mut rows = vec![];
@@ -55,67 +99,172 @@ impl Tree {
             let shared = open.iter().zip(dirs).take_while(|(a, b)| a == b).count();
             open.truncate(shared);
             for (depth, d) in dirs.iter().enumerate().skip(shared) {
+                let path = format!("{}/", dirs[..=depth].join("/"));
+                let under = || entries.iter().filter(|e| e.path.starts_with(&path));
                 rows.push(Row {
-                    name: format!("{}{d}/", "  ".repeat(depth)),
-                    path: None,
-                    added: 0,
-                    removed: 0,
-                    threads: 0,
+                    name: format!("{d}/"),
+                    depth,
+                    added: under().map(|e| e.added).sum(),
+                    removed: under().map(|e| e.removed).sum(),
+                    threads: under().map(|e| e.threads).sum(),
+                    path,
                 });
                 open.push(d);
             }
             rows.push(Row {
-                name: format!("{}{}", "  ".repeat(dirs.len()), name[0]),
-                path: Some(e.path.clone()),
+                name: name[0].to_string(),
+                path: e.path.clone(),
+                depth: dirs.len(),
                 added: e.added,
                 removed: e.removed,
                 threads: e.threads,
             });
         }
-        let cursor = rows.iter().position(|r| r.path.is_some()).unwrap_or(0);
+        let cursor = rows.iter().position(|r| !r.is_folder()).unwrap_or(0);
         Tree {
             rows,
             cursor,
             focused: true,
             top: 0,
+            collapsed: HashSet::new(),
             follow: true,
+            shown: String::new(),
         }
     }
 
-    /// Puts the cursor on `path`'s row, if it's listed.
-    pub fn select(&mut self, path: &str) {
-        if let Some(i) = self
-            .rows
+    /// A new tree over `entries` that keeps this one's focus, scroll, cursor and closed
+    /// folders. Closed folders that are gone are dropped.
+    pub fn rebuilt(&self, entries: Vec<Entry>) -> Tree {
+        let mut t = Tree::new(entries);
+        t.collapsed = self
+            .collapsed
             .iter()
-            .position(|r| r.path.as_deref() == Some(path))
-        {
-            self.cursor = i;
-            self.follow = true;
+            .filter(|c| t.rows.iter().any(|r| &&r.path == c))
+            .cloned()
+            .collect();
+        (t.focused, t.top, t.shown) = (self.focused, self.top, self.shown.clone());
+        if let Some(r) = self.rows.get(self.cursor) {
+            t.select(&r.path);
+        }
+        t
+    }
+
+    /// The rows not inside a closed folder, as indexes into `rows`.
+    pub fn visible(&self) -> Vec<usize> {
+        (0..self.rows.len())
+            .filter(|&i| !self.collapsed.iter().any(|c| self.rows[i].inside(c)))
+            .collect()
+    }
+
+    /// Moves the cursor to row `i`, opening the folders it's in.
+    fn go(&mut self, i: usize) {
+        self.reveal(i);
+        self.cursor = i;
+        self.follow = true;
+    }
+
+    /// Opens the folders that row `i` is in.
+    fn reveal(&mut self, i: usize) {
+        let row = &self.rows[i];
+        self.collapsed.retain(|c| !row.inside(c));
+    }
+
+    /// Puts the cursor on the row for `path`, a file or a folder, if it's listed. The folders
+    /// it's in open.
+    pub fn select(&mut self, path: &str) {
+        if let Some(i) = self.rows.iter().position(|r| r.path == path) {
+            self.go(i);
         }
     }
 
-    /// `j`/`k`: to the next or previous file, skipping folders.
+    /// `j`/`k`: to the next or previous visible row.
     pub fn step(&mut self, down: bool) {
-        let files = |i: &usize| self.rows[*i].path.is_some();
+        let visible = self.visible();
+        let at = visible.iter().position(|&i| i == self.cursor).unwrap_or(0);
         let next = if down {
-            (self.cursor + 1..self.rows.len()).find(files)
+            visible.get(at + 1)
         } else {
-            (0..self.cursor).rev().find(files)
+            at.checked_sub(1).and_then(|a| visible.get(a))
         };
-        if let Some(i) = next {
-            self.cursor = i;
-            self.follow = true;
+        if let Some(&i) = next {
+            self.go(i);
         }
+    }
+
+    /// Opens or closes the folder at row `i`.
+    fn toggle(&mut self, i: usize) {
+        let path = &self.rows[i].path;
+        if !self.collapsed.remove(path) {
+            self.collapsed.insert(path.clone());
+        }
+    }
+
+    /// `l` on a folder: open it, or if it's already open, go to its first row.
+    fn right(&mut self) {
+        let path = &self.rows[self.cursor].path;
+        if !self.collapsed.remove(path) {
+            self.step(true);
+        }
+    }
+
+    /// `h`: close the folder under the cursor. On a file or a closed folder, go to the folder
+    /// it's in instead.
+    fn left(&mut self) {
+        let row = &self.rows[self.cursor];
+        if row.is_folder() && self.collapsed.insert(row.path.clone()) {
+            return;
+        }
+        // Rows come in tree order, so the parent is the nearest folder above, one level up.
+        let depth = row.depth;
+        if let Some(i) = self.rows[..self.cursor]
+            .iter()
+            .rposition(|r| r.is_folder() && r.depth + 1 == depth)
+        {
+            self.go(i);
+        }
+    }
+
+    pub fn origin(&self) -> Origin {
+        Origin {
+            cursor: self.cursor,
+            top: self.top,
+            collapsed: self.collapsed.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, o: Origin) {
+        (self.cursor, self.top, self.collapsed) = (o.cursor, o.top, o.collapsed);
+    }
+
+    /// Moves the cursor to the next row whose name matches, or the previous one, wrapping at
+    /// the ends. Rows inside closed folders count, and the folders holding the match open.
+    /// Only the name is matched, so `src` finds the `src/` folder and not the files in it.
+    /// Returns whether anything matched.
+    pub fn search(&mut self, regex: &regex::Regex, forward: bool) -> bool {
+        let n = self.rows.len();
+        let found = (1..=n)
+            .map(|k| {
+                if forward {
+                    (self.cursor + k) % n
+                } else {
+                    (self.cursor + n - k) % n
+                }
+            })
+            .find(|&i| regex.is_match(&self.rows[i].name));
+        if let Some(i) = found {
+            self.go(i);
+        }
+        found.is_some()
     }
 
     pub fn selected(&self) -> Option<&str> {
-        self.rows.get(self.cursor)?.path.as_deref()
+        self.rows.get(self.cursor)?.file()
     }
 
-    /// The file on the screen row `y` of `area`, as last drawn.
-    pub fn path_at(&self, area: Rect, y: u16) -> Option<&str> {
+    /// The row on the screen row `y` of `area`, as last drawn.
+    pub fn row_at(&self, area: Rect, y: u16) -> Option<usize> {
         let i = self.top + y.checked_sub(area.y + 1)? as usize;
-        self.rows.get(i)?.path.as_deref()
+        self.visible().get(i).copied()
     }
 
     fn render_in(&mut self, buf: &mut Buffer, area: Rect, current: &str, theme: &Theme) {
@@ -124,44 +273,50 @@ impl Tree {
         let title = theme.get("ui.text").patch(ratatui::style::Style::default());
         buf.set_stringn(area.x, area.y, " Changed files", area.width as usize, title);
         let height = area.height.saturating_sub(1) as usize;
+        let visible = self.visible();
         if std::mem::take(&mut self.follow) {
-            if self.cursor < self.top {
-                self.top = self.cursor;
-            } else if height > 0 && self.cursor >= self.top + height {
-                self.top = self.cursor + 1 - height;
+            let at = visible.iter().position(|&i| i == self.cursor).unwrap_or(0);
+            if at < self.top {
+                self.top = at;
+            } else if height > 0 && at >= self.top + height {
+                self.top = at + 1 - height;
             }
         }
-        self.top = self.top.min(self.rows.len().saturating_sub(height));
+        self.top = self.top.min(visible.len().saturating_sub(height));
         let w = area.width.saturating_sub(1) as usize; // the last column separates it
-        for (row, r) in self.rows.iter().enumerate().skip(self.top).take(height) {
+        for (row, &i) in visible.iter().enumerate().skip(self.top).take(height) {
+            let r = &self.rows[i];
             let y = area.y + 1 + (row - self.top) as u16;
-            let mut style = theme.get(if r.path.is_some() {
+            let mut style = theme.get(if !r.is_folder() {
                 "ui.text"
             } else {
                 "ui.text.directory"
             });
-            if r.path.as_deref() == Some(current) {
+            if r.file() == Some(current) {
                 style = style.patch(theme.get("ui.text.focus"));
             }
-            if row == self.cursor && self.focused {
+            if i == self.cursor && self.focused {
                 style = style.patch(theme.get("ui.menu.selected"));
                 buf.set_style(Rect::new(area.x, y, w as u16, 1), style);
             }
             // Right-aligned: +added -removed and a thread badge.
             let mut tail = vec![];
-            if r.path.is_some() {
-                if r.added > 0 {
-                    tail.push((format!("+{}", r.added), theme.get("diff.plus")));
-                }
-                if r.removed > 0 {
-                    tail.push((format!("-{}", r.removed), theme.get("diff.minus")));
-                }
-                if r.threads > 0 {
-                    tail.push((format!("●{}", r.threads), theme.get("info")));
-                }
+            if r.added > 0 {
+                tail.push((format!("+{}", r.added), theme.get("diff.plus")));
+            }
+            if r.removed > 0 {
+                tail.push((format!("-{}", r.removed), theme.get("diff.minus")));
+            }
+            if r.threads > 0 {
+                tail.push((format!("●{}", r.threads), theme.get("info")));
             }
             let tail_w: usize = tail.iter().map(|(t, _)| t.width() + 1).sum();
-            let name = clean(&r.name);
+            let marker = match (r.is_folder(), self.collapsed.contains(&r.path)) {
+                (false, _) => "",
+                (true, false) => "▾ ",
+                (true, true) => "▸ ",
+            };
+            let name = format!("{}{marker}{}", "  ".repeat(r.depth), clean(&r.name));
             buf.set_stringn(area.x + 1, y, &name, w.saturating_sub(tail_w + 2), style);
             let mut x = area.x as usize + w.saturating_sub(tail_w);
             for (t, s) in tail {
@@ -185,10 +340,14 @@ impl Tree {
 impl Component for Tree {
     /// Every key is the tree's while it's focused.
     fn key(&mut self, key: Key, _cx: &Cx) -> Outcome {
+        let folder = self.rows.get(self.cursor).is_some_and(Row::is_folder);
         match (key.code, key.char()) {
             (KeyCode::Down, _) | (_, Some('j')) => self.step(true),
             (KeyCode::Up, _) | (_, Some('k')) => self.step(false),
-            (KeyCode::Enter, _) | (_, Some('l')) => {
+            (KeyCode::Enter, _) if folder => self.toggle(self.cursor),
+            (KeyCode::Right, _) | (_, Some('l')) if folder => self.right(),
+            (KeyCode::Left, _) | (_, Some('h')) => self.left(),
+            (KeyCode::Enter | KeyCode::Right, _) | (_, Some('l')) => {
                 if let Some(p) = self.selected().map(str::to_string) {
                     self.focused = false;
                     return Outcome::Msg(Msg::Open(Target::Path(p)));
@@ -196,13 +355,18 @@ impl Component for Tree {
             }
             (KeyCode::Esc, _) => self.focused = false,
             (_, Some('q')) => return Outcome::Msg(Msg::CloseTree),
+            (_, Some('/')) => return Outcome::Msg(Msg::TreeSearch(true)),
+            (_, Some('?')) => return Outcome::Msg(Msg::TreeSearch(false)),
+            (_, Some('n')) => return Outcome::Msg(Msg::TreeSearchNext(true)),
+            (_, Some('N')) => return Outcome::Msg(Msg::TreeSearchNext(false)),
             _ => {}
         }
         Outcome::Consumed
     }
 
-    /// A click anywhere in the tree focuses it, and a click on a file also opens that file.
-    /// The wheel scrolls the rows without moving the cursor.
+    /// A click anywhere in the tree focuses it. A click on a file also opens that file, and a
+    /// click on a folder opens or closes it. The wheel scrolls the rows without moving the
+    /// cursor.
     fn mouse(&mut self, m: MouseEvent, area: Rect, _cx: &Cx) -> Outcome {
         if !area.contains((m.column, m.row).into()) {
             return Outcome::Ignored;
@@ -210,14 +374,17 @@ impl Component for Tree {
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focused = true;
-                if let Some(p) = self.path_at(area, m.row).map(str::to_string) {
-                    self.select(&p);
-                    return Outcome::Msg(Msg::Open(Target::Path(p)));
+                if let Some(i) = self.row_at(area, m.row) {
+                    self.go(i);
+                    match self.rows[i].file() {
+                        Some(p) => return Outcome::Msg(Msg::Open(Target::Path(p.to_string()))),
+                        None => self.toggle(i),
+                    }
                 }
             }
             MouseEventKind::ScrollDown => {
                 let height = area.height.saturating_sub(1) as usize;
-                self.top = (self.top + 3).min(self.rows.len().saturating_sub(height));
+                self.top = (self.top + 3).min(self.visible().len().saturating_sub(height));
             }
             MouseEventKind::ScrollUp => self.top = self.top.saturating_sub(3),
             _ => {}
@@ -225,9 +392,19 @@ impl Component for Tree {
         Outcome::Consumed
     }
 
-    /// Draws the tree in `area`, the file on screen marked.
+    /// Draws the tree in `area`, the file on screen marked. When that file has changed since
+    /// the last draw, the folders holding it open. If the tree isn't focused, its cursor moves
+    /// to the file too. Doing this here covers every way of changing the file.
     fn render(&mut self, buf: &mut Buffer, area: Rect, cx: &Cx) {
         let current = cx.state.map_or("", |s| s.main_path());
+        if current != self.shown {
+            self.shown = current.to_string();
+            match self.rows.iter().position(|r| r.path == current) {
+                Some(i) if self.focused => self.reveal(i),
+                Some(i) => self.go(i),
+                None => {}
+            }
+        }
         self.render_in(buf, area, current, cx.theme);
     }
 }
@@ -254,25 +431,41 @@ mod tests {
             e("src/ui/view.rs", 1, 1, 0),
             e("tests/mcp.rs", 9, 0, 0),
         ]);
-        let names: Vec<&str> = t.rows.iter().map(|r| r.name.as_str()).collect();
+        let rows: Vec<(usize, &str, &str)> = t
+            .rows
+            .iter()
+            .map(|r| (r.depth, r.name.as_str(), r.path.as_str()))
+            .collect();
         assert_eq!(
-            names,
+            rows,
             [
-                "README.md",
-                "src/",
-                "  main.rs",
-                "  ui/",
-                "    mod.rs",
-                "    view.rs",
-                "tests/",
-                "  mcp.rs"
+                (0, "README.md", "README.md"),
+                (0, "src/", "src/"),
+                (1, "main.rs", "src/main.rs"),
+                (1, "ui/", "src/ui/"),
+                (2, "mod.rs", "src/ui/mod.rs"),
+                (2, "view.rs", "src/ui/view.rs"),
+                (0, "tests/", "tests/"),
+                (1, "mcp.rs", "tests/mcp.rs")
             ]
         );
         assert_eq!(t.selected(), Some("README.md"));
     }
 
+    /// The path under the cursor, a folder's included.
+    fn at(t: &Tree) -> &str {
+        &t.rows[t.cursor].path
+    }
+
+    fn shown(t: &Tree) -> Vec<&str> {
+        t.visible()
+            .iter()
+            .map(|&i| t.rows[i].path.as_str())
+            .collect()
+    }
+
     #[test]
-    fn moving_skips_folders_and_stops_at_the_ends() {
+    fn moving_lands_on_folders_and_stops_at_the_ends() {
         let mut t = Tree::new(vec![e("a/x", 0, 0, 0), e("b/y", 0, 0, 0)]);
         assert_eq!(
             t.selected(),
@@ -280,17 +473,141 @@ mod tests {
             "starts on the first file, not a folder"
         );
         t.step(true);
-        assert_eq!(t.selected(), Some("b/y"));
+        assert_eq!(at(&t), "b/");
+        assert_eq!(t.selected(), None);
         t.step(true);
-        assert_eq!(t.selected(), Some("b/y"));
+        t.step(true);
+        assert_eq!(at(&t), "b/y");
         t.step(false);
         t.step(false);
-        assert_eq!(t.selected(), Some("a/x"));
+        t.step(false);
+        t.step(false);
+        assert_eq!(at(&t), "a/");
         t.select("b/y");
         assert_eq!(t.selected(), Some("b/y"));
         t.select("nope");
         assert_eq!(t.selected(), Some("b/y"));
         assert!(Tree::new(vec![]).selected().is_none());
+    }
+
+    fn nested() -> Tree {
+        Tree::new(vec![
+            e("README.md", 1, 0, 0),
+            e("src/main.rs", 2, 1, 1),
+            e("src/ui/mod.rs", 3, 0, 2),
+            e("src/ui/view.rs", 4, 2, 0),
+            e("tests/mcp.rs", 5, 0, 0),
+        ])
+    }
+
+    #[test]
+    fn a_closed_folder_hides_everything_under_it() {
+        let mut t = nested();
+        t.collapsed.insert("src/".into());
+        assert_eq!(shown(&t), ["README.md", "src/", "tests/", "tests/mcp.rs"]);
+        // Opening it again shows the folder inside it as it was left.
+        t.collapsed.insert("src/ui/".into());
+        t.collapsed.remove("src/");
+        assert_eq!(
+            shown(&t),
+            [
+                "README.md",
+                "src/",
+                "src/main.rs",
+                "src/ui/",
+                "tests/",
+                "tests/mcp.rs"
+            ]
+        );
+        let src = &t.rows[1];
+        assert_eq!((src.added, src.removed, src.threads), (9, 3, 3), "totals");
+        let ui = &t.rows[3];
+        assert_eq!((ui.added, ui.removed, ui.threads), (7, 2, 2));
+    }
+
+    #[test]
+    fn a_rebuild_keeps_closed_folders_and_the_cursor() {
+        let mut t = nested();
+        t.collapsed
+            .extend(["src/ui/".to_string(), "tests/".to_string()]);
+        t.select("src/");
+        t.focused = false;
+        // tests/ is gone from the new tree, so it's no longer closed.
+        let t = t.rebuilt(vec![
+            e("src/main.rs", 0, 0, 0),
+            e("src/ui/mod.rs", 0, 0, 0),
+            e("z.rs", 0, 0, 0),
+        ]);
+        assert_eq!(t.collapsed, HashSet::from(["src/ui/".to_string()]));
+        assert_eq!(at(&t), "src/");
+        assert!(!t.focused);
+    }
+
+    #[test]
+    fn moving_skips_what_a_closed_folder_hides() {
+        let mut t = nested();
+        t.collapsed.insert("src/".into());
+        t.select("README.md");
+        t.step(true);
+        t.step(true);
+        assert_eq!(at(&t), "tests/");
+        t.step(false);
+        assert_eq!(at(&t), "src/");
+    }
+
+    #[test]
+    fn h_and_l_open_close_and_move() {
+        let cx_theme = Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
+        let cx = Cx {
+            screen: Rect::new(0, 0, 80, 24),
+            theme: &cx_theme,
+            state: None,
+        };
+        let key = |c| Key {
+            code: KeyCode::Char(c),
+            mods: crossterm::event::KeyModifiers::NONE,
+        };
+        let mut t = nested();
+        // At the top: h on a top-level file has nowhere to go.
+        t.select("README.md");
+        t.key(key('h'), &cx);
+        assert_eq!(at(&t), "README.md");
+        // In the middle: h on a file goes to its folder, then closes it, then goes up.
+        t.select("src/ui/view.rs");
+        t.key(key('h'), &cx);
+        assert_eq!(at(&t), "src/ui/");
+        t.key(key('h'), &cx);
+        assert!(t.collapsed.contains("src/ui/"));
+        t.key(key('h'), &cx);
+        assert_eq!(at(&t), "src/");
+        // l opens a closed folder, then goes to its first row.
+        t.select("src/ui/");
+        t.key(key('l'), &cx);
+        assert!(!t.collapsed.contains("src/ui/"));
+        assert_eq!(at(&t), "src/ui/");
+        t.key(key('l'), &cx);
+        assert_eq!(at(&t), "src/ui/mod.rs");
+        // l on a file opens it.
+        assert_eq!(
+            t.key(key('l'), &cx),
+            Outcome::Msg(Msg::Open(Target::Path("src/ui/mod.rs".into())))
+        );
+        // At the bottom: ret toggles a folder, and h on a top-level closed folder stays.
+        t.select("tests/");
+        let ret = Key {
+            code: KeyCode::Enter,
+            mods: crossterm::event::KeyModifiers::NONE,
+        };
+        assert_eq!(t.key(ret, &cx), Outcome::Consumed);
+        assert!(t.collapsed.contains("tests/"));
+        t.key(key('h'), &cx);
+        assert_eq!(at(&t), "tests/");
+        t.key(ret, &cx);
+        assert!(!t.collapsed.contains("tests/"));
+        t.key(key('j'), &cx);
+        assert_eq!(at(&t), "tests/mcp.rs");
+        t.key(key('j'), &cx);
+        assert_eq!(at(&t), "tests/mcp.rs", "the last row");
     }
 
     #[test]
@@ -300,23 +617,43 @@ mod tests {
         let area = Rect::new(0, 0, 30, 5);
         let mut buf = Buffer::empty(area);
         t.render_in(&mut buf, area, "b.rs", &theme);
-        let row = |y| {
+        let row = |buf: &Buffer, y| {
             (0..30)
                 .map(|x| buf[(x, y)].symbol())
                 .collect::<String>()
                 .trim_end()
                 .to_string()
         };
-        assert_eq!(row(0).trim_end_matches('│').trim_end(), " Changed files");
-        assert!(row(1).starts_with(" b.rs"));
-        assert!(
-            row(3).contains("a.rs") && row(3).contains("+12 -3 ●2"),
-            "{}",
-            row(3)
+        assert_eq!(
+            row(&buf, 0).trim_end_matches('│').trim_end(),
+            " Changed files"
         );
-        assert_eq!(t.path_at(area, 3), Some("src/a.rs"));
-        assert_eq!(t.path_at(area, 2), None, "a folder");
-        assert_eq!(t.path_at(area, 0), None, "the title");
+        assert!(row(&buf, 1).starts_with(" b.rs"));
+        assert!(
+            row(&buf, 3).contains("a.rs") && row(&buf, 3).contains("+12 -3 ●2"),
+            "{}",
+            row(&buf, 3)
+        );
+        assert!(
+            row(&buf, 2).contains("▾ src/") && row(&buf, 2).contains("+12 -3 ●2"),
+            "{}",
+            row(&buf, 2)
+        );
+        assert_eq!(t.row_at(area, 3), Some(2));
+        assert_eq!(t.row_at(area, 2), Some(1), "a folder");
+        assert_eq!(t.row_at(area, 0), None, "the title");
+        t.collapsed.insert("src/".into());
+        let mut buf = Buffer::empty(area);
+        t.render_in(&mut buf, area, "b.rs", &theme);
+        assert!(
+            row(&buf, 2).contains("▸ src/") && row(&buf, 2).contains("+12 -3 ●2"),
+            "{}",
+            row(&buf, 2)
+        );
+        assert!(!row(&buf, 3).contains("a.rs"), "{}", row(&buf, 3));
+        // Selecting a row opens the folders it's in.
+        t.select("src/a.rs");
+        assert!(t.collapsed.is_empty());
     }
 
     #[test]
@@ -335,6 +672,8 @@ mod tests {
         };
         let mut t = Tree::new(vec![e("a.rs", 1, 0, 0), e("src/b.rs", 1, 0, 0)]);
         assert_eq!(t.key(key('j'), &cx), Outcome::Consumed);
+        assert_eq!(at(&t), "src/", "j lands on a folder");
+        t.key(key('j'), &cx);
         assert_eq!(t.selected(), Some("src/b.rs"));
         assert_eq!(
             t.key(key('x'), &cx),
@@ -367,6 +706,10 @@ mod tests {
             Outcome::Consumed,
             "a folder"
         );
+        assert!(t.collapsed.contains("src/"), "a click closes a folder");
+        assert_eq!(at(&t), "src/");
+        t.mouse(click(3, 2), area, &cx);
+        assert!(t.collapsed.is_empty(), "and opens it again");
         assert_eq!(
             t.mouse(click(30, 1), area, &cx),
             Outcome::Ignored,

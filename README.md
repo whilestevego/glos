@@ -92,7 +92,7 @@ and the rest. On top of those, it adds keys for reviewing:
 | `space g` | Pick a changed file |
 | `space f` | Open any file in the project, for context |
 | `space d` | Pick a thread in this file (`space D` for the whole review) |
-| `space e` | Show or focus the file tree |
+| `space e` | Open, focus or close the file tree |
 | `space l` | The dashboard: every open review |
 | `space n` | Go to the line the agent asked you to look at |
 | `]d` `[d` | Next or previous thread |
@@ -129,7 +129,9 @@ lists the keys that can follow. Press **`Ctrl-G` anywhere** to see every key tha
 are, whether that's the file view, the comment box, the file tree or a list.
 
 The mouse works too. Click to move the cursor, drag to select, and click a thread to open it.
-Clicking the file tree or the code moves keyboard focus there. The scroll wheel scrolls whatever
+Clicking the file tree or the code moves keyboard focus there.
+In the tree, `ret` or a click opens and closes a folder, `h` and `l` close and open folders as in
+Helix's file explorer, and `/` searches the names. The scroll wheel scrolls whatever
 is under the pointer, including the tree, the comment box, the key menu and the picker's preview.
 When lines aren't wrapped, you can scroll the code sideways with a touchpad swipe or by holding
 Shift while you turn the wheel.

@@ -122,6 +122,12 @@ pub enum PromptKind {
         origin: Selection,
         top: usize,
     },
+    /// `/` or `?` in the file tree: the tree's cursor jumps to a match as you type, and `esc`
+    /// puts it back.
+    TreeSearch {
+        forward: bool,
+        origin: super::tree::Origin,
+    },
     /// `s`, `S`, `K`, `A-K`: previews as you type, as Helix's regex prompts do.
     Regex {
         action: commands::RegexAction,
@@ -156,7 +162,7 @@ impl Prompt {
     fn render_line(&self, buf: &mut Buffer, area: Rect, t: &Theme) {
         let prefix = match self.kind {
             PromptKind::Command => ":",
-            PromptKind::Search { .. } => "search:",
+            PromptKind::Search { .. } | PromptKind::TreeSearch { .. } => "search:",
             PromptKind::Regex { action, .. } => action.prompt(),
         };
         let shown = format!("{prefix}{}", clean(&self.line));

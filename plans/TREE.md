@@ -113,3 +113,21 @@ and `cargo test`.
 
 - Remembering closed folders across glos sessions.
 - Opening or closing every folder at once.
+
+## As built
+
+The work follows the plan, with four differences.
+
+`Row` has no `kind` field. A folder's path ends in `/`, so `Row::is_folder` reads it from the
+path.
+
+The tree opens the folders holding the current file when it draws, not in each place that
+changes the file. `Tree::render` compares the file on screen with the one it drew last time. This
+covers `g n`, the pickers, threads, the jumplist and anything added later.
+
+A search remembers the closed folders as well as the cursor. Each keystroke starts again from
+there, so folders opened for an earlier, shorter pattern close again. `esc` puts both back.
+
+`plans/KEYMAP.md` doesn't list the tree's keys. `cargo xtask keymap` generates it from
+`src/ui/keymap.rs`, and the tree handles its keys itself. The `C-g` palette and the README list
+them instead.

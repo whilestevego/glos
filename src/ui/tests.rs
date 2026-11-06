@@ -2,7 +2,7 @@
 //! `#[h|]#ello` notation), the view and the screen checked. Screen snapshots lock the parts that
 //! must look like Helix.
 
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use glos_helix::test::plain;
@@ -1708,6 +1708,226 @@ fn filtering_files() {
     assert!(t.said().starts_with("Bad glob"));
 }
 
+/// Two folders, `a/` and `b/`, with a file each, and the tree open but not focused.
+fn two_folder_tree() -> T {
+    let mut t = T::folders(|o, n| {
+        for d in ["a", "b"] {
+            std::fs::create_dir_all(o.join(d)).unwrap();
+            std::fs::create_dir_all(n.join(d)).unwrap();
+            std::fs::write(n.join(d).join("x.rs"), format!("{d}\n")).unwrap();
+        }
+    });
+    t.keys("space e esc");
+    t
+}
+
+#[test]
+fn opening_a_file_in_a_closed_folder_opens_the_folder() {
+    let mut t = two_folder_tree();
+    assert_eq!(t.path(), "a/x.rs");
+    t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
+    t.draw();
+    assert_eq!(t.screen().matches("x.rs").count(), 2, "{}", t.screen());
+    t.keys("g n");
+    assert_eq!(t.path(), "b/x.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.is_empty(), "b/ opened");
+    assert_eq!(
+        tree.selected(),
+        Some("b/x.rs"),
+        "the unfocused tree follows"
+    );
+    // Through a picker too.
+    t.app.tree.as_mut().unwrap().collapsed.insert("a/".into());
+    t.keys("space g").typed("a/x").keys("ret");
+    assert_eq!(t.path(), "a/x.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.is_empty());
+    assert_eq!(tree.selected(), Some("a/x.rs"));
+}
+
+#[test]
+fn a_focused_tree_keeps_its_cursor_when_the_file_changes() {
+    let mut t = two_folder_tree();
+    t.keys("space e");
+    // The file changes without the tree's help, as it does after a suggestion or a jump.
+    t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
+    t.app.open(Target::Path("b/x.rs".into()));
+    t.draw();
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.is_empty(), "the file's folder opens");
+    assert_eq!(tree.selected(), Some("a/x.rs"), "the cursor stays");
+}
+
+#[test]
+fn a_rebuild_keeps_closed_folders_closed() {
+    let mut t = two_folder_tree();
+    t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
+    let new = t._dir.path().join("new");
+    std::fs::write(new.join("b/y.rs"), "y\n").unwrap();
+    t.app.files_changed();
+    t.draw();
+    assert_eq!(t.app.state.source.changes.len(), 3);
+    let tree = t.app.tree.as_ref().unwrap();
+    assert!(tree.collapsed.contains("b/"));
+    assert!(!t.shows("y.rs"), "{}", t.screen());
+}
+
+/// A focused tree over `README.md`, `src/main.rs`, `src/ui/mod.rs`, `src/ui/view.rs` and
+/// `tests/mcp.rs`.
+fn nested_tree() -> T {
+    let mut t = T::folders(|_, n| {
+        for f in [
+            "README.md",
+            "src/main.rs",
+            "src/ui/mod.rs",
+            "src/ui/view.rs",
+            "tests/mcp.rs",
+        ] {
+            let p = n.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x\n").unwrap();
+        }
+    });
+    t.keys("space e");
+    t
+}
+
+impl T {
+    /// The path under the tree's cursor, a folder's included.
+    fn tree_at(&self) -> String {
+        let tree = self.app.tree.as_ref().unwrap();
+        tree.rows[tree.cursor].path.clone()
+    }
+
+    fn closed(&mut self, folders: &[&str]) -> &mut Self {
+        let tree = self.app.tree.as_mut().unwrap();
+        tree.collapsed = folders.iter().map(|f| f.to_string()).collect();
+        self.draw();
+        self
+    }
+}
+
+#[test]
+fn tree_with_a_closed_folder() {
+    let mut t = nested_tree();
+    t.closed(&["tests/"]);
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn the_palette_finds_closing_the_tree() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("C-g").typed("close the file tree");
+    assert!(
+        t.shows("Open, focus or close the file tree"),
+        "{}",
+        t.screen()
+    );
+}
+
+#[test]
+fn searching_the_tree_jumps_as_you_type() {
+    let mut t = nested_tree();
+    assert_eq!(t.tree_at(), "README.md");
+    t.keys("/");
+    assert!(t.shows("search:"));
+    t.typed("m");
+    assert_eq!(t.tree_at(), "src/main.rs", "the first name with an m");
+    t.typed("o");
+    assert_eq!(t.tree_at(), "src/ui/mod.rs");
+    // esc puts the cursor back.
+    t.keys("esc");
+    assert_eq!(t.tree_at(), "README.md");
+    assert!(t.app.prompt.is_none());
+}
+
+#[test]
+fn tree_search_matches_only_the_shown_name() {
+    let mut t = nested_tree();
+    t.keys("/").typed("src").keys("ret");
+    assert_eq!(t.tree_at(), "src/");
+    t.keys("n");
+    assert_eq!(t.tree_at(), "src/", "no file's name has src in it");
+}
+
+#[test]
+fn tree_search_opens_closed_folders_holding_the_match() {
+    let mut t = nested_tree();
+    t.closed(&["src/", "src/ui/", "tests/"]);
+    t.keys("/").typed("view").keys("ret");
+    assert_eq!(t.tree_at(), "src/ui/view.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert_eq!(
+        tree.collapsed,
+        HashSet::from(["tests/".to_string()]),
+        "folders without a match stay closed"
+    );
+    assert!(t.shows("view.rs"), "{}", t.screen());
+    // Typing past an earlier match doesn't leave its folders open.
+    t.closed(&["src/", "src/ui/", "tests/"]);
+    t.app.tree.as_mut().unwrap().select("README.md");
+    t.keys("/").typed("m");
+    assert_eq!(t.tree_at(), "src/main.rs");
+    t.typed("c");
+    assert_eq!(t.tree_at(), "tests/mcp.rs");
+    let tree = t.app.tree.as_ref().unwrap();
+    assert_eq!(
+        tree.collapsed,
+        HashSet::from(["src/".to_string(), "src/ui/".to_string()])
+    );
+    t.keys("esc");
+    assert_eq!(
+        t.app.tree.as_ref().unwrap().collapsed.len(),
+        3,
+        "esc closes them again"
+    );
+}
+
+#[test]
+fn n_and_shift_n_step_through_tree_matches_and_wrap() {
+    let mut t = nested_tree();
+    t.keys("/").typed("\\.rs$").keys("ret");
+    assert_eq!(t.tree_at(), "src/main.rs");
+    t.keys("n");
+    assert_eq!(t.tree_at(), "src/ui/mod.rs");
+    t.keys("n n");
+    assert_eq!(t.tree_at(), "tests/mcp.rs");
+    t.keys("n");
+    assert_eq!(t.tree_at(), "src/main.rs", "wraps to the top");
+    t.keys("N");
+    assert_eq!(t.tree_at(), "tests/mcp.rs", "and back to the bottom");
+}
+
+#[test]
+fn tree_search_backwards_and_without_a_match() {
+    let mut t = nested_tree();
+    t.keys("?").typed("rs");
+    assert_eq!(
+        t.tree_at(),
+        "tests/mcp.rs",
+        "backwards from the top wraps to the end"
+    );
+    t.keys("esc");
+    t.keys("/").typed("nothing");
+    assert_eq!(t.tree_at(), "README.md");
+    assert_eq!(t.status(), Some("No matches"));
+    t.keys("ret");
+    assert_eq!(t.tree_at(), "README.md");
+}
+
+#[test]
+fn a_search_in_the_code_repeats_in_the_tree() {
+    let mut t = nested_tree();
+    t.keys("esc / v i e w ret");
+    assert_eq!(t.app.last_search.as_deref(), Some("view"));
+    t.keys("space e n");
+    assert_eq!(t.tree_at(), "src/ui/view.rs");
+    // And the other way round: a tree search is the code's next search.
+    t.keys("/").typed("x").keys("ret");
+    assert_eq!(t.app.last_search.as_deref(), Some("x"));
+}
+
 #[test]
 fn file_tree() {
     let mut t = T::folders(|o, n| {
@@ -1996,12 +2216,18 @@ fn palette_in_the_comment_box() {
 
 #[test]
 fn palette_in_the_tree_picker_and_prompt() {
-    let mut t = T::files(OLD, NEW);
+    // Tall enough to list every tree key.
+    let mut t = T::files_sized(OLD, NEW, 100, 30);
     // The file tree.
     t.app.app_command(AppAction::FileTree);
     t.keys("C-g");
     assert_eq!(t.palette().0, "File tree");
     assert!(t.shows("Close the tree"));
+    assert!(t.shows("On a folder: open or close it"), "{}", t.screen());
+    assert!(t.shows("Close the folder, or go to the one it's in"));
+    assert!(t.shows("Search the names"));
+    t.keys("esc C-g").typed("close");
+    assert!(t.shows("Close the tree"), "{}", t.screen());
     t.keys("ret"); // a listed key: back to the tree, still focused
     assert!(t.app.pickers.is_empty() && t.app.tree.as_ref().unwrap().focused);
     t.keys("q");
