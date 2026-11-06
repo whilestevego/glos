@@ -588,6 +588,6 @@ Each of these was answered on 2026-11-06 and has a plan in `plans/`.
 - **Re-anchoring rules:** how far to search for moved text, and whether a small edit keeps the
   thread. See `plan-reanchoring.md`.
 - **Branch renames and detached HEAD:** see `plan-review-identity.md`.
-- **The default theme:** catppuccin_mocha. See `plan-default-theme.md`.
+- **The default theme:** catppuccin_mocha. See `completed/plan-default-theme.md`.
 - **A folder with no second copy:** snapshot it when the review starts. See
   `plan-folder-snapshot.md`.

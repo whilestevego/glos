@@ -148,7 +148,8 @@ on you, like unsent comments and unread replies. Press `enter` to open a review.
 Settings go in `~/.config/glos/config.toml`:
 
 ```toml
-# Any Helix theme. glos comes with all of them.
+# Any Helix theme. glos comes with all of them, and uses catppuccin_mocha unless you
+# choose another. "default" is Helix's own default theme.
 theme = "catppuccin_mocha"
 
 # Optional: how glos opens itself in a new pane when an agent asks for a review.

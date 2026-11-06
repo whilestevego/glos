@@ -5,6 +5,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::Deserialize;
 
+/// The theme when `config.toml` sets none, or names one that won't load. Helix's own `default`
+/// is low in contrast, and collapsed thread markers are hard to read in it.
+pub const DEFAULT_THEME: &str = "catppuccin_mocha";
+
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
@@ -39,7 +43,7 @@ pub struct SoftWrap {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            theme: "default".into(),
+            theme: DEFAULT_THEME.into(),
             open_command: None,
             editor: Editor::default(),
         }
@@ -132,6 +136,13 @@ mod tests {
         assert_eq!(c.editor.diff_context, 0);
         assert!(parse("[editor]\ndiff-context = -1\n").is_err());
         assert!(parse("[editor]\ndiff-context = \"3\"\n").is_err());
+    }
+
+    #[test]
+    fn the_default_theme_is_catppuccin_mocha_and_loads() {
+        assert_eq!(Config::default().theme, "catppuccin_mocha");
+        assert_eq!(parse("").unwrap().theme, DEFAULT_THEME);
+        crate::theme::Theme::load(DEFAULT_THEME, crate::theme::ColorSupport::TrueColor).unwrap();
     }
 
     #[test]

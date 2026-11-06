@@ -41,7 +41,6 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 | [plan-reanchoring.md](plan-reanchoring.md) | Draft. Threads don't jump to distant copies of a line, and survive small edits. |
 | [plan-review-identity.md](plan-review-identity.md) | Draft. Reviews follow renamed branches, and detached HEAD is keyed by its start commit. |
 | [plan-folder-snapshot.md](plan-folder-snapshot.md) | Draft. Review a folder outside git against a snapshot taken when the review starts. |
-| [plan-default-theme.md](plan-default-theme.md) | Ready to build. catppuccin_mocha becomes the default theme. |
 
 Remappable keys, from the overview's "After the MVP" list in
 [completed/plan-overview.md](completed/plan-overview.md), has no plan yet.
@@ -54,6 +53,7 @@ None.
 
 | Plan | Delivered |
 |---|---|
+| [completed/plan-default-theme.md](completed/plan-default-theme.md) | 2026-11-06, PR #10. catppuccin_mocha is the default theme, and 256-colour diff tints are green and red instead of grey. |
 | [completed/plan-diff-highlight.md](completed/plan-diff-highlight.md) | 2026-11-06, PR #9. Changed lines get a tint mixed from the theme, and changed words get a stronger one. |
 | [completed/plan-keymap-contexts.md](completed/plan-keymap-contexts.md) | 2026-11-06, PR #8. One keymap binds every context's keys, and `Ctrl-G` names the context in its border. |
 | [completed/plan-tree.md](completed/plan-tree.md) | 2026-11-06, PR #7. Tree folders open and close, and `/` searches the names. |

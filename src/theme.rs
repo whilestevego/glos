@@ -57,6 +57,8 @@ impl Theme {
         // The diff tints are worked out from the theme's own RGB colours, before they're mapped
         // to the 256 colours. A theme that sets one of the keys keeps its own.
         let background = raw.get("ui.background").and_then(|s| rgb(s.bg?));
+        // In 256 colours, a word tint must differ from its line's tint, which comes first.
+        let mut line_256: HashMap<&str, u8> = HashMap::new();
         for (key, toward, amount) in TINTS {
             if raw.contains_key(*key) {
                 continue;
@@ -65,7 +67,12 @@ impl Theme {
             // Without both colours there's no tint. The key is still set, so that it doesn't
             // fall back to `diff.plus` and colour the text.
             let bg = match (background, fg, colors) {
-                (Some(b), Some(f), ColorSupport::Indexed) => Some(tint_256(b, f, *amount)),
+                (Some(b), Some(f), ColorSupport::Indexed) => {
+                    let avoid: Vec<u8> = line_256.get(toward).copied().into_iter().collect();
+                    let c = tint_256(b, f, *amount, &avoid);
+                    line_256.entry(toward).or_insert(c);
+                    Some(Color::Indexed(c))
+                }
                 (Some(b), Some(f), _) => Some(rgb_color(mix(b, f, *amount))),
                 _ => None,
             };
@@ -357,19 +364,50 @@ pub fn mix(from: Rgb, to: Rgb, amount: f32) -> Rgb {
     from_oklab([0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t))
 }
 
-/// A tint for 256 colours: the mix, mapped to the nearest of the 256. A small tint can round to
-/// the background's own colour, so the mix goes further toward `to` until it doesn't.
-fn tint_256(from: Rgb, to: Rgb, amount: f32) -> Color {
+/// A tint for 256 colours. The mix itself is nearly grey on a dark background, and the nearest
+/// of the 256 is then a grey, the same for added and removed lines and often the same as the
+/// current line's colour. So the tint keeps the mix's lightness, takes the hue of `to` with at
+/// least [`TINT_CHROMA`] of colour, and maps to the nearest coloured entry of the 6×6×6 cube. If
+/// that's the background's own colour or one in `avoid`, the mix goes further toward `to`.
+fn tint_256(from: Rgb, to: Rgb, amount: f32, avoid: &[u8]) -> u8 {
     let bg = nearest_256(from.0, from.1, from.2);
+    let hue = oklab(to);
+    let hue_c = hue[1].hypot(hue[2]);
     let mut t = amount;
     loop {
-        let (r, g, b) = mix(from, to, t);
-        let c = nearest_256(r, g, b);
-        if c != bg || t >= 1.0 {
-            return Color::Indexed(c);
+        let mut want = oklab(mix(from, to, t));
+        if hue_c > 0.0 {
+            let c = want[1].hypot(want[2]).max(TINT_CHROMA);
+            want[1] = hue[1] / hue_c * c;
+            want[2] = hue[2] / hue_c * c;
+        }
+        let dist = |i: u8| {
+            let o = oklab(cube_rgb(i));
+            (0..3).map(|k| (o[k] - want[k]).powi(2)).sum::<f32>()
+        };
+        let c = (16u8..232)
+            .filter(|&i| {
+                let (r, g, b) = cube_rgb(i);
+                !(r == g && g == b)
+            })
+            .min_by(|&a, &b| dist(a).total_cmp(&dist(b)))
+            .unwrap();
+        if (c != bg && !avoid.contains(&c)) || t >= 1.0 {
+            return c;
         }
         t = (t + 0.05).min(1.0);
     }
+}
+
+/// The least colour a 256-colour tint has, in OKLab chroma, so that it reads as green or red
+/// rather than grey.
+const TINT_CHROMA: f32 = 0.09;
+
+/// The RGB of an entry of the 256 colours' 6×6×6 cube (16–231).
+fn cube_rgb(i: u8) -> Rgb {
+    const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let i = (i - 16) as usize;
+    (STEPS[i / 36], STEPS[(i / 6) % 6], STEPS[i % 6])
 }
 
 fn oklab((r, g, b): Rgb) -> [f32; 3] {
@@ -510,6 +548,52 @@ mod tests {
         // NO_COLOR: no tints.
         let none = Theme::load("catppuccin_mocha", ColorSupport::None).unwrap();
         assert_eq!(none.get("diff.plus.line").bg, None);
+    }
+
+    #[test]
+    fn tints_in_256_colours_are_coloured_and_tell_the_sides_apart() {
+        // Mapped straight to the nearest of the 256, these tints were all greys in dark themes:
+        // added and removed lines the same, and the same as the current line.
+        for name in [
+            "catppuccin_mocha",
+            "default",
+            "gruvbox",
+            "onedark",
+            "tokyonight",
+            "dracula",
+            "nord",
+            "kanagawa",
+            "catppuccin_latte",
+            "solarized_light",
+        ] {
+            let t = Theme::load(name, ColorSupport::Indexed).unwrap();
+            let idx = |k: &str| match t.get(k).bg {
+                Some(Color::Indexed(i)) => i,
+                c => panic!("{name} {k}: {c:?}"),
+            };
+            let [bg, pl, ml, pw, mw] = [
+                "ui.background",
+                "diff.plus.line",
+                "diff.minus.line",
+                "diff.plus.word",
+                "diff.minus.word",
+            ]
+            .map(idx);
+            for (k, c) in [
+                ("plus line", pl),
+                ("minus line", ml),
+                ("plus word", pw),
+                ("minus word", mw),
+            ] {
+                assert!((16..232).contains(&c), "{name} {k}: {c} is a grey");
+                let (r, g, b) = cube_rgb(c);
+                assert!(!(r == g && g == b), "{name} {k}: {c} is a grey");
+                assert_ne!(c, bg, "{name} {k}: the background's colour");
+            }
+            assert_ne!(pl, ml, "{name}: added and removed lines look the same");
+            assert_ne!(pw, pl, "{name}: changed words look like their line");
+            assert_ne!(mw, ml, "{name}: changed words look like their line");
+        }
     }
 
     #[test]

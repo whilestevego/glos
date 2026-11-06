@@ -56,7 +56,7 @@ impl T {
     }
 
     fn new(source: Source, dir: TempDir, w: u16, h: u16, config: &Config) -> T {
-        let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
+        let theme = Theme::load(&config.theme, ColorSupport::TrueColor).unwrap();
         let conn = crate::store::open(&dir.path().join("glos.db")).unwrap();
         let app = App::new(source, config, theme, conn).unwrap();
         let mut t = T {
