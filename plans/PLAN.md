@@ -522,8 +522,8 @@ the dashboard.
   and any-file pickers; themes and highlighting; soft wrap and horizontal scrolling; mouse and
   clipboard; the terminal basics (control characters stripped, logs to a file, panic restore,
   suspend, colour fallback); `glos doctor`.
-  *Status (2026-11-04):* built, except selecting by syntax node (`A-o`, `A-i`), `gw`, the jumplist picker (`space j`), global search (`space /`), the command
-  palette (`space ?`), and `:` completion (with M2's commands). The tree-sitter text objects and
+  *Status (2026-11-06):* built, except selecting by syntax node (`A-o`, `A-i`), `gw`, the
+  jumplist picker (`space j`) and global search (`space /`). The tree-sitter text objects and
   motions (`mif`, `]f`…) came with folding (`FOLDING.md`). `KEYMAP.md` tracks the keys. The
   first screen draws in about 50 ms on this repo.
 - **M2, commenting.** The comment box with drafts saved as you type and `:editor`; comments on
