@@ -4,7 +4,7 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{DefaultTerminal, layout::Rect};
 use rusqlite::Connection;
 
@@ -166,7 +166,9 @@ pub fn run(
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     let key = Key::from(k);
                     status = None;
-                    if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
+                    let picker_keys = keymaps.get(super::keymap::Context::Picker);
+                    if matches!(picker_keys.get(key), Some(super::keymap::Node::Cmd(c)) if c.name == "command_palette")
+                    {
                         keys = match keys {
                             Some(_) => None,
                             None => Some(picker::keys_palette(theme, &keymaps)),

@@ -255,7 +255,7 @@ commands! {
     goto_next_commit, "Goto next commit", App(AppAction::NextCommit(true));
     goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
     file_explorer, "Open, focus or close the file tree", App(AppAction::FileTree);
-    command_palette, "Open command palette", App(AppAction::CommandPalette);
+    command_palette, "Show the keys for where you are", App(AppAction::CommandPalette);
     // The file tree, while it has focus.
     tree_next, "Next row", Tree(T::Next);
     tree_prev, "Previous row", Tree(T::Prev);
@@ -704,6 +704,8 @@ fn normal_defs() -> Vec<Def> {
         cmd("C-u", "page_cursor_half_up"),
         cmd("C-d", "page_cursor_half_down"),
         cmd("C-z", "suspend"),
+        // glos: the palette, in every context.
+        cmd("C-g", "command_palette"),
     ]
 }
 
@@ -719,6 +721,7 @@ fn picker_defs() -> Vec<Def> {
         cmd("ret", "picker_choose"),
         cmd("esc|C-c", "picker_close"),
         cmd("backspace", "picker_delete_char"),
+        cmd("C-g", "command_palette"),
     ]
 }
 
@@ -730,6 +733,7 @@ fn prompt_defs() -> Vec<Def> {
         cmd("tab", "prompt_complete_next"),
         cmd("S-tab", "prompt_complete_prev"),
         cmd("backspace", "prompt_delete_char"),
+        cmd("C-g", "command_palette"),
     ]
 }
 
@@ -758,6 +762,7 @@ fn box_insert_defs() -> Vec<Def> {
         cmd("down", "box_move_down"),
         cmd("home", "box_line_start"),
         cmd("end", "box_line_end"),
+        cmd("C-g", "command_palette"),
     ]
 }
 
@@ -775,6 +780,7 @@ fn tree_defs() -> Vec<Def> {
         cmd("N", "tree_search_prev"),
         cmd("esc", "tree_unfocus"),
         cmd("q", "tree_close"),
+        cmd("C-g", "command_palette"),
     ]
 }
 
@@ -969,6 +975,104 @@ mod tests {
         for c in COMMANDS {
             assert!(!c.doc.is_empty(), "{} has no description", c.name);
             assert!(bound.contains(c.name), "{} isn't bound to any key", c.name);
+        }
+    }
+
+    /// The command `key` runs at the root of `context`, if any.
+    fn bound(k: &Keymaps, context: Context, key: &str) -> Option<&'static str> {
+        match k.get(context).get(Key::parse(key).unwrap()) {
+            Some(Node::Cmd(c)) => Some(c.name),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn each_context_resolves_its_keys() {
+        let k = Keymaps::default();
+        for (context, key, name) in [
+            (Context::Tree, "h", "tree_close_or_up"),
+            (Context::Tree, "ret", "tree_open"),
+            (Context::Picker, "C-n", "picker_next"),
+            (Context::Picker, "S-tab", "picker_prev"),
+            (Context::Prompt, "S-tab", "prompt_complete_prev"),
+            (Context::Prompt, "C-c", "prompt_cancel"),
+            (Context::BoxInsert, "del", "box_delete_char_forward"),
+            (Context::BoxInsert, "esc", "box_normal_mode"),
+            (Context::BoxNormal, "ret", "box_save"),
+            (Context::Normal, "w", "move_next_word_start"),
+        ] {
+            assert_eq!(bound(&k, context, key), Some(name), "{key} in {context:?}");
+        }
+        // Characters aren't bound where text goes, so they're typed.
+        for context in [Context::Picker, Context::Prompt, Context::BoxInsert] {
+            assert!(context.text().is_some());
+            for key in ["a", "q", "space", "/", "1"] {
+                assert_eq!(bound(&k, context, key), None, "{key} in {context:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_context_binds_only_its_own_commands() {
+        let k = Keymaps::default();
+        for context in Context::ALL {
+            let mut menus = vec![];
+            all_menus(k.get(context), &mut menus);
+            for m in menus {
+                for (key, n) in &m.keys {
+                    let Node::Cmd(c) = n else { continue };
+                    let own = matches!(
+                        (context, c.action),
+                        (_, Action::App(AppAction::CommandPalette))
+                            | (Context::Tree, Action::Tree(_))
+                            | (Context::Picker, Action::Picker(_))
+                            | (Context::Prompt, Action::Prompt(_))
+                            | (Context::BoxInsert | Context::BoxNormal, Action::Box(_))
+                            | (
+                                Context::Normal | Context::Select,
+                                Action::Doc(_)
+                                    | Action::NextChar(_)
+                                    | Action::Textobject(_)
+                                    | Action::App(_),
+                            )
+                    );
+                    assert!(own, "{key} runs {} in {context:?}", c.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_box_in_normal_mode_binds_only_its_own_keys() {
+        let k = Keymaps::default();
+        let own: Vec<String> = k
+            .get(Context::BoxNormal)
+            .keys
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .collect();
+        assert_eq!(
+            own,
+            ["ret", "q", "i", "a"],
+            "the rest fall back to the mode"
+        );
+    }
+
+    #[test]
+    fn every_context_reaches_the_palette() {
+        let k = Keymaps::default();
+        for context in Context::ALL {
+            // The box in normal mode reaches it through normal mode, which it falls back to.
+            let reached = if context == Context::BoxNormal {
+                Context::Normal
+            } else {
+                context
+            };
+            assert_eq!(
+                bound(&k, reached, "C-g"),
+                Some("command_palette"),
+                "{context:?}"
+            );
         }
     }
 

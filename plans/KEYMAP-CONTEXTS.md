@@ -200,3 +200,27 @@ New test in `xtask`:
 - Changing any key.
 - The mouse. Clicks and the wheel stay in each component's `mouse`.
 - Typable commands. The `:` commands stay as they are.
+
+## As built
+
+The work follows the plan, with the differences below.
+
+There is no separate `keys_palette` command. `C-g` is bound to Helix's `command_palette` in every
+context, and `space ?` stays bound to it in normal mode. Its description is now "Show the keys
+for where you are". When it runs while the palette is open, it closes the palette, as the special
+case used to. Choosing its row in the palette just goes back.
+
+`C-g` still works partway through a sequence, as it did before. Before walking the keymap,
+`App::handle_key` looks the key up at the context's root. If it runs `command_palette`, the
+palette opens and the pending keys are dropped. The keymap decides which key that is, so the
+rule doesn't name `C-g`.
+
+`Component::key` went away in step 5, once nothing called it. Step 6 then added `command` and
+`text` to the trait.
+
+The box's normal-mode rows in the palette lost the `:editor` hint. That row described a typed
+command and not a key, so the keymap has nothing to build it from.
+
+Picker and comment box commands that used to share a row now have one row each. For example,
+`i` and `a` are now "Insert before the selection" and "Insert after the selection". The
+palette's normal-mode list is one row shorter, because `C-g` shares the row of `space ?`.

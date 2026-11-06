@@ -61,6 +61,16 @@ pub struct Cx<'a> {
 }
 
 pub trait Component {
+    /// What its keys do. `keymap.rs` binds each key to one of these, in the component's context.
+    type Cmd;
+
+    fn command(&mut self, cmd: Self::Cmd, cx: &Cx) -> Outcome;
+
+    /// A character typed where text goes: a character that isn't bound, in a context with text
+    /// input. Components without text input ignore it.
+    fn text(&mut self, _c: char, _cx: &Cx) -> Outcome {
+        Outcome::Ignored
+    }
     /// A click or the wheel; `area` is where the component was drawn.
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Ignored

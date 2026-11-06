@@ -356,9 +356,11 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl Component for Tree {
+    type Cmd = TreeCmd;
+
     /// Runs one of the tree's commands. Opening a file gives the keys back to it.
-    pub fn command(&mut self, cmd: TreeCmd, _cx: &Cx) -> Outcome {
+    fn command(&mut self, cmd: TreeCmd, _cx: &Cx) -> Outcome {
         let folder = self.rows.get(self.cursor).is_some_and(Row::is_folder);
         match cmd {
             TreeCmd::Next => self.step(true),
@@ -379,9 +381,7 @@ impl Tree {
         }
         Outcome::Consumed
     }
-}
 
-impl Component for Tree {
     /// A click anywhere in the tree focuses it. A click on a file also opens that file, and a
     /// click on a folder opens or closes it. The wheel scrolls the rows without moving the
     /// cursor.

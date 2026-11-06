@@ -1816,13 +1816,12 @@ impl App {
             self.status = None;
         }
         self.help_top = 0;
-        // Ctrl-G anywhere: the keys for where you are. Again, or esc, goes back.
-        if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
-            match self.pickers.last() {
-                Some(p) if p.palette => drop(self.pickers.pop()),
-                _ => self.open_palette(),
-            }
-            return None;
+        // The palette's key works anywhere, even partway through a sequence or before the
+        // character that `f` waits for.
+        if let Some(Node::Cmd(c)) = self.root_for(&key).and_then(|m| m.get(key))
+            && c.name == "command_palette"
+        {
+            return self.execute(c);
         }
         // The editor's own state (a pending `f`, the comment box, a count) comes first, and
         // then the keymap.
@@ -1960,10 +1959,11 @@ impl App {
 
     /// A character typed where text goes in `context`.
     fn text(&mut self, context: Context, c: char) -> Option<AppAction> {
+        let cx = cx!(self);
         let outcome = match context {
-            Context::Picker => self.pickers.last_mut().map(|p| p.text(c)),
-            Context::Prompt => self.prompt.as_mut().map(|p| p.text(c)),
-            Context::BoxInsert => self.comment_box.as_mut().map(|b| b.text(c)),
+            Context::Picker => self.pickers.last_mut().map(|p| p.text(c, &cx)),
+            Context::Prompt => self.prompt.as_mut().map(|p| p.text(c, &cx)),
+            Context::BoxInsert => self.comment_box.as_mut().map(|b| b.text(c, &cx)),
             _ => None,
         };
         match outcome {
@@ -2036,12 +2036,15 @@ impl App {
     fn open_palette(&mut self) {
         let (title, rows) = self.context_keys();
         let style = self.theme.get("ui.text.focus");
+        // Choosing the palette's own key just goes back, rather than opening it again.
         let items = rows
             .into_iter()
             .map(|(keys, doc, name)| Item {
                 tags: vec![(keys, style)],
                 text: doc.to_string(),
-                target: name.map_or(Target::Nothing, Target::Command),
+                target: name
+                    .filter(|n| *n != "command_palette")
+                    .map_or(Target::Nothing, Target::Command),
             })
             .collect();
         let mut p = Picker::new(vec!["keys", title], items);
@@ -2065,7 +2068,6 @@ impl App {
         if let Some(f) = fallback {
             self.walk_keys(self.keymaps.get(f), "", &mut rows, Some(root));
         }
-        rows.push(("C-g".into(), "These keys", None));
         (context.title(), rows)
     }
 
@@ -2159,14 +2161,20 @@ impl App {
                     _ => None,
                 }
             }
-            Action::Prompt(c) => match self.prompt.as_mut().map(|p| p.command(c)) {
-                Some(Outcome::Msg(msg)) => self.apply(msg),
-                _ => None,
-            },
-            Action::Box(c) => match self.comment_box.as_mut().map(|b| b.command(c)) {
-                Some(Outcome::Msg(msg)) => self.apply(msg),
-                _ => None,
-            },
+            Action::Prompt(c) => {
+                let cx = cx!(self);
+                match self.prompt.as_mut().map(|p| p.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
+            Action::Box(c) => {
+                let cx = cx!(self);
+                match self.comment_box.as_mut().map(|b| b.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
         };
         self.count = None;
         result
@@ -2423,7 +2431,11 @@ impl App {
                 p.line = "filter ".into();
                 self.prompt = Some(p);
             }
-            A::CommandPalette => self.open_palette(),
+            // Again, over the palette, it goes back.
+            A::CommandPalette => match self.pickers.last() {
+                Some(p) if p.palette => drop(self.pickers.pop()),
+                _ => self.open_palette(),
+            },
             A::FileTree => match &mut self.tree {
                 Some(t) if !t.focused => t.focused = true,
                 Some(_) => self.tree = None,

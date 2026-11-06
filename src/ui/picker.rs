@@ -68,7 +68,6 @@ pub fn keys_palette(theme: &Theme, keymaps: &Keymaps) -> Picker {
             .into_iter()
             .map(|(k, d, _)| (k, d)),
     );
-    rows.push(("C-g".into(), "These keys"));
     let items = rows
         .into_iter()
         .map(|(k, d)| Item {
@@ -190,13 +189,8 @@ impl Picker {
         Outcome::Consumed
     }
 
-    pub fn command(&mut self, cmd: PickerCmd, cx: &Cx) -> Outcome {
-        let page = self.page(self.areas(cx.screen).0);
-        self.run(cmd, page)
-    }
-
     /// A character typed into the filter.
-    pub fn text(&mut self, c: char) -> Outcome {
+    fn type_char(&mut self, c: char) -> Outcome {
         self.query.push(c);
         self.cursor = 0;
         self.refilter();
@@ -218,7 +212,7 @@ impl Picker {
             },
             Some(Node::Menu(_)) => Outcome::Consumed,
             None => match key.char() {
-                Some(c) => self.text(c),
+                Some(c) => self.type_char(c),
                 None => Outcome::Consumed,
             },
         }
@@ -421,6 +415,17 @@ impl Picker {
 }
 
 impl Component for Picker {
+    type Cmd = PickerCmd;
+
+    fn command(&mut self, cmd: PickerCmd, cx: &Cx) -> Outcome {
+        let page = self.page(self.areas(cx.screen).0);
+        self.run(cmd, page)
+    }
+
+    fn text(&mut self, c: char, _cx: &Cx) -> Outcome {
+        self.type_char(c)
+    }
+
     /// The wheel moves; a click opens the item under it. The picker places itself on the
     /// screen, so `area` isn't used.
     fn mouse(&mut self, m: MouseEvent, _area: Rect, cx: &Cx) -> Outcome {

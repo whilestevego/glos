@@ -217,10 +217,12 @@ impl CommentBox {
     }
 }
 
-impl CommentBox {
+impl Component for CommentBox {
+    type Cmd = BoxCmd;
+
     /// Runs one of the box's commands. The editing ones change the text in insert mode, and
     /// `App` saves the draft when the text changed.
-    pub fn command(&mut self, cmd: BoxCmd) -> Outcome {
+    fn command(&mut self, cmd: BoxCmd, _cx: &Cx) -> Outcome {
         let code = match cmd {
             BoxCmd::Save => return Outcome::Msg(Msg::SaveBox),
             BoxCmd::Close => return Outcome::Msg(Msg::CloseBox),
@@ -251,13 +253,11 @@ impl CommentBox {
     }
 
     /// A character typed in insert mode.
-    pub fn text(&mut self, c: char) -> Outcome {
+    fn text(&mut self, c: char, _cx: &Cx) -> Outcome {
         self.insert_key(KeyCode::Char(c));
         Outcome::Msg(Msg::BoxEdited)
     }
-}
 
-impl Component for CommentBox {
     /// Clicks do nothing while the box is open.
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
         Outcome::Consumed
@@ -586,22 +586,32 @@ mod tests {
     #[test]
     fn as_a_component() {
         let l = loader();
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
+        let cx = Cx {
+            screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
+        };
         let mut b = CommentBox::new(Place::Review, "", &l);
         // Insert mode: typing asks App to save the draft, and moving doesn't.
-        assert_eq!(b.text('x'), Outcome::Msg(Msg::BoxEdited));
-        assert_eq!(b.command(BoxCmd::Left), Outcome::Msg(Msg::BoxMoved));
+        assert_eq!(b.text('x', &cx), Outcome::Msg(Msg::BoxEdited));
+        assert_eq!(b.command(BoxCmd::Left, &cx), Outcome::Msg(Msg::BoxMoved));
         assert_eq!(
-            b.command(BoxCmd::DeleteForward),
+            b.command(BoxCmd::DeleteForward, &cx),
             Outcome::Msg(Msg::BoxEdited)
         );
         assert_eq!(b.body(), "");
-        b.text('x');
-        assert_eq!(b.command(BoxCmd::NormalMode), Outcome::Msg(Msg::BoxMoved));
+        b.text('x', &cx);
+        assert_eq!(
+            b.command(BoxCmd::NormalMode, &cx),
+            Outcome::Msg(Msg::BoxMoved)
+        );
         assert!(!b.insert);
         // Normal mode: its own keys.
-        assert_eq!(b.command(BoxCmd::Save), Outcome::Msg(Msg::SaveBox));
-        assert_eq!(b.command(BoxCmd::Close), Outcome::Msg(Msg::CloseBox));
-        assert_eq!(b.command(BoxCmd::Append), Outcome::Msg(Msg::BoxInsert));
+        assert_eq!(b.command(BoxCmd::Save, &cx), Outcome::Msg(Msg::SaveBox));
+        assert_eq!(b.command(BoxCmd::Close, &cx), Outcome::Msg(Msg::CloseBox));
+        assert_eq!(b.command(BoxCmd::Append, &cx), Outcome::Msg(Msg::BoxInsert));
         assert!(b.insert);
     }
 

@@ -243,10 +243,12 @@ impl Prompt {
     }
 }
 
-impl Prompt {
+impl Component for Prompt {
+    type Cmd = PromptCmd;
+
     /// Runs one of the command line's commands. What it does to the file (previewing a search,
     /// putting the selection back, running the line) is `App`'s.
-    pub fn command(&mut self, cmd: PromptCmd) -> Outcome {
+    fn command(&mut self, cmd: PromptCmd, _cx: &Cx) -> Outcome {
         self.scrolled = None;
         match cmd {
             PromptCmd::Cancel => Outcome::Msg(Msg::CancelPrompt),
@@ -284,15 +286,13 @@ impl Prompt {
     }
 
     /// A character typed into the line.
-    pub fn text(&mut self, c: char) -> Outcome {
+    fn text(&mut self, c: char, _cx: &Cx) -> Outcome {
         self.scrolled = None;
         self.completion = None;
         self.line.push(c);
         Outcome::Msg(Msg::PreviewPrompt)
     }
-}
 
-impl Component for Prompt {
     /// Clicks are ignored while you type. The wheel scrolls the completion list when the
     /// pointer is over it.
     fn mouse(&mut self, m: MouseEvent, area: Rect, _cx: &Cx) -> Outcome {
@@ -330,13 +330,20 @@ mod tests {
     /// typed. Anything else does nothing.
     fn press(p: &mut Prompt, key: &str) -> Outcome {
         use crate::ui::keymap::{Action, Context, Key, Keymaps, Node};
+        let theme =
+            crate::theme::Theme::load("default", crate::theme::ColorSupport::TrueColor).unwrap();
+        let cx = Cx {
+            screen: Rect::new(0, 0, 80, 24),
+            theme: &theme,
+            state: None,
+        };
         let key = Key::parse(key).unwrap();
         match Keymaps::default().get(Context::Prompt).get(key) {
             Some(Node::Cmd(c)) => match c.action {
-                Action::Prompt(cmd) => p.command(cmd),
+                Action::Prompt(cmd) => p.command(cmd, &cx),
                 _ => panic!("{} isn't a command line command", c.name),
             },
-            _ => key.char().map_or(Outcome::Consumed, |c| p.text(c)),
+            _ => key.char().map_or(Outcome::Consumed, |c| p.text(c, &cx)),
         }
     }
 

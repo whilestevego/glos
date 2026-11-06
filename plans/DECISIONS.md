@@ -443,6 +443,21 @@ Plan: `plans/FOLDING.md`.
   `ui.virtual.fold`, falling back to `ui.cursorline.primary`'s background, since Helix themes
   have no fold style.
 
+## One keymap for every context (2026-11-06)
+
+Every key glos knows is a named command in `src/ui/keymap.rs`. Each place that takes keys has
+a context there: normal and select mode, pickers, the command line, the file tree, and the
+comment box in insert and in normal mode. A component gets a command, or a character typed where
+text goes, and never a raw key.
+
+This reverses the part of `COMPONENTS.md` that left each component to match keys in its own
+code, which is how Helix's pickers, prompt and file explorer work. That split meant the palette
+listed those keys from hand-written copies that could drift, `KEYMAP.md` couldn't list them, and
+remapping could only reach the editor. Helix's own keys stay the same. Only where they're
+written down has changed.
+
+The plan and what was built are in `KEYMAP-CONTEXTS.md`.
+
 ## The plan folder
 
 - **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
