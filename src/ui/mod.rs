@@ -382,7 +382,7 @@ pub fn run(start: Start, config: &Config, conn: Connection) -> Result<()> {
         Ok(t) => Ok(t),
         Err(e) => {
             tracing::warn!("{e}; using the default theme");
-            Theme::load("default", ColorSupport::detect())
+            Theme::load(crate::config::DEFAULT_THEME, ColorSupport::detect())
         }
     };
     // Raw mode and the alternate screen; the terminal is restored on a panic too.

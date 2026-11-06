@@ -5,7 +5,8 @@ use std::{fmt::Write as _, io::Write, path::Path};
 use glos_helix::syntax::Loader;
 
 use crate::{
-    clipboard, config,
+    clipboard,
+    config::{self, DEFAULT_THEME},
     theme::{ColorSupport, Theme},
 };
 
@@ -47,10 +48,10 @@ fn report(db: &Path, log: Option<&Path>) -> String {
         }
         Err(e) => {
             line(format!(
-                "Theme: {} — error: {e:#}; using default",
+                "Theme: {} — error: {e:#}; using {DEFAULT_THEME}",
                 cfg.theme
             ));
-            Theme::load("default", colors).expect("the default theme is embedded")
+            Theme::load(DEFAULT_THEME, colors).expect("the default theme is embedded")
         }
     };
     line(format!(
