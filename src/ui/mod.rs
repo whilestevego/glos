@@ -2034,7 +2034,7 @@ impl App {
     /// `Ctrl-G` and `space ?`: the palette, listing the keys for where you are (Helix's
     /// command palette, made contextual). In the file view, choosing a command runs it.
     fn open_palette(&mut self) {
-        let (title, rows) = self.context_keys();
+        let (_, rows) = self.context_keys();
         let style = self.theme.get("ui.text.focus");
         // Choosing the palette's own key just goes back, rather than opening it again.
         let items = rows
@@ -2047,7 +2047,9 @@ impl App {
                     .map_or(Target::Nothing, Target::Command),
             })
             .collect();
-        let mut p = Picker::new(vec!["keys", title], items);
+        let context = self.contexts().0;
+        let mut p = Picker::new(vec!["keys", context.title()], items);
+        p.title = Some(context.border_title());
         p.preview = false;
         self.pending.clear();
         self.next_key = None;

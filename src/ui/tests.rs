@@ -2241,6 +2241,13 @@ fn the_palette_lists_every_key_from_the_keymap() {
     each_context(&mut t, |t, context| {
         let (title, rows) = t.app.context_keys();
         assert_eq!(title, context.title());
+        // The palette's top border says which context's keys these are, by the name a
+        // rebinding would use. The column header is just the title.
+        t.keys("C-g");
+        assert_eq!(t.palette().0, title);
+        let border = format!("Keys · context: {}", context.name());
+        assert!(t.shows(&border), "{border} missing:\n{}", t.screen());
+        t.keys("C-g");
         for (keys, doc, name) in keymaps.get(context).help() {
             let Some(name) = name else { continue };
             if !t.app.applies(name) {

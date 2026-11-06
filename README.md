@@ -126,7 +126,8 @@ argument, and `]f`, `[f`, `]t` and so on to jump between them.
 
 You don't need to remember these. Press `space` (or `g`, `]`, and so on) and wait, and a panel
 lists the keys that can follow. Press **`Ctrl-G` anywhere** to see every key that works where you
-are, whether that's the file view, the comment box, the file tree or a list.
+are, whether that's the file view, the comment box, the file tree or a list. Its top border
+names the context those keys belong to, such as `normal`, `tree` or `box_insert`.
 
 The mouse works too. Click to move the cursor, drag to select, and click a thread to open it.
 Clicking the file tree or the code moves keyboard focus there.

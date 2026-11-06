@@ -224,3 +224,8 @@ command and not a key, so the keymap has nothing to build it from.
 Picker and comment box commands that used to share a row now have one row each. For example,
 `i` and `a` are now "Insert before the selection" and "Insert after the selection". The
 palette's normal-mode list is one row shorter, because `C-g` shares the row of `space ?`.
+
+The palette's top border names the context, as in "Keys · context: tree". This wasn't in the
+plan. The name is what a setting that rebinds keys would call the context, so when rebinding
+comes, the palette already tells you which keys you'd be changing. The names are `normal`,
+`select`, `picker`, `prompt`, `tree`, `box_insert` and `box_normal`.

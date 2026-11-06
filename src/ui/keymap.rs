@@ -849,6 +849,24 @@ impl Context {
         }
     }
 
+    /// The context's name: what a setting that rebinds its keys would call it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Context::Normal => "normal",
+            Context::Select => "select",
+            Context::Picker => "picker",
+            Context::Prompt => "prompt",
+            Context::Tree => "tree",
+            Context::BoxInsert => "box_insert",
+            Context::BoxNormal => "box_normal",
+        }
+    }
+
+    /// The palette's top border: the context's name, so you can tell which keys you'd rebind.
+    pub fn border_title(self) -> String {
+        format!("Keys · context: {}", self.name())
+    }
+
     /// What typing does, in a context where an unbound character is text.
     pub fn text(self) -> Option<&'static str> {
         match self {

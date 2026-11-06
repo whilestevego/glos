@@ -76,7 +76,8 @@ pub fn keys_palette(theme: &Theme, keymaps: &Keymaps) -> Picker {
             target: Target::Nothing,
         })
         .collect();
-    let mut p = Picker::new(vec!["keys", "Picker"], items);
+    let mut p = Picker::new(vec!["keys", Context::Picker.title()], items);
+    p.title = Some(Context::Picker.border_title());
     p.preview = false;
     p.palette = true;
     p
@@ -103,6 +104,8 @@ pub struct Picker {
     pub preview: bool,
     /// The keys palette (`C-g`): it opens over another picker, and closing it goes back there.
     pub palette: bool,
+    /// Drawn in the top border, as the palette names its keymap context.
+    pub title: Option<String>,
     /// How many lines the wheel has scrolled the preview, and which item it was showing. When
     /// the selection changes, the scroll resets so the new preview starts centred.
     preview_scroll: (Option<Target>, isize),
@@ -119,6 +122,7 @@ impl Picker {
             matcher: Matcher::new(nucleo::Config::DEFAULT.match_paths()),
             preview: true,
             palette: false,
+            title: None,
             preview_scroll: (None, 0),
         };
         p.refilter();
@@ -283,7 +287,10 @@ impl Picker {
                 buf[(x, y)].set_symbol(" ");
             }
         }
-        let block = Block::default().borders(Borders::ALL);
+        let mut block = Block::default().borders(Borders::ALL);
+        if let Some(t) = &self.title {
+            block = block.title(format!(" {} ", clean(t)));
+        }
         let inner = block.inner(area);
         block.render(area, buf);
         if inner.height < 3 {
