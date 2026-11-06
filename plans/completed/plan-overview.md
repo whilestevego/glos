@@ -574,20 +574,20 @@ the dashboard.
   `glos open` and `glos --review <id>`, used by `request_review` unless a glos already shows the
   review; `glos completions <shell>` and `glos man`.
 - **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish;
-  channel push once Claude Code channels are no longer experimental.
+  channel push once Claude Code channels are no longer experimental. Editing and channels now
+  have plans, `plan-in-place-editing.md` and `plan-channels.md`, along with
+  `plan-language-servers.md` and `plan-all-files.md`.
 
 In-place editing is listed after the MVP because the reviewer is useful without it, and it's the
 largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be needed daily.
 
 ## Open questions
 
-- **Re-anchoring rules:** how far to search for moved text before calling a thread outdated
-  (M3 searches the whole file, nearest first), and whether a small edit inside the anchored
-  lines (a typo fixed) should keep the thread rather than outdate it (M3 matches exact text only).
-- **Branch renames and detached HEAD:** how a review follows a renamed branch, and what a review
-  made in detached HEAD is keyed by.
-- **The default theme:** Helix's `default` is low contrast, and collapsed thread markers (drawn in
-  its `info` colour) are hard to read in it. Choose a higher-contrast built-in theme as glos's
-  default, and check thread rows, the comment box and the gutter marks in it.
-- **A folder with no second copy:** a non-git folder has no old side. glos could snapshot it when
-  the review starts and diff against that; decide when someone needs it.
+Each of these was answered on 2026-11-06 and has a plan in `plans/`.
+
+- **Re-anchoring rules:** how far to search for moved text, and whether a small edit keeps the
+  thread. See `plan-reanchoring.md`.
+- **Branch renames and detached HEAD:** see `plan-review-identity.md`.
+- **The default theme:** catppuccin_mocha. See `plan-default-theme.md`.
+- **A folder with no second copy:** snapshot it when the review starts. See
+  `plan-folder-snapshot.md`.

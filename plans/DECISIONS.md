@@ -465,3 +465,25 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
 - **Reorganised 2026-11-06** to follow `~/hobby/redouble`. Each plan is a `plan-<topic>.md` file
   with a status line, delivered plans move to `completed/`, dropped ones move to `abandoned/`, and
   `plans/README.md` indexes them. The rules are in `plans/README.md` and `CLAUDE.md`.
+
+## Helix wins key clashes (2026-11-06)
+
+- **Chosen:** when a glos key clashes with a Helix key, Helix keeps it, and glos moves its
+  command. Review commands move under one Review menu at `space v`, and each one moves only when
+  the Helix command that needs its key arrives. `plan-review-menu.md` has the layout and the steps.
+- **Why:** glos promises Helix's keys. Until now it took `space s`, `space r`, `space c`,
+  `space C`, `space d`, `space D` and the `]d` family because glos had no language servers or
+  editing. Language servers and editing are now planned, and those keys would mean different
+  things in glos and Helix.
+- **Rejected:** moving only the clashing commands to spare letters, which scatters the review
+  commands, and moving every key at once before it's needed.
+
+## All files on one screen by default (2026-11-06)
+
+- **Chosen:** an all-files mode that shows every changed file in one scroll, works with each of
+  the three views, and is the default. `[editor] all-files = false` turns it off, and
+  `space v a` switches modes. `plan-all-files.md` has the design.
+- **Why:** reading a review file by file hides how the changes fit together, and search should
+  find every match in the review. GitHub's "Files changed" page and Zed's multibuffer work this
+  way.
+- **Rejected:** a fourth view beside the other three, since each view is useful across all files.

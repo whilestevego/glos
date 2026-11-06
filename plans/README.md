@@ -14,11 +14,11 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 - File names carry no milestone or phase numbers. Order and dependencies go inside the plans, so
   plans can be reordered without renaming them.
 - Every plan opens with a `**Status:**` line under its title. The statuses in use are `Draft`,
-  `Ready to build`, `In progress` (with the branch), `Implemented (YYYY-MM-DD) in PR #N` and
-  `Abandoned (YYYY-MM-DD)`.
+  `Ready to build`, `Blocked` (with what it waits for), `In progress` (with the branch),
+  `Implemented (YYYY-MM-DD) in PR #N` and `Abandoned (YYYY-MM-DD)`.
 - [completed/plan-overview.md](completed/plan-overview.md) is the master plan and the map of
-  glos. Its milestones are built, so it lives in `completed/`. Its "After the MVP" list and its
-  "Open questions" hold the work that has no plan of its own yet.
+  glos. Its milestones are built, so it lives in `completed/`. Work it lists that has no plan of
+  its own yet stays there.
 - When a plan is delivered, move it into `completed/` and update its status line. Leave the rest
   of the file as it is, apart from its "As built" section.
 - When a plan is dropped, move it into `abandoned/`. Rewrite its status line to give the date, the
@@ -29,9 +29,22 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 
 ## Active plans
 
-None. The next candidates are in
-[completed/plan-overview.md](completed/plan-overview.md), under "After the MVP" and "Open
-questions". Remappable keys is the most ready of them, because one keymap now binds every context.
+| Plan | Status |
+|---|---|
+| [plan-all-files.md](plan-all-files.md) | Draft. Every changed file in one scroll, searchable, in each view, and the default. |
+| [plan-review-menu.md](plan-review-menu.md) | Ready to build, in steps. Review commands move under `space v` so Helix gets its keys back. Each step lands with the plan that needs the keys. |
+| [plan-language-servers.md](plan-language-servers.md) | Draft. Diagnostics, going to definitions and references, hover and symbol pickers. Needs step 2 of `plan-review-menu.md`. |
+| [plan-in-place-editing.md](plan-in-place-editing.md) | Draft. Edit any file on disk with Helix's keys, and merge an agent's changes into unsaved edits. Needs step 3 of `plan-review-menu.md`. |
+| [plan-channels.md](plan-channels.md) | Blocked until Claude Code releases channels. Pushes your review into the agent's session. |
+| [plan-removed-lines.md](plan-removed-lines.md) | Draft. The whole-file view always shows removed lines at their change, as virtual lines. |
+| [plan-old-side-comments.md](plan-old-side-comments.md) | Draft. Comment on removed lines in the unified and side-by-side views. |
+| [plan-reanchoring.md](plan-reanchoring.md) | Draft. Threads don't jump to distant copies of a line, and survive small edits. |
+| [plan-review-identity.md](plan-review-identity.md) | Draft. Reviews follow renamed branches, and detached HEAD is keyed by its start commit. |
+| [plan-folder-snapshot.md](plan-folder-snapshot.md) | Draft. Review a folder outside git against a snapshot taken when the review starts. |
+| [plan-default-theme.md](plan-default-theme.md) | Ready to build. catppuccin_mocha becomes the default theme. |
+
+Remappable keys, from the overview's "After the MVP" list in
+[completed/plan-overview.md](completed/plan-overview.md), has no plan yet.
 
 ## Abandoned
 
