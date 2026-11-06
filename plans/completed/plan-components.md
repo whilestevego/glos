@@ -1,5 +1,7 @@
 # Components: splitting `App` along the ratatui Component pattern
 
+**Status:** Implemented (2026-11-05) in PR #3. `plan-keymap-contexts.md` later reversed its choice to let components match their own keys.
+
 `src/ui/mod.rs` is about 3,400 lines, and nearly all of it is one `App` with about 50 fields and 60
 methods. Input goes through a hand-ordered if-chain in `App::key`, rendering goes through a
 hand-ordered list in `App::render`, and the mouse goes through a third chain in `App::mouse`. Each

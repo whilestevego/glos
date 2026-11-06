@@ -1,6 +1,6 @@
 # Folding
 
-Status: built and merged in PR #1 (2026-11-04). Decisions are in `DECISIONS.md`.
+**Status:** Implemented (2026-11-04) in PR #1. Its decisions are in `../DECISIONS.md`.
 
 Hide unchanged code so a review shows the changes, as GitHub's pull request view does, plus folds
 you make by hand and Helix's tree-sitter text objects to make them with.

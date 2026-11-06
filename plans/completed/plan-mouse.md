@@ -1,5 +1,7 @@
 # Mouse: focus follows clicks, the wheel scrolls what's under it
 
+**Status:** Implemented (2026-11-06) in PR #5.
+
 glos sends a mouse event to whichever layer is on top, whatever the pointer is over. This has
 three effects:
 

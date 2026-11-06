@@ -1,5 +1,7 @@
 # Diff highlighting: tinted lines and changed words
 
+**Status:** Implemented (2026-11-06) in PR #9.
+
 Today a change shows only as a coloured bar in the gutter. This plan adds two things:
 
 - **Line tints.** A changed line's background is tinted toward the theme's addition or removal
@@ -106,7 +108,7 @@ One PR on a `diff-highlight` branch. Each commit passes `cargo fmt`, `clippy` an
    unit tests. Nothing is drawn yet.
 4. **Drawing changed words** in all three views, cached on `File`. Update the snapshots on
    purpose.
-5. **Docs:** the README's theme section, and `PLAN.md`'s "Viewing the code".
+5. **Docs:** the README's theme section, and `plan-overview.md`'s "Viewing the code".
 
 ## Tests
 

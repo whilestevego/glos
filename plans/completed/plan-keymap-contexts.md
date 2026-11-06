@@ -1,12 +1,14 @@
 # One keymap for every context
 
+**Status:** Implemented (2026-11-06) in PR #8.
+
 glos binds keys in two different ways. The editor's keys go through `src/ui/keymap.rs`, which
 is a trie of named commands with descriptions. Every other place that takes keys matches raw keys
 in its own `key` method instead. Those places are the picker, the command line, the file tree and
 the comment box. This plan moves all of them into the one keymap, so that every key glos knows
 is a named command bound in one place.
 
-This builds on [TREE.md](TREE.md), whose new keys it moves first. Do it after the tree PR is
+This builds on [plan-tree.md](plan-tree.md), whose new keys it moves first. Do it after the tree PR is
 merged.
 
 Decided:
@@ -14,7 +16,7 @@ Decided:
 - One keymap holds every key. Each place that takes keys is a context with its own root menu.
 - A component gets a command, not a key. The only raw input it still gets is text typed into a
   line or a box.
-- The palette, the key help panel and `KEYMAP.md` are all built from the keymap. Nothing lists
+- The palette, the key help panel and `../KEYMAP.md` are all built from the keymap. Nothing lists
   keys by hand.
 - No key changes. Every key does what it does today.
 
@@ -42,13 +44,13 @@ This has three costs:
 - The palette can't read these keys from anywhere, so `App::context_keys` lists them by hand.
   `picker::KEYS` does the same for the picker. Nothing checks either list against the `match`
   it describes. The tree PR had to change both by hand.
-- `cargo xtask keymap` reads only `keymap.rs`, so `KEYMAP.md` can't list these keys.
-- Remappable keys are planned for after the MVP (`PLAN.md`). As things stand, remapping could
+- `cargo xtask keymap` reads only `keymap.rs`, so `../KEYMAP.md` can't list these keys.
+- Remappable keys are planned for after the MVP (`plan-overview.md`). As things stand, remapping could
   only reach the editor.
 
 The split came from Helix. Helix's picker, prompt and file explorer also match raw keys in their
-own `handle_event`, and their keys can't be remapped. `COMPONENTS.md` kept that split when it
-turned these parts into components. This plan reverses that one part of `COMPONENTS.md`. The
+own `handle_event`, and their keys can't be remapped. `plan-components.md` kept that split when it
+turned these parts into components. This plan reverses that one part of `plan-components.md`. The
 components themselves stay as they are.
 
 ## Design
@@ -160,7 +162,7 @@ and `cargo test` without changing any existing app test, apart from palette rows
 5. Move the comment box: `BoxInsert` with text input, and `BoxNormal` falling back to `Normal`.
 6. Bind `C-g` as `keys_palette` everywhere and remove the special case. Build `context_keys` from
    the keymap and delete the hand-written lists. Extend `cargo xtask keymap`. Add an entry to
-   `DECISIONS.md` that replaces the `COMPONENTS.md` decision this reverses. Write an "As built"
+   `../DECISIONS.md` that replaces the `plan-components.md` decision this reverses. Write an "As built"
    section here.
 
 ## Tests
@@ -191,7 +193,7 @@ New tests in `tests.rs`:
 
 New test in `xtask`:
 
-- `KEYMAP.md` has a table for each context.
+- `../KEYMAP.md` has a table for each context.
 
 ## Out of scope
 

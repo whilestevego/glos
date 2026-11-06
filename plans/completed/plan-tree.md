@@ -1,10 +1,12 @@
 # File tree: collapsible folders
 
+**Status:** Implemented (2026-11-06) in PR #7.
+
 The tree lists every changed file under its folders, and every folder is always open. In a big
 review that's a long list. Folders should open and close, the way they do in Helix's file
 explorer, yazi and GUI editors.
 
-This builds on [MOUSE.md](MOUSE.md), which changes how the tree takes clicks and lets its view
+This builds on [plan-mouse.md](plan-mouse.md), which changes how the tree takes clicks and lets its view
 scroll apart from its cursor. Do it after that.
 
 ## Where we are
@@ -43,7 +45,7 @@ The palette's tree keys are in `App::context_keys`. Its description for `space e
   | `h`, left | Close it; if already closed, go to its parent | Go to its folder |
 
   The `h`/`l` rules are those of Helix's file explorer and yazi.
-- **Clicks:** a click on a folder opens or closes it. Following MOUSE.md, it also focuses the
+- **Clicks:** a click on a folder opens or closes it. Following plan-mouse.md, it also focuses the
   tree.
 - **The current file is always visible.** When the file on screen changes (`g n`, a picker, a
   thread, the jumplist), the folders holding it open. If the tree isn't focused, its cursor moves
@@ -69,7 +71,7 @@ The palette's tree keys are in `App::context_keys`. Its description for `space e
   - The tree's keys in `C-g` gain `h`, `l` and `ret` on a folder, and `/`, `?`, `n` and `N`.
   - `file_explorer`'s description becomes "Open, focus or close the file tree", so searching
     "close" finds it.
-  - `plans/KEYMAP.md` lists the new keys.
+  - `../KEYMAP.md` lists the new keys.
 
 ## Steps
 
@@ -84,7 +86,7 @@ and `cargo test`.
    rebuild.
 4. **Search:** `/`, `?`, `n` and `N` in the tree, through `PromptKind::TreeSearch`.
 5. **The palette and docs:** the tree's keys in `C-g`, the `file_explorer` description and
-   `KEYMAP.md`.
+   `../KEYMAP.md`.
 
 ## Tests
 
@@ -128,6 +130,6 @@ covers `g n`, the pickers, threads, the jumplist and anything added later.
 A search remembers the closed folders as well as the cursor. Each keystroke starts again from
 there, so folders opened for an earlier, shorter pattern close again. `esc` puts both back.
 
-`plans/KEYMAP.md` doesn't list the tree's keys. `cargo xtask keymap` generates it from
+`../KEYMAP.md` doesn't list the tree's keys. `cargo xtask keymap` generates it from
 `src/ui/keymap.rs`, and the tree handles its keys itself. The `C-g` palette and the README list
 them instead.

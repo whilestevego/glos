@@ -2,7 +2,7 @@
 
 Each decision made while planning glos on 2026-11-03, with revisions from a review of the plan on
 2026-11-04: the options considered, what was chosen, and why. The design itself is in
-[PLAN.md](PLAN.md).
+[completed/plan-overview.md](completed/plan-overview.md).
 
 ## Why build it at all
 
@@ -66,7 +66,7 @@ Each decision made while planning glos on 2026-11-03, with revisions from a revi
 - **Options:** review only; review plus light edits; review plus suggested changes.
 - **Chosen:** review plus light edits, done in place with the Helix model (not by handing off to
   Helix).
-- **Note:** scheduled after the MVP (see PLAN.md, Milestones).
+- **Note:** scheduled after the MVP (see `completed/plan-overview.md`, Milestones).
 
 ## Storage
 
@@ -195,7 +195,7 @@ Each decision made while planning glos on 2026-11-03, with revisions from a revi
 ## UX review (2026-11-04)
 
 A review of the plan for terminal UX and CLI conventions led to these decisions, all now in
-PLAN.md:
+`completed/plan-overview.md`:
 
 - **Writing comments:** a small Helix-style box (insert mode first, `esc` then `enter` saves),
   drafts saved as you type, `:editor` for `$EDITOR`. Your comments can be edited and deleted;
@@ -417,7 +417,7 @@ gone to an unrelated `glos diff` of two files started in the same folder.
 
 ## Folding (2026-11-04)
 
-Plan: `plans/FOLDING.md`.
+Plan: `completed/plan-folding.md`.
 
 - **A view is rows, then a fold:** each view (whole file, unified, side by side) is first every
   row it could show, then one pass hides rows by the context, what you opened and the folds you
@@ -450,15 +450,18 @@ a context there: normal and select mode, pickers, the command line, the file tre
 comment box in insert and in normal mode. A component gets a command, or a character typed where
 text goes, and never a raw key.
 
-This reverses the part of `COMPONENTS.md` that left each component to match keys in its own
+This reverses the part of `completed/plan-components.md` that left each component to match keys in its own
 code, which is how Helix's pickers, prompt and file explorer work. That split meant the palette
 listed those keys from hand-written copies that could drift, `KEYMAP.md` couldn't list them, and
 remapping could only reach the editor. Helix's own keys stay the same. Only where they're
 written down has changed.
 
-The plan and what was built are in `KEYMAP-CONTEXTS.md`.
+The plan and what was built are in `completed/plan-keymap-contexts.md`.
 
 ## The plan folder
 
-- **Chosen:** PLAN.md, this decision log, and a git repository. No Cargo skeleton yet.
+- **Chosen:** `PLAN.md` (now `completed/plan-overview.md`), this decision log, and a git repository. No Cargo skeleton yet.
 - **Moved 2026-11-04** into `plans/`, with `KEYMAP.md`, the home for agents' plans from now on.
+- **Reorganised 2026-11-06** to follow `~/hobby/redouble`. Each plan is a `plan-<topic>.md` file
+  with a status line, delivered plans move to `completed/`, dropped ones move to `abandoned/`, and
+  `plans/README.md` indexes them. The rules are in `plans/README.md` and `CLAUDE.md`.

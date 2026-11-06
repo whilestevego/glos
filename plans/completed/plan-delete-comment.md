@@ -1,5 +1,7 @@
 # Deleting a comment: `space M`
 
+**Status:** Implemented (2026-11-06) in PR #6.
+
 You can delete a comment today, but only by a route nobody would guess: edit it with `space m`,
 clear the text, and press `ret` twice. This adds a command for it, next to the keys that make
 and edit comments.
@@ -49,7 +51,7 @@ Decided:
   does. The unsent count in the statusline drops.
 - **While the comment box is open,** `space M` is blocked like the other comment commands
   (`blocked_in_box`). Deleting from the box, by saving it empty, stays.
-- **Docs:** add `space M` to the README's key table and to `plans/KEYMAP.md`'s glos-only keys.
+- **Docs:** add `space M` to the README's key table and to `../KEYMAP.md`'s glos-only keys.
 
 ## Steps
 

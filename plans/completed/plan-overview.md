@@ -1,5 +1,7 @@
 # glos
 
+**Status:** Milestones M0 to M5 built (2026-11-04). This stays the map of glos. Its "After the MVP" list and "Open questions" hold the work that has no plan yet.
+
 A terminal code reviewer for work done by coding agents. It feels like Helix, runs locally, and
 talks to agents both ways: you comment, the agent answers on the same line, and the review stays
 open across sessions until every thread is settled.
@@ -7,7 +9,7 @@ open across sessions until every thread is settled.
 Why it exists: reviewing an agent's branch on GitHub means pushing, opening a PR and switching to a
 browser for code you didn't write and don't want to publish yet. `tuicr` gets closer but has no way
 for agents to plug in, needs a manual save before quitting, and doesn't feel like Helix. Every
-decision behind this plan, with the options considered, is in [DECISIONS.md](DECISIONS.md).
+decision behind this plan, with the options considered, is in [DECISIONS.md](../DECISIONS.md).
 
 ## Goals
 
@@ -192,7 +194,7 @@ Scopes, switched with `space o` or `:scope`, which you can combine with a files 
 In every view, a changed line has a background tinted toward the theme's addition or removal
 colour, and the words that changed within it get a stronger tint, as on GitHub and in `delta`.
 In the whole-file view, added and modified lines take the addition tint, since they're the new
-text. `DIFF-HIGHLIGHT.md` has the details.
+text. `plan-diff-highlight.md` has the details.
 
 Navigation: the changed-file picker (`space g`) is primary; `gn` / `gp` step through changed files;
 `space f` opens any file in the repo, read-only, for context; `space e` toggles a file tree with
@@ -294,7 +296,7 @@ sends it the same way (unlike `Ctrl-/`, or `Option` keys on a Mac).
 **Mouse:** on by default, and `[editor] mouse = false` turns it off, as in Helix. Click to move the
 cursor, drag to select, wheel to scroll; click files in the tree and picker, click a thread marker
 to expand it, and click buttons in popups. Clicking the tree or the code focuses it, and the
-wheel scrolls whatever is under the pointer, including sideways ([MOUSE.md](MOUSE.md)). While glos captures the mouse, the terminal's own text
+wheel scrolls whatever is under the pointer, including sideways ([plan-mouse.md](plan-mouse.md)). While glos captures the mouse, the terminal's own text
 selection needs a modifier (usually shift), so `space y` yanks to the system clipboard: `pbcopy`,
 `wl-copy` or `xclip` as Helix does, or OSC 52 over SSH. The keyboard stays primary.
 
@@ -357,7 +359,7 @@ not.
   Helix's own unit tests come with them.
 - **Editing (after the MVP):** the same `helix-core` model with `insert`/`normal`/`select` modes.
   Writes go to the file on the new side, which triggers a live refresh like any other change.
-- **The keymap checklist.** `cargo xtask keymap` generates `KEYMAP.md` from Helix's default keymap at the
+- **The keymap checklist.** `cargo xtask keymap` generates `../KEYMAP.md` from Helix's default keymap at the
   pinned release: every Helix command, marked *done*, *not applicable* (LSP, buffers, windows) or
   *replaced* (with the glos action that took its key). That makes coverage checkable, and moving
   to a new Helix release shows exactly what changed.
@@ -529,7 +531,7 @@ the dashboard.
   suspend, colour fallback); `glos doctor`.
   *Status (2026-11-06):* built, except selecting by syntax node (`A-o`, `A-i`), `gw`, the
   jumplist picker (`space j`) and global search (`space /`). The tree-sitter text objects and
-  motions (`mif`, `]f`…) came with folding (`FOLDING.md`). `KEYMAP.md` tracks the keys. The
+  motions (`mif`, `]f`…) came with folding (`plan-folding.md`). `../KEYMAP.md` tracks the keys. The
   first screen draws in about 50 ms on this repo.
 - **M2, commenting.** The comment box with drafts saved as you type and `:editor`; comments on
   selections, review-level comments, editing and deleting; inline collapsible threads; the
