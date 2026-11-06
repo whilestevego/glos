@@ -6,6 +6,8 @@
 //! A view is built in two steps: every row of it ([`rows`]), then the fold, which hides
 //! unchanged rows away from changes and threads, and the folds you made ([`Folds`]).
 
+use std::{collections::HashMap, ops::Range};
+
 use glos_helix::text::Rope;
 use ratatui::style::Style;
 
@@ -58,11 +60,25 @@ struct Doc<'a> {
     fold: (Style, Style),
     /// The old side of side by side: its fold lines give old line numbers.
     old_side: bool,
+    /// The changed words of each side's lines, and of the view's lines as they're pushed.
+    words: (&'a Words, &'a Words),
+    view_words: Words,
 }
+
+/// Changed words by line, as byte ranges within the line (see `File::words`).
+type Words = HashMap<usize, Vec<Range<usize>>>;
 
 impl Doc<'_> {
     fn push(&mut self, row: Row) {
         let start = self.text.len();
+        let words = match row {
+            Row::Added(n) | Row::Line(n) => self.words.1.get(&n),
+            Row::Removed(o) => self.words.0.get(&o),
+            _ => None,
+        };
+        if let Some(w) = words {
+            self.view_words.insert(self.rows.len(), w.clone());
+        }
         let from = match row {
             Row::Same { new, .. } | Row::Added(new) | Row::Line(new) => Some((&self.new, new)),
             Row::Removed(old) => Some((&self.old, old)),
@@ -109,12 +125,22 @@ impl Doc<'_> {
 
     fn file(self, numbers: usize) -> File {
         let tab = self.new.0.tab_width;
-        File::synthetic(self.text, tab, self.rows, self.spans, numbers)
+        let mut f = File::synthetic(self.text, tab, self.rows, self.spans, numbers);
+        f.words = self.view_words;
+        f
     }
 }
 
-fn doc<'a>(old: &'a File, new: &'a File, loader: &Loader, theme: &Theme) -> Doc<'a> {
+fn doc<'a>(
+    old: &'a File,
+    new: &'a File,
+    words: (&'a Words, &'a Words),
+    loader: &Loader,
+    theme: &Theme,
+) -> Doc<'a> {
     Doc {
+        words,
+        view_words: Words::new(),
         text: String::new(),
         spans: vec![],
         rows: vec![],
@@ -478,10 +504,20 @@ pub fn build(
             folded,
         };
     }
-    let mut d = doc(old, new, loader, theme);
+    // The whole-file view has its words already. The other views work them out from the two
+    // sides, as they do the hunks.
+    let computed;
+    let words = if std::ptr::eq(old, new) {
+        (&old.words, &new.words)
+    } else {
+        let w = crate::diff_words::changed(&old.text.to_string(), &new.text.to_string(), hunks);
+        computed = (w.old, w.new);
+        (&computed.0, &computed.1)
+    };
+    let mut d = doc(old, new, words, loader, theme);
     let mut ld = r.left.as_ref().map(|_| Doc {
         old_side: true,
-        ..doc(old, new, loader, theme)
+        ..doc(old, new, words, loader, theme)
     });
     let mut full = vec![];
     let mut i = 0;

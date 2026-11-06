@@ -1564,6 +1564,20 @@ fn unified_view_screen() {
     assert_ne!(fg("diff.minus.gutter"), fg("diff.plus.gutter"));
 }
 
+/// The screen column where `pat` starts on row `y`: its first match, or its last.
+fn col(t: &T, y: u16, pat: &str, last: bool) -> u16 {
+    let screen = t.screen();
+    let line = screen.lines().nth(y as usize).unwrap();
+    let i = if last {
+        line.rfind(pat)
+    } else {
+        line.find(pat)
+    };
+    line[..i.unwrap_or_else(|| panic!("{pat} not on row {y}:\n{screen}"))]
+        .chars()
+        .count() as u16
+}
+
 impl T {
     /// A theme key's background colour.
     fn bg(&self, key: &str) -> Option<Color> {
@@ -1633,11 +1647,67 @@ fn removed_and_added_lines_are_tinted_in_the_unified_and_split_views() {
     );
     // Side by side: removals on the left, additions on the right, and filler rows plain.
     t.keys("space v s");
-    let right = t.screen().lines().nth(1).unwrap().rfind("2 ▍").unwrap() as u16;
+    let right = col(&t, 1, "2 ▍", true);
     assert_eq!(t.cell_bg(20, 1), minus, "{}", t.screen());
     assert_eq!(t.cell_bg(right + 8, 1), plus);
     assert_ne!(t.cell_bg(20, 2), minus, "a filler row");
     assert_eq!(t.cell_bg(right + 8, 2), plus);
+}
+
+#[test]
+fn changed_words_get_a_stronger_tint_in_every_view() {
+    // `println!("hi")` became `println!("hello")`: only `hi` and `hello` changed.
+    let mut t = T::files(OLD, NEW);
+    let (plus_word, minus_word) = (t.bg("diff.plus.word"), t.bg("diff.minus.word"));
+    let (plus, minus) = (t.bg("diff.plus.line"), t.bg("diff.minus.line"));
+    assert!(plus_word.is_some() && plus_word != plus && minus_word != minus);
+    // `    println!("` is 14 columns, so the word starts there.
+    let x0 = t.app.main_file().gutter_width() as u16;
+    let word = |t: &T, x0: u16, y, len| {
+        (0..len)
+            .map(|i| t.cell_bg(x0 + 14 + i, y))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        word(&t, x0, 1, 5),
+        vec![plus_word; 5],
+        "hello, in the file view"
+    );
+    assert_eq!(t.cell_bg(x0 + 6, 1), plus, "println, unchanged");
+    assert_eq!(t.cell_bg(x0 + 20, 1), plus, "the quote after it");
+    assert!(
+        (x0..x0 + 14).all(|x| t.cell_bg(x, 2) != plus_word),
+        "an added line with no pair has no words"
+    );
+    t.keys("space v u");
+    let x0 = t.app.main_file().gutter_width() as u16;
+    assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, removed");
+    assert_eq!(word(&t, x0, 2, 5), vec![plus_word; 5], "hello, added");
+    assert_eq!(t.cell_bg(x0 + 16, 1), minus, "the quote after hi");
+    t.keys("space v s");
+    let right = col(&t, 1, "2 ▍", true) + 3;
+    assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, on the left");
+    assert_eq!(
+        word(&t, right, 1, 5),
+        vec![plus_word; 5],
+        "hello, on the right"
+    );
+}
+
+#[test]
+fn a_folded_file_view_keeps_its_changed_words() {
+    let old = lines(20);
+    let new = old.replace("line 10\n", "line ten\n");
+    let t = T::files(&old, &new);
+    assert!(t.shows("↕"), "folded: {}", t.screen());
+    let y = t
+        .screen()
+        .lines()
+        .position(|l| l.contains("line ten"))
+        .unwrap() as u16;
+    let x = col(&t, y, "ten", false);
+    assert_eq!(t.cell_bg(x, y), t.bg("diff.plus.word"), "{}", t.screen());
+    assert_eq!(t.cell_bg(x - 2, y), t.bg("diff.plus.line"));
 }
 
 #[test]
