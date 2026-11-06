@@ -2037,9 +2037,16 @@ impl App {
             return (
                 "File tree",
                 fixed(&[
-                    ("j, down", "Next file"),
-                    ("k, up", "Previous file"),
+                    ("j, down", "Next row"),
+                    ("k, up", "Previous row"),
                     ("ret, l", "Open the file; the tree stays"),
+                    ("ret", "On a folder: open or close it"),
+                    ("l, right", "On a folder: open it, or go into it"),
+                    ("h, left", "Close the folder, or go to the one it's in"),
+                    ("/", "Search the names"),
+                    ("?", "Search the names backwards"),
+                    ("n", "Next match"),
+                    ("N", "Previous match"),
                     ("esc", "Back to the file"),
                     ("q", "Close the tree"),
                     ("space e", "From the file: back to the tree"),

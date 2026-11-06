@@ -241,7 +241,7 @@ commands! {
     filter_files, "Filter files by glob, or to those with threads", App(AppAction::FilterPrompt);
     goto_next_commit, "Goto next commit", App(AppAction::NextCommit(true));
     goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
-    file_explorer, "Open the file tree", App(AppAction::FileTree);
+    file_explorer, "Open, focus or close the file tree", App(AppAction::FileTree);
     command_palette, "Open command palette", App(AppAction::CommandPalette);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
     // Folding: Vim's keys, in Helix's view menu.

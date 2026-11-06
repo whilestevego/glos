@@ -1809,6 +1809,24 @@ impl T {
 }
 
 #[test]
+fn tree_with_a_closed_folder() {
+    let mut t = nested_tree();
+    t.closed(&["tests/"]);
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn the_palette_finds_closing_the_tree() {
+    let mut t = T::files(OLD, NEW);
+    t.keys("C-g").typed("close the file tree");
+    assert!(
+        t.shows("Open, focus or close the file tree"),
+        "{}",
+        t.screen()
+    );
+}
+
+#[test]
 fn searching_the_tree_jumps_as_you_type() {
     let mut t = nested_tree();
     assert_eq!(t.tree_at(), "README.md");
@@ -2198,12 +2216,18 @@ fn palette_in_the_comment_box() {
 
 #[test]
 fn palette_in_the_tree_picker_and_prompt() {
-    let mut t = T::files(OLD, NEW);
+    // Tall enough to list every tree key.
+    let mut t = T::files_sized(OLD, NEW, 100, 30);
     // The file tree.
     t.app.app_command(AppAction::FileTree);
     t.keys("C-g");
     assert_eq!(t.palette().0, "File tree");
     assert!(t.shows("Close the tree"));
+    assert!(t.shows("On a folder: open or close it"), "{}", t.screen());
+    assert!(t.shows("Close the folder, or go to the one it's in"));
+    assert!(t.shows("Search the names"));
+    t.keys("esc C-g").typed("close");
+    assert!(t.shows("Close the tree"), "{}", t.screen());
     t.keys("ret"); // a listed key: back to the tree, still focused
     assert!(t.app.pickers.is_empty() && t.app.tree.as_ref().unwrap().focused);
     t.keys("q");
