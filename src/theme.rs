@@ -48,13 +48,39 @@ impl Theme {
         let mut table = resolve(name, user_dir, &mut HashSet::new())?;
         let palette = palette(table.remove("palette"));
         table.remove("inherits");
-        let mut styles = HashMap::new();
+        let mut raw = HashMap::new();
         let mut scopes = vec![];
         for (key, value) in table {
-            let style = adapt(parse_style(&value, &palette), colors);
             scopes.push(key.clone());
-            styles.insert(key, style);
+            raw.insert(key, parse_style(&value, &palette));
         }
+        // The diff tints are worked out from the theme's own RGB colours, before they're mapped
+        // to the 256 colours. A theme that sets one of the keys keeps its own.
+        let background = raw.get("ui.background").and_then(|s| rgb(s.bg?));
+        for (key, toward, amount) in TINTS {
+            if raw.contains_key(*key) {
+                continue;
+            }
+            let fg = raw.get(*toward).and_then(|s| rgb(s.fg?));
+            // Without both colours there's no tint. The key is still set, so that it doesn't
+            // fall back to `diff.plus` and colour the text.
+            let bg = match (background, fg, colors) {
+                (Some(b), Some(f), ColorSupport::Indexed) => Some(tint_256(b, f, *amount)),
+                (Some(b), Some(f), _) => Some(rgb_color(mix(b, f, *amount))),
+                _ => None,
+            };
+            raw.insert(
+                key.to_string(),
+                Style {
+                    bg,
+                    ..Style::default()
+                },
+            );
+        }
+        let styles = raw
+            .into_iter()
+            .map(|(k, s)| (k, adapt(s, colors)))
+            .collect();
         Ok(Theme { styles, scopes })
     }
 
@@ -300,6 +326,90 @@ fn adapt(style: Style, colors: ColorSupport) -> Style {
     }
 }
 
+/// The diff tints: each key, the style whose colour it leans toward, and how far from the
+/// background it goes. The line tints are subtle, and the changed words stronger.
+const TINTS: &[(&str, &str, f32)] = &[
+    ("diff.plus.line", "diff.plus", 0.18),
+    ("diff.minus.line", "diff.minus", 0.18),
+    ("diff.plus.word", "diff.plus", 0.35),
+    ("diff.minus.word", "diff.minus", 0.35),
+];
+
+type Rgb = (u8, u8, u8);
+
+fn rgb(c: Color) -> Option<Rgb> {
+    match c {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        _ => None,
+    }
+}
+
+fn rgb_color((r, g, b): Rgb) -> Color {
+    Color::Rgb(r, g, b)
+}
+
+/// `from` moved `amount` of the way toward `to`, in OKLab. OKLab is perceptual, so the same
+/// amount looks about as strong on a dark theme as on a light one, and mid-tones don't go muddy
+/// as they do when RGB is mixed directly.
+pub fn mix(from: Rgb, to: Rgb, amount: f32) -> Rgb {
+    let (a, b) = (oklab(from), oklab(to));
+    let t = amount.clamp(0.0, 1.0);
+    from_oklab([0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t))
+}
+
+/// A tint for 256 colours: the mix, mapped to the nearest of the 256. A small tint can round to
+/// the background's own colour, so the mix goes further toward `to` until it doesn't.
+fn tint_256(from: Rgb, to: Rgb, amount: f32) -> Color {
+    let bg = nearest_256(from.0, from.1, from.2);
+    let mut t = amount;
+    loop {
+        let (r, g, b) = mix(from, to, t);
+        let c = nearest_256(r, g, b);
+        if c != bg || t >= 1.0 {
+            return Color::Indexed(c);
+        }
+        t = (t + 0.05).min(1.0);
+    }
+}
+
+fn oklab((r, g, b): Rgb) -> [f32; 3] {
+    let lin = |c: u8| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (r, g, b) = (lin(r), lin(g), lin(b));
+    let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_99 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+fn from_oklab([l, a, b]: [f32; 3]) -> Rgb {
+    let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m_ = (l - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+    let s_ = (l - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+    let r = 4.076_741_7 * l_ - 3.307_711_6 * m_ + 0.230_969_94 * s_;
+    let g = -1.268_438 * l_ + 2.609_757_4 * m_ - 0.341_319_38 * s_;
+    let b = -0.004_196_086_3 * l_ - 0.703_418_6 * m_ + 1.707_614_7 * s_;
+    let gamma = |c: f32| {
+        let c = if c <= 0.003_130_8 {
+            12.92 * c
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        };
+        (c.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    (gamma(r), gamma(g), gamma(b))
+}
+
 /// The nearest xterm-256 colour: the 6×6×6 cube or the 24-step grey ramp.
 pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
     const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
@@ -330,6 +440,104 @@ pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oklab_round_trips_and_mixes_between_its_ends() {
+        for c in [
+            (0, 0, 0),
+            (255, 255, 255),
+            (0x35, 0xbf, 0x86),
+            (0x1e, 0x1e, 0x2e),
+            (12, 200, 99),
+        ] {
+            let back = from_oklab(oklab(c));
+            let close = |a: u8, b: u8| a.abs_diff(b) <= 1;
+            assert!(
+                close(back.0, c.0) && close(back.1, c.1) && close(back.2, c.2),
+                "{c:?} → {back:?}"
+            );
+        }
+        let (bg, green) = ((0x1e, 0x1e, 0x2e), (0xa6, 0xe3, 0xa1));
+        assert_eq!(mix(bg, green, 0.0), bg);
+        assert_eq!(mix(bg, green, 1.0), green);
+        // Black to white at half way is OKLab's middle grey, not RGB's 128.
+        let grey = mix((0, 0, 0), (255, 255, 255), 0.5);
+        assert!(
+            grey.0 == grey.1 && grey.1 == grey.2 && (95..=105).contains(&grey.0),
+            "{grey:?}"
+        );
+        // A mix stays between its ends in every channel.
+        let m = mix(bg, green, 0.18);
+        for (x, (a, b)) in [
+            (m.0, (bg.0, green.0)),
+            (m.1, (bg.1, green.1)),
+            (m.2, (bg.2, green.2)),
+        ] {
+            assert!(a.min(b) <= x && x <= a.max(b), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn diff_tints_lean_from_the_background_toward_the_diff_colours() {
+        let t = Theme::load("catppuccin_mocha", ColorSupport::TrueColor).unwrap();
+        let base = (0x1e, 0x1e, 0x2e);
+        let (green, red) = ((0xa6, 0xe3, 0xa1), (0xf3, 0x8b, 0xa8));
+        let bg = |k| t.get(k).bg;
+        assert_eq!(
+            bg("diff.plus.line"),
+            Some(rgb_color(mix(base, green, 0.18)))
+        );
+        assert_eq!(bg("diff.minus.line"), Some(rgb_color(mix(base, red, 0.18))));
+        assert_eq!(
+            bg("diff.plus.word"),
+            Some(rgb_color(mix(base, green, 0.35)))
+        );
+        assert_eq!(bg("diff.minus.word"), Some(rgb_color(mix(base, red, 0.35))));
+        // The tints only set a background, so syntax colours show through.
+        assert_eq!(t.get("diff.plus.line").fg, None);
+        // 256 colours: never the background's own colour.
+        let idx = Theme::load("catppuccin_mocha", ColorSupport::Indexed).unwrap();
+        for k in [
+            "diff.plus.line",
+            "diff.minus.line",
+            "diff.plus.word",
+            "diff.minus.word",
+        ] {
+            let c = idx.get(k).bg;
+            assert!(matches!(c, Some(Color::Indexed(_))), "{k}");
+            assert_ne!(c, idx.get("ui.background").bg, "{k}");
+        }
+        // NO_COLOR: no tints.
+        let none = Theme::load("catppuccin_mocha", ColorSupport::None).unwrap();
+        assert_eq!(none.get("diff.plus.line").bg, None);
+    }
+
+    #[test]
+    fn a_theme_can_set_its_own_tints_and_one_without_a_background_gets_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mine.toml"),
+            "inherits = \"catppuccin_mocha\"\n\"diff.plus.line\" = { bg = \"#102030\" }\n",
+        )
+        .unwrap();
+        let t = Theme::load_from("mine", ColorSupport::TrueColor, Some(dir.path())).unwrap();
+        assert_eq!(
+            t.get("diff.plus.line").bg,
+            Some(Color::Rgb(0x10, 0x20, 0x30))
+        );
+        assert!(
+            t.get("diff.minus.line").bg.is_some(),
+            "the others are still worked out"
+        );
+        // No RGB background: no tint, and no fallback to `diff.plus`'s colour either.
+        std::fs::write(
+            dir.path().join("bare.toml"),
+            "\"diff.plus\" = \"#00ff00\"\n",
+        )
+        .unwrap();
+        let t = Theme::load_from("bare", ColorSupport::TrueColor, Some(dir.path())).unwrap();
+        assert_eq!(t.get("diff.plus.line"), Style::default());
+    }
 
     #[test]
     fn inherits_and_palette() {
