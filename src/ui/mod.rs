@@ -26,7 +26,7 @@ use glos_helix::{
     commands::{self, Ctx},
     layout::{TextAnnotations, char_idx_at_visual_offset, visual_offset_from_anchor},
     syntax::Loader,
-    text::Selection,
+    text::{Selection, line_end_char_index},
 };
 use ratatui::{
     DefaultTerminal, Frame,
@@ -265,6 +265,15 @@ pub struct App {
     last_round: Option<u32>,
     tree: Option<tree::Tree>,
     tree_area: Rect,
+    /// Where the key help panel was last drawn. It's empty when the panel isn't showing.
+    help_area: Rect,
+    /// How many rows the mouse wheel has scrolled the help panel. Any key press resets this,
+    /// because the menu changes.
+    help_top: usize,
+    /// Set when you scroll the code sideways with the mouse. It records where the cursor was,
+    /// so the code stays scrolled while the cursor stays there. Once the cursor moves, the
+    /// view scrolls back to show it.
+    hold_left: Option<usize>,
     /// A review chosen in the dashboard: glos closes this one and opens it.
     pub switch: Option<Source>,
 }
@@ -471,6 +480,9 @@ impl App {
             last_round: None,
             tree: None,
             tree_area: Rect::default(),
+            help_area: Rect::default(),
+            help_top: 0,
+            hold_left: None,
             switch: None,
         };
         app.load(0);
@@ -873,9 +885,10 @@ impl App {
         self.reanchor(false);
         self.ensure_alt();
         if let Some(t) = &self.tree {
-            let (focused, selected) = (t.focused, t.selected().map(str::to_string));
+            let (focused, top) = (t.focused, t.top);
+            let selected = t.selected().map(str::to_string);
             let mut t = tree::Tree::new(self.tree_entries());
-            t.focused = focused;
+            (t.focused, t.top) = (focused, top);
             if let Some(p) = selected {
                 t.select(&p);
             }
@@ -1740,6 +1753,7 @@ impl App {
         if !self.replaying {
             self.status = None;
         }
+        self.help_top = 0;
         // Ctrl-G anywhere: the keys for where you are. Again, or esc, goes back.
         if key.code == KeyCode::Char('g') && key.mods == KeyModifiers::CONTROL {
             match self.pickers.last() {
@@ -2501,19 +2515,43 @@ impl App {
         self.jumps.get(self.jump).cloned()
     }
 
-    /// Click to move the cursor, drag to select, wheel to scroll; in the picker, the wheel moves
-    /// and a click opens.
+    /// Handles a mouse event based on what's under the pointer. Clicking the file tree or the
+    /// code moves keyboard focus there, and the wheel scrolls whatever it's over.
+    ///
+    /// The picker and the command line are modal, so they get every event. While the comment
+    /// box is open, clicks outside it are ignored so they can't disturb the draft.
     fn mouse(&mut self, m: MouseEvent) {
-        // What's on top takes the click: the picker, the command line or the comment box (which
-        // swallow it), then the tree, where a click opens a file.
+        use MouseEventKind as K;
+        let at = |r: Rect| r.contains((m.column, m.row).into());
+        let click = m.kind == K::Down(MouseButton::Left);
+        let shift = m.modifiers.contains(KeyModifiers::SHIFT);
+        // Touchpads send sideways swipes as ScrollLeft and ScrollRight. Holding Shift while
+        // turning the wheel also scrolls sideways.
+        let sideways = match m.kind {
+            K::ScrollLeft => Some(false),
+            K::ScrollRight => Some(true),
+            K::ScrollUp if shift => Some(false),
+            K::ScrollDown if shift => Some(true),
+            _ => None,
+        };
+        let wheel = sideways.is_some() || matches!(m.kind, K::ScrollUp | K::ScrollDown);
+        let boxed = self.comment_box.is_some();
         let cx = cx!(self);
         let outcome = if let Some(p) = self.pickers.last_mut() {
             p.mouse(m, self.screen, &cx)
         } else if let Some(p) = &mut self.prompt {
             p.mouse(m, self.screen, &cx)
-        } else if let Some(b) = &mut self.comment_box {
-            b.mouse(m, self.box_area, &cx)
-        } else if let Some(t) = &mut self.tree {
+        } else if wheel && at(self.help_area) {
+            if sideways.is_none() {
+                self.help_top = match m.kind {
+                    K::ScrollDown => self.help_top + 3,
+                    _ => self.help_top.saturating_sub(3),
+                };
+            }
+            Outcome::Consumed
+        } else if boxed && !wheel && !at(self.box_area) {
+            Outcome::Consumed
+        } else if let Some(t) = self.tree.as_mut().filter(|_| at(self.tree_area)) {
             t.mouse(m, self.tree_area, &cx)
         } else {
             Outcome::Ignored
@@ -2526,24 +2564,58 @@ impl App {
                 return;
             }
         }
+        // With the comment box open, the wheel can still scroll the code behind it. Scrolling
+        // can't change the draft, so it's safe. The box is set aside while the code handles
+        // the event.
+        if boxed && !at(self.box_area) {
+            let b = self.comment_box.take();
+            self.mouse(m);
+            self.comment_box = b;
+            return;
+        }
+        if !boxed && !at(self.view) && !at(self.left_view) {
+            return; // Over the statusline or the command line, which don't scroll.
+        }
+        if click && let Some(t) = &mut self.tree {
+            t.focused = false;
+        }
         // A click on a thread opens or closes it.
-        if m.kind == MouseEventKind::Down(MouseButton::Left)
+        if click
+            && !boxed
             && let Some(&(_, i)) = self.thread_hits.iter().find(|(y, _)| *y == m.row)
         {
             self.toggle_thread(i);
             return;
         }
+        if let Some(right) = sideways {
+            self.scroll_sideways(right);
+            return;
+        }
         match m.kind {
-            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-                // Helix's editor.scroll-lines: 3, and the cursor stays in view.
-                let down = m.kind == MouseEventKind::ScrollDown;
+            K::ScrollDown | K::ScrollUp => {
+                // Scroll 3 lines, like Helix's default `editor.scroll-lines`. The cursor moves
+                // only if it has to, to stay on screen. If the code was scrolled sideways, it
+                // stays that way.
+                let down = m.kind == K::ScrollDown;
+                let (held, left) = (self.hold_left.is_some(), self.file().left);
                 self.doc_command(|cx| commands::scroll_lines(cx, 3, down));
+                if held {
+                    let file = self.file_mut();
+                    file.left = left;
+                    let cursor = file.sel.primary().cursor(file.text.slice(..));
+                    self.hold_left = Some(cursor);
+                }
             }
-            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+            K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
                 let Some(pos) = self.pos_at(m.column, m.row) else {
                     return;
                 };
-                let drag = matches!(m.kind, MouseEventKind::Drag(_));
+                let drag = matches!(m.kind, K::Drag(_));
+                if let Some(b) = self.comment_box.as_mut().filter(|b| b.insert) {
+                    // In insert mode, the cursor is a single point rather than a selection.
+                    b.file.sel = Selection::point(pos);
+                    return;
+                }
                 self.doc_command(|cx| {
                     cx.sel = if drag {
                         let text = cx.text.slice(..);
@@ -2554,7 +2626,7 @@ impl App {
                     };
                 });
                 // A click on a fold line opens it.
-                if !drag && self.fold_here().is_some() {
+                if !drag && !boxed && self.fold_here().is_some() {
                     self.fold_command(folding::FoldKey::Open);
                 }
             }
@@ -2562,30 +2634,65 @@ impl App {
         }
     }
 
-    /// The character under a screen cell in the file view (Helix's `char_idx_at_visual_offset`).
+    /// Scrolls the code 6 columns left or right. It does nothing when lines are wrapped, and
+    /// it stops scrolling right once the end of the widest visible line is on screen.
+    fn scroll_sideways(&mut self, right: bool) {
+        if self.wrap() {
+            return;
+        }
+        let (height, width) = self.text_size();
+        let file = self.file_mut();
+        if file.collapsed || file.binary {
+            return;
+        }
+        let text = file.text.slice(..);
+        let widest = (file.top..(file.top + height).min(text.len_lines()))
+            .map(|l| view::visual_col(text, line_end_char_index(&text, l), file.tab_width))
+            .max()
+            .unwrap_or(0);
+        file.left = if right {
+            (file.left + 6)
+                .min((widest + 1).saturating_sub(width as usize))
+                .max(file.left)
+        } else {
+            file.left.saturating_sub(6)
+        };
+        self.hold_left = Some(file.sel.primary().cursor(text));
+    }
+
+    /// Returns the character under a screen cell. While the comment box is open, it looks in
+    /// the box. Otherwise it looks in the code.
     fn pos_at(&self, x: u16, y: u16) -> Option<usize> {
-        let file = self.main_file();
+        let (file, area, wrap, annotations) = match &self.comment_box {
+            Some(b) => {
+                let inner = Block::default().borders(Borders::ALL).inner(self.box_area);
+                (&b.file, inner, true, TextAnnotations::default())
+            }
+            None => (
+                self.main_file(),
+                self.view,
+                self.state.wrap,
+                self.annotations(),
+            ),
+        };
         let header = file.notices.len() as u16;
         let gutter = file.gutter_width() as u16;
-        if y < self.view.y + header
-            || y >= self.view.bottom()
-            || x < self.view.x + gutter
+        if y < area.y + header
+            || y >= area.bottom()
+            || x < area.x + gutter
+            || x >= area.right()
             || file.collapsed
             || file.binary
         {
             return None;
         }
         let text = file.text.slice(..);
-        let fmt = view::text_format(
-            file,
-            self.view.width.saturating_sub(gutter),
-            self.state.wrap,
-        );
+        let fmt = view::text_format(file, area.width.saturating_sub(gutter), wrap);
         let left = if fmt.soft_wrap { 0 } else { file.left };
-        let row = (y - self.view.y - header) as isize;
-        let col = left + (x - self.view.x - gutter) as usize;
+        let row = (y - area.y - header) as isize;
+        let col = left + (x - area.x - gutter) as usize;
         let anchor = text.line_to_char(file.top.min(text.len_lines() - 1));
-        let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &self.annotations());
+        let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &annotations);
         Some(pos)
     }
 
@@ -2797,6 +2904,7 @@ impl App {
     /// a cursor outside the view is centred instead, as Helix does after a search. Rows are
     /// visual rows, so a wrapped line counts as more than one.
     fn scroll_to_cursor(&mut self, center: bool) {
+        let held = self.hold_left.take();
         let (height, width) = self.text_size();
         if height == 0 {
             return; // not drawn yet: the first draw has the size
@@ -2849,6 +2957,10 @@ impl App {
         }
         if fmt.soft_wrap {
             file.left = 0;
+            return;
+        }
+        if held == Some(cursor) {
+            self.hold_left = held;
             return;
         }
         let col = view::visual_col(text, cursor, file.tab_width);
@@ -2937,6 +3049,7 @@ impl App {
         if let Some(p) = self.pickers.last_mut() {
             p.render(buf, area, &cx);
         }
+        self.help_area = Rect::default();
         self.render_help(f, area);
     }
 
@@ -3040,7 +3153,7 @@ impl App {
     }
 
     /// The key help panel (Helix's infobox): what can follow the keys typed so far.
-    fn render_help(&self, f: &mut Frame, area: Rect) {
+    fn render_help(&mut self, f: &mut Frame, area: Rect) {
         let (title, rows): (&str, Vec<(String, &str)>) = if let Some(next) = self.next_key {
             match next {
                 NextKey::Textobject(around) => (
@@ -3113,11 +3226,10 @@ impl App {
             rect,
         );
         let text_style: Style = popup.patch(t.get("ui.text.info"));
-        for (i, l) in lines
-            .iter()
-            .enumerate()
-            .take(height.saturating_sub(2) as usize)
-        {
+        let shown = height.saturating_sub(2) as usize;
+        self.help_top = self.help_top.min(lines.len().saturating_sub(shown));
+        self.help_area = rect;
+        for (i, l) in lines.iter().skip(self.help_top).enumerate().take(shown) {
             f.buffer_mut().set_stringn(
                 rect.x + 2,
                 rect.y + 1 + i as u16,

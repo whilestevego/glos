@@ -1588,7 +1588,11 @@ fn file_tree() {
     let y = t.screen().lines().position(|l| l.contains("z.md")).unwrap() as u16;
     t.mouse(MouseEventKind::Down(MouseButton::Left), 3, y);
     assert_eq!(t.path(), "z.md");
-    t.keys("space e q");
+    assert!(
+        t.app.tree.as_ref().unwrap().focused,
+        "a click focuses the tree"
+    );
+    t.keys("q");
     assert!(t.app.tree.is_none());
     assert!(!t.shows("Changed files"));
 }
@@ -2283,4 +2287,5 @@ fn a_fold_is_a_band_across_the_view() {
     assert_eq!(band.fg, Some(Color::Rgb(0x11, 0x22, 0x33)));
 }
 
+mod mouse;
 mod perf;

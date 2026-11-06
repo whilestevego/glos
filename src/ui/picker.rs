@@ -91,6 +91,9 @@ pub struct Picker {
     pub preview: bool,
     /// The keys palette (`C-g`): it opens over another picker, and closing it goes back there.
     pub palette: bool,
+    /// How many lines the wheel has scrolled the preview, and which item it was showing. When
+    /// the selection changes, the scroll resets so the new preview starts centred.
+    preview_scroll: (Option<Target>, isize),
 }
 
 impl Picker {
@@ -104,6 +107,7 @@ impl Picker {
             matcher: Matcher::new(nucleo::Config::DEFAULT.match_paths()),
             preview: true,
             palette: false,
+            preview_scroll: (None, 0),
         };
         p.refilter();
         p
@@ -389,6 +393,18 @@ impl Component for Picker {
             code,
             mods: KeyModifiers::NONE,
         };
+        let (_, preview) = self.areas(cx.screen);
+        if let Some(p) = preview
+            && p.contains((m.column, m.row).into())
+        {
+            let by = match m.kind {
+                MouseEventKind::ScrollDown => 3,
+                MouseEventKind::ScrollUp => -3,
+                _ => return Outcome::Consumed,
+            };
+            self.preview_scroll.1 += by;
+            return Outcome::Consumed;
+        }
         match m.kind {
             MouseEventKind::ScrollDown => self.key_paged(step(KeyCode::Down), 1),
             MouseEventKind::ScrollUp => self.key_paged(step(KeyCode::Up), 1),
@@ -411,11 +427,21 @@ impl Component for Picker {
         let Some(preview) = preview else { return };
         let inner = preview_frame(buf, preview, cx.theme);
         let Some(state) = cx.state else { return };
+        if self.preview_scroll.0.as_ref() != self.selected() {
+            self.preview_scroll = (self.selected().cloned(), 0);
+        }
         let Some((file, line)) = self.selected().and_then(|t| state.preview(t)) else {
             return;
         };
         let line = line.or(file.hunks.first().map(|h| h.after.start as usize));
-        let top = line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3));
+        let centred = line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3)) as isize;
+        let off = self.preview_scroll.1;
+        let last = file.text.len_lines().saturating_sub(1) as isize;
+        let top = (centred + off).clamp(0, last.max(0));
+        // Don't let the offset grow past either end of the file. Otherwise, after scrolling
+        // too far, it would take several turns of the wheel before the preview moved back.
+        self.preview_scroll.1 = top - centred;
+        let top = top as usize;
         view::draw(
             buf,
             inner,

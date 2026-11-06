@@ -138,3 +138,22 @@ One PR on a `mouse` branch, one commit per step. Each step passes `cargo fmt`, `
 
 - Dragging to resize the tree.
 - A clickable scrollbar.
+
+## As built
+
+The work follows the plan, with four differences.
+
+Scrolling sideways doesn't move the cursor. The plan was to pull the cursor into the visible
+columns after each sideways scroll, but that failed in two cases. If the cursor's line was
+shorter than the scroll, there was no visible column to move it to, so the view jumped straight
+back. And a diagonal swipe on a touchpad also sends vertical wheel events, which moved the cursor
+and undid the sideways scroll. Instead, the code stays scrolled sideways until a key moves the
+cursor, even if the cursor is off screen in the meantime.
+
+Scrolling right stops once the end of the widest visible line is on screen.
+
+Clicking in the comment box moves its cursor. In insert mode, the cursor becomes a single point.
+In normal mode, dragging selects text, just as it does in the code.
+
+The four steps went in as one commit, because they all change the same routing code in
+`App::mouse`.

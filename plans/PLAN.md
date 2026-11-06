@@ -288,7 +288,8 @@ sends it the same way (unlike `Ctrl-/`, or `Option` keys on a Mac).
 
 **Mouse:** on by default, and `[editor] mouse = false` turns it off, as in Helix. Click to move the
 cursor, drag to select, wheel to scroll; click files in the tree and picker, click a thread marker
-to expand it, and click buttons in popups. While glos captures the mouse, the terminal's own text
+to expand it, and click buttons in popups. Clicking the tree or the code focuses it, and the
+wheel scrolls whatever is under the pointer, including sideways ([MOUSE.md](MOUSE.md)). While glos captures the mouse, the terminal's own text
 selection needs a modifier (usually shift), so `space y` yanks to the system clipboard: `pbcopy`,
 `wl-copy` or `xclip` as Helix does, or OSC 52 over SSH. The keyboard stays primary.
 
