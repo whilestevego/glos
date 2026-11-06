@@ -2,6 +2,7 @@ mod cli;
 mod clipboard;
 mod config;
 mod diff;
+mod diff_words;
 mod doctor;
 mod launch;
 mod mcp;

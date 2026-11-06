@@ -1564,6 +1564,171 @@ fn unified_view_screen() {
     assert_ne!(fg("diff.minus.gutter"), fg("diff.plus.gutter"));
 }
 
+/// The screen column where `pat` starts on row `y`: its first match, or its last.
+fn col(t: &T, y: u16, pat: &str, last: bool) -> u16 {
+    let screen = t.screen();
+    let line = screen.lines().nth(y as usize).unwrap();
+    let i = if last {
+        line.rfind(pat)
+    } else {
+        line.find(pat)
+    };
+    line[..i.unwrap_or_else(|| panic!("{pat} not on row {y}:\n{screen}"))]
+        .chars()
+        .count() as u16
+}
+
+impl T {
+    /// A theme key's background colour.
+    fn bg(&self, key: &str) -> Option<Color> {
+        self.app.theme.get(key).bg
+    }
+
+    /// The background of the cell at (x, y), `None` for the terminal's own.
+    fn cell_bg(&self, x: u16, y: u16) -> Option<Color> {
+        Some(self.cell(x, y).bg).filter(|c| *c != Color::Reset)
+    }
+}
+
+#[test]
+fn changed_lines_are_tinted_in_the_file_view() {
+    let mut t = T::files(OLD, NEW);
+    let plus = t.bg("diff.plus.line");
+    assert!(plus.is_some() && plus != t.bg("ui.background"));
+    let x0 = t.app.main_file().gutter_width() as u16;
+    // Lines 2 and 3 are modified and added; both are the new text, so both take the plus tint.
+    for y in [1, 2] {
+        assert_eq!(t.cell_bg(x0 + 4, y), plus, "line {}", y + 1);
+        assert_eq!(
+            t.cell_bg(71, y),
+            plus,
+            "the tint reaches the edge on line {}",
+            y + 1
+        );
+        assert_ne!(t.cell_bg(0, y), plus, "the gutter isn't tinted");
+        assert_ne!(t.cell_bg(x0 - 1, y), plus, "nor the diff sign");
+    }
+    for y in [0, 3] {
+        assert_ne!(t.cell_bg(x0 + 1, y), plus, "line {} is unchanged", y + 1);
+    }
+    // The cursor opens on line 2, and is drawn over the tint, as is a selection. A theme draws
+    // them with a background of their own, or by reversing the colours.
+    let drawn_over = |t: &T, x, style: ratatui::style::Style| {
+        let cell = t.cell(x, 1);
+        match style.bg {
+            Some(bg) => cell.bg == bg,
+            None => cell.modifier.contains(style.add_modifier),
+        }
+    };
+    let (_, selection, _, cursor) = view::selection_styles(&t.app.theme, "normal");
+    assert!(cursor.bg.is_some() || !cursor.add_modifier.is_empty());
+    assert!(drawn_over(&t, x0, cursor));
+    t.keys("x");
+    assert!(selection.bg.is_some());
+    assert!(drawn_over(&t, x0 + 4, selection));
+}
+
+#[test]
+fn removed_and_added_lines_are_tinted_in_the_unified_and_split_views() {
+    let mut t = T::files(OLD, NEW);
+    let (plus, minus) = (t.bg("diff.plus.line"), t.bg("diff.minus.line"));
+    assert_ne!(plus, minus);
+    t.keys("space v u");
+    let x0 = t.app.main_file().gutter_width() as u16;
+    // Rows: same, removed, added, added, same, removed, removed.
+    let rows: Vec<_> = (0..7).map(|y| t.cell_bg(70, y)).collect();
+    let none = t.cell_bg(70, 0);
+    assert_eq!(rows, [none, minus, plus, plus, none, minus, minus]);
+    assert_ne!(t.cell_bg(1, 1), minus, "the gutter isn't tinted");
+    assert_eq!(
+        t.cell_bg(x0 + 2, 5),
+        minus,
+        "an empty removed line is tinted too"
+    );
+    // Side by side: removals on the left, additions on the right, and filler rows plain.
+    t.keys("space v s");
+    let right = col(&t, 1, "2 ▍", true);
+    assert_eq!(t.cell_bg(20, 1), minus, "{}", t.screen());
+    assert_eq!(t.cell_bg(right + 8, 1), plus);
+    assert_ne!(t.cell_bg(20, 2), minus, "a filler row");
+    assert_eq!(t.cell_bg(right + 8, 2), plus);
+}
+
+#[test]
+fn changed_words_get_a_stronger_tint_in_every_view() {
+    // `println!("hi")` became `println!("hello")`: only `hi` and `hello` changed.
+    let mut t = T::files(OLD, NEW);
+    let (plus_word, minus_word) = (t.bg("diff.plus.word"), t.bg("diff.minus.word"));
+    let (plus, minus) = (t.bg("diff.plus.line"), t.bg("diff.minus.line"));
+    assert!(plus_word.is_some() && plus_word != plus && minus_word != minus);
+    // `    println!("` is 14 columns, so the word starts there.
+    let x0 = t.app.main_file().gutter_width() as u16;
+    let word = |t: &T, x0: u16, y, len| {
+        (0..len)
+            .map(|i| t.cell_bg(x0 + 14 + i, y))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        word(&t, x0, 1, 5),
+        vec![plus_word; 5],
+        "hello, in the file view"
+    );
+    assert_eq!(t.cell_bg(x0 + 6, 1), plus, "println, unchanged");
+    assert_eq!(t.cell_bg(x0 + 20, 1), plus, "the quote after it");
+    assert!(
+        (x0..x0 + 14).all(|x| t.cell_bg(x, 2) != plus_word),
+        "an added line with no pair has no words"
+    );
+    t.keys("space v u");
+    let x0 = t.app.main_file().gutter_width() as u16;
+    assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, removed");
+    assert_eq!(word(&t, x0, 2, 5), vec![plus_word; 5], "hello, added");
+    assert_eq!(t.cell_bg(x0 + 16, 1), minus, "the quote after hi");
+    t.keys("space v s");
+    let right = col(&t, 1, "2 ▍", true) + 3;
+    assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, on the left");
+    assert_eq!(
+        word(&t, right, 1, 5),
+        vec![plus_word; 5],
+        "hello, on the right"
+    );
+}
+
+#[test]
+fn a_folded_file_view_keeps_its_changed_words() {
+    let old = lines(20);
+    let new = old.replace("line 10\n", "line ten\n");
+    let t = T::files(&old, &new);
+    assert!(t.shows("↕"), "folded: {}", t.screen());
+    let y = t
+        .screen()
+        .lines()
+        .position(|l| l.contains("line ten"))
+        .unwrap() as u16;
+    let x = col(&t, y, "ten", false);
+    assert_eq!(t.cell_bg(x, y), t.bg("diff.plus.word"), "{}", t.screen());
+    assert_eq!(t.cell_bg(x - 2, y), t.bg("diff.plus.line"));
+}
+
+#[test]
+fn folds_are_not_tinted() {
+    let old = lines(20);
+    let new = old.replace("line 10\n", "line ten\n");
+    let t = T::files(&old, &new);
+    let fold = t
+        .screen()
+        .lines()
+        .position(|l| l.contains("↕"))
+        .expect("a fold") as u16;
+    assert_ne!(t.cell_bg(30, fold), t.bg("diff.plus.line"));
+    let changed = t
+        .screen()
+        .lines()
+        .position(|l| l.contains("line ten"))
+        .unwrap() as u16;
+    assert_eq!(t.cell_bg(30, changed), t.bg("diff.plus.line"));
+}
+
 #[test]
 fn split_view_screen() {
     let mut t = T::files(OLD, NEW);

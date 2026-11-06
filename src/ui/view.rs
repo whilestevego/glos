@@ -1,7 +1,7 @@
 //! One file as glos shows it, and drawing its text: the full-file view with Helix's gutters, and
 //! the picker's preview without them.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashMap, ops::Range};
 
 use glos_helix::{
     commands::SCROLLOFF,
@@ -46,6 +46,9 @@ pub struct File {
     pub old_numbers: bool,
     /// The biggest line number shown, for the gutter's width.
     pub numbers: usize,
+    /// The words that changed on each changed line that has a pair on the other side, as byte
+    /// ranges within the line. They're worked out once, when the file or view is built.
+    pub words: HashMap<usize, Vec<Range<usize>>>,
 }
 
 /// Where a line of a unified or side-by-side view came from (0-based line numbers).
@@ -145,13 +148,13 @@ impl File {
         if collapsed {
             notices.push("generated file, collapsed; enter expands".to_string());
         }
-        let hunks = if binary || change.new == Content::None {
-            vec![]
+        let (hunks, words) = if binary || change.new == Content::None {
+            (vec![], HashMap::new())
         } else {
-            diff::hunks(
-                &String::from_utf8_lossy(&old),
-                &String::from_utf8_lossy(&new),
-            )
+            let (old, new) = (String::from_utf8_lossy(&old), String::from_utf8_lossy(&new));
+            let hunks = diff::hunks(&old, &new);
+            let words = crate::diff_words::changed(&old, &new, &hunks).new;
+            (hunks, words)
         };
         let mut file = File::new(
             &source.root.join(&change.path),
@@ -162,6 +165,7 @@ impl File {
             loader,
         );
         file.collapsed = collapsed;
+        file.words = words;
         // Open on the first change, as a reviewer wants.
         if let Some(h) = file.hunks.first() {
             let line = (h.after.start as usize).min(file.text.len_lines().saturating_sub(1));
@@ -220,6 +224,7 @@ impl File {
             spans: None,
             old_numbers: false,
             numbers: 0,
+            words: HashMap::new(),
         }
         .numbered()
     }
@@ -277,6 +282,7 @@ impl File {
             spans: Some(spans),
             old_numbers: false,
             numbers,
+            words: HashMap::new(),
         }
     }
 
@@ -505,6 +511,10 @@ pub fn draw(
         theme.get("diff.minus.gutter"),
         theme.get("diff.delta.gutter"),
     );
+    // A theme without an RGB background has no tints: their styles are empty.
+    let tint_of = |key| Some(theme.get(key)).filter(|s: &Style| s.bg.is_some());
+    let (plus_line, minus_line) = (tint_of("diff.plus.line"), tint_of("diff.minus.line"));
+    let (plus_word, minus_word) = (tint_of("diff.plus.word"), tint_of("diff.minus.word"));
 
     let x0 = area.x + gutter;
     let width = area.width.saturating_sub(gutter);
@@ -558,11 +568,30 @@ pub fn draw(
             .iter()
             .find(|(s, e, _)| *s <= line && line <= *e)
             .map(|m| m.2);
+        // A changed line's background. In the whole-file view the added and modified lines
+        // are tinted as additions, since they're the new text, and removed lines aren't shown.
+        let (tint, word_tint) = match kind {
+            Some(Row::Added(_)) => (plus_line, plus_word),
+            Some(Row::Removed(_)) => (minus_line, minus_word),
+            Some(Row::Line(_)) | None => match file.hunks.get(hunk_i) {
+                Some(h) if h.after.contains(&l) => (plus_line, plus_word),
+                _ => (None, None),
+            },
+            Some(_) => (None, None),
+        };
+        // The changed words get a stronger tint, over the line's.
+        let words = file.words.get(&line).filter(|_| word_tint.is_some());
+        let line_byte = text.line_to_byte(line);
         let fold = kind.filter(|k| matches!(k, Row::Fold { .. }));
         let gutter_row = |buf: &mut Buffer, row: usize, y: u16| {
             // A fold is a band across the whole view, gutter and all.
             if fold.is_some() {
                 buf.set_style(Rect::new(area.x, y, area.width, 1), band);
+            }
+            // The tint fills the text area past the end of the line, so a change reads as a
+            // band. The gutter isn't tinted.
+            if let Some(t) = tint {
+                buf.set_style(Rect::new(x0, y, width, 1), t);
             }
             if main.is_none() || gutter == 0 {
                 return;
@@ -630,6 +659,15 @@ pub fn draw(
             let mut style = text_style;
             if let Some((_, s)) = spans.get(span) {
                 style = style.patch(*s);
+            }
+            // The tints sit behind the selections and the cursor, which are drawn over them.
+            if let Some(t) = tint {
+                style = style.patch(t);
+            }
+            if let (Some(ws), Some(t)) = (words, word_tint)
+                && ws.iter().any(|r| r.contains(&(byte - line_byte)))
+            {
+                style = style.patch(t);
             }
             for (i, (from, to, cur)) in ranges.iter().enumerate() {
                 if *from <= ch && ch < *to {
