@@ -1,5 +1,6 @@
-//! Helix's keymap: a trie of keys per mode, with menus (`g`, `m`, `[`, …) that open the key
-//! help panel. Built from Helix's default keymap at 25.07.1, keeping only what applies to glos.
+//! Every key glos knows: a trie of keys per context, with menus (`g`, `m`, `[`, …) that open the
+//! key help panel. The editor's keys are Helix's default keymap at 25.07.1, keeping only what
+//! applies to glos. The other contexts are glos's own.
 
 use std::fmt;
 
@@ -18,6 +19,8 @@ pub enum Action {
     /// `mi` / `ma`: waits for the text object's character; `true` for around.
     Textobject(bool),
     App(AppAction),
+    /// A command for the focused file tree.
+    Tree(super::tree::TreeCmd),
 }
 
 /// Commands that act on glos itself rather than one file's selection.
@@ -118,7 +121,8 @@ macro_rules! commands {
 }
 
 use super::folding::FoldKey as F;
-use Action::{App, Doc, NextChar};
+use super::tree::TreeCmd as T;
+use Action::{App, Doc, NextChar, Tree};
 commands! {
     move_char_left, "Move left", Doc(c::move_char_left);
     move_char_right, "Move right", Doc(c::move_char_right);
@@ -243,6 +247,18 @@ commands! {
     goto_prev_commit, "Goto previous commit", App(AppAction::NextCommit(false));
     file_explorer, "Open, focus or close the file tree", App(AppAction::FileTree);
     command_palette, "Open command palette", App(AppAction::CommandPalette);
+    // The file tree, while it has focus.
+    tree_next, "Next row", Tree(T::Next);
+    tree_prev, "Previous row", Tree(T::Prev);
+    tree_open, "Open the file, or open or close the folder", Tree(T::Open);
+    tree_open_or_into, "Open the file; on a folder, open it or go into it", Tree(T::OpenOrInto);
+    tree_close_or_up, "Close the folder, or go to the one it's in", Tree(T::CloseOrUp);
+    tree_search, "Search the names", Tree(T::Search(true));
+    tree_rsearch, "Search the names backwards", Tree(T::Search(false));
+    tree_search_next, "Next match", Tree(T::SearchNext(true));
+    tree_search_prev, "Previous match", Tree(T::SearchNext(false));
+    tree_unfocus, "Back to the file", Tree(T::Unfocus);
+    tree_close, "Close the tree", Tree(T::Close);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
     // Folding: Vim's keys, in Helix's view menu.
     fold_open, "Open the fold at the cursor", App(AppAction::Fold(F::Open));
@@ -642,6 +658,23 @@ fn normal_defs() -> Vec<Def> {
     ]
 }
 
+/// The file tree's keys. `h` and `l` follow Helix's file explorer and yazi.
+fn tree_defs() -> Vec<Def> {
+    vec![
+        cmd("j|down", "tree_next"),
+        cmd("k|up", "tree_prev"),
+        cmd("ret", "tree_open"),
+        cmd("l|right", "tree_open_or_into"),
+        cmd("h|left", "tree_close_or_up"),
+        cmd("/", "tree_search"),
+        cmd("?", "tree_rsearch"),
+        cmd("n", "tree_search_next"),
+        cmd("N", "tree_search_prev"),
+        cmd("esc", "tree_unfocus"),
+        cmd("q", "tree_close"),
+    ]
+}
+
 /// Helix's view menu, under `z` and (sticky) `Z`.
 fn view_defs() -> Vec<Def> {
     vec![
@@ -718,11 +751,8 @@ impl Context {
                 select.push(cmd("esc", "exit_select_mode"));
                 select
             }
-            Context::Picker
-            | Context::Prompt
-            | Context::Tree
-            | Context::BoxInsert
-            | Context::BoxNormal => vec![],
+            Context::Tree => tree_defs(),
+            Context::Picker | Context::Prompt | Context::BoxInsert | Context::BoxNormal => vec![],
         }
     }
 }

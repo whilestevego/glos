@@ -1820,15 +1820,18 @@ impl App {
             }
             return None;
         }
-        // The open picker, the command line or the focused tree takes every key; then the
-        // editor's own state (a pending `f`, the comment box, a count, the keymap) does.
+        // The open picker or the command line takes every key; then the editor's own state (a
+        // pending `f`, the comment box, a count) does, and then the keymap.
+        let (context, _) = self.contexts();
+        let editor = matches!(
+            context,
+            Context::Normal | Context::Select | Context::BoxInsert | Context::BoxNormal
+        );
         let cx = cx!(self);
         let outcome = if let Some(p) = self.pickers.last_mut() {
             p.key(key, &cx)
         } else if let Some(p) = &mut self.prompt {
             p.key(key, &cx)
-        } else if let Some(t) = self.tree.as_mut().filter(|t| t.focused) {
-            t.key(key, &cx)
         } else {
             Outcome::Ignored
         };
@@ -1837,7 +1840,7 @@ impl App {
             Outcome::Consumed => return None,
             Outcome::Msg(msg) => return self.apply(msg),
         }
-        if let Some(next) = self.next_key.take() {
+        if editor && let Some(next) = self.next_key.take() {
             self.pending.clear();
             let ch = key.char().or(match key.code {
                 KeyCode::Enter => Some('\n'),
@@ -1872,7 +1875,8 @@ impl App {
             self.count = None;
             return None;
         }
-        if self.pending.is_empty()
+        if editor
+            && self.pending.is_empty()
             && let Some(b) = &mut self.comment_box
         {
             let outcome = b.key(key, &cx);
@@ -1886,7 +1890,8 @@ impl App {
             }
         }
         // A count, as in Helix: digits before a command (a leading 0 isn't one).
-        if self.pending.is_empty()
+        if editor
+            && self.pending.is_empty()
             && let Some(d) = key.char().and_then(|c| c.to_digit(10))
             && (d != 0 || self.count.is_some())
         {
@@ -2070,27 +2075,6 @@ impl App {
             rows.push(("C-g", "These keys"));
             return ("Command line", fixed(&rows));
         }
-        if self.tree.as_ref().is_some_and(|t| t.focused) {
-            return (
-                "File tree",
-                fixed(&[
-                    ("j, down", "Next row"),
-                    ("k, up", "Previous row"),
-                    ("ret, l", "Open the file; the tree stays"),
-                    ("ret", "On a folder: open or close it"),
-                    ("l, right", "On a folder: open it, or go into it"),
-                    ("h, left", "Close the folder, or go to the one it's in"),
-                    ("/", "Search the names"),
-                    ("?", "Search the names backwards"),
-                    ("n", "Next match"),
-                    ("N", "Previous match"),
-                    ("esc", "Back to the file"),
-                    ("q", "Close the tree"),
-                    ("space e", "From the file: back to the tree"),
-                    ("C-g", "These keys"),
-                ]),
-            );
-        }
         if let Some(b) = &self.comment_box
             && b.insert
         {
@@ -2108,39 +2092,33 @@ impl App {
                 ]),
             );
         }
+        let (context, fallback) = self.contexts();
         let mut rows = vec![];
-        let title = if self.comment_box.is_some() {
+        if context == Context::BoxNormal {
             rows.extend(fixed(&[
                 ("ret", "Save the comment"),
                 ("q", "Close the box; the draft is kept"),
                 ("i, a", "Insert before, after the selection"),
                 (":editor", "Edit the comment in $EDITOR"),
             ]));
-            "Comment box: normal mode"
-        } else if self.state.mode == Mode::Select {
-            "Select mode"
-        } else {
-            "Normal mode"
-        };
-        let mode = if self.state.mode == Mode::Select {
-            Context::Select
-        } else {
-            Context::Normal
-        };
-        self.walk_keys(self.keymaps.get(mode), "", &mut rows);
+        }
+        self.walk_keys(self.keymaps.get(context), "", &mut rows, false);
+        if let Some(f) = fallback {
+            self.walk_keys(self.keymaps.get(f), "", &mut rows, true);
+        }
         rows.push(("C-g".into(), "These keys", None));
-        (title, rows)
+        (context.title(), rows)
     }
 
     /// Every command under `menu` that applies here, with its full key sequence; keys bound to
-    /// the same command are joined.
-    fn walk_keys(&self, menu: &keymap::Menu, prefix: &str, out: &mut Vec<KeyRow>) {
+    /// the same command are joined. `boxed` is set when the menu is the fallback of the comment
+    /// box in normal mode.
+    fn walk_keys(&self, menu: &keymap::Menu, prefix: &str, out: &mut Vec<KeyRow>, boxed: bool) {
         let start = out.len();
         for (key, node) in &menu.keys {
             let keys = format!("{prefix}{key}");
             match node {
                 Node::Cmd(c) => {
-                    let boxed = self.comment_box.is_some();
                     // The box's own keys win over the keymap's, and some actions wait for it.
                     if boxed
                         && (matches!(keys.as_str(), "q" | "ret" | "i" | "a")
@@ -2156,7 +2134,7 @@ impl App {
                         None => out.push((keys, c.doc, Some(c.name))),
                     }
                 }
-                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out),
+                Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out, boxed),
             }
         }
     }
@@ -2202,6 +2180,13 @@ impl App {
                 return None;
             }
             Action::App(a) => self.app_command(a),
+            Action::Tree(c) => {
+                let cx = cx!(self);
+                match self.tree.as_mut().map(|t| t.command(c, &cx)) {
+                    Some(Outcome::Msg(msg)) => self.apply(msg),
+                    _ => None,
+                }
+            }
         };
         self.count = None;
         result

@@ -2223,14 +2223,23 @@ fn palette_in_the_tree_picker_and_prompt() {
     t.keys("C-g");
     assert_eq!(t.palette().0, "File tree");
     assert!(t.shows("Close the tree"));
-    assert!(t.shows("On a folder: open or close it"), "{}", t.screen());
+    assert!(
+        t.shows("Open the file, or open or close the folder"),
+        "{}",
+        t.screen()
+    );
     assert!(t.shows("Close the folder, or go to the one it's in"));
     assert!(t.shows("Search the names"));
-    t.keys("esc C-g").typed("close");
-    assert!(t.shows("Close the tree"), "{}", t.screen());
-    t.keys("ret"); // a listed key: back to the tree, still focused
+    // Choosing a key runs its command in the tree, which keeps focus.
+    t.keys("esc C-g")
+        .typed("search the names backwards")
+        .keys("ret");
     assert!(t.app.pickers.is_empty() && t.app.tree.as_ref().unwrap().focused);
-    t.keys("q");
+    assert!(t.shows("search:"), "{}", t.screen());
+    t.keys("esc C-g").typed("close the tree");
+    assert!(t.shows("Close the tree"), "{}", t.screen());
+    t.keys("ret");
+    assert!(t.app.tree.is_none(), "the palette closed the tree");
     // A picker: the palette covers it, and esc brings it back with its query.
     t.keys("space g").typed("main").keys("C-g");
     assert_eq!(t.palette().0, "Picker");

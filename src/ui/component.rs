@@ -61,7 +61,9 @@ pub struct Cx<'a> {
 }
 
 pub trait Component {
-    fn key(&mut self, key: Key, cx: &Cx) -> Outcome;
+    fn key(&mut self, _key: Key, _cx: &Cx) -> Outcome {
+        Outcome::Ignored
+    }
 
     /// A click or the wheel; `area` is where the component was drawn.
     fn mouse(&mut self, _m: MouseEvent, _area: Rect, _cx: &Cx) -> Outcome {
