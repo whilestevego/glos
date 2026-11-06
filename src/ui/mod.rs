@@ -47,7 +47,7 @@ use crate::{
 };
 use comments::{CommentBox, Place, ThreadLines, Threads};
 use component::{Component, Cx, Msg, Outcome};
-use keymap::{Action, AppAction, Key, Keymaps, Node};
+use keymap::{Action, AppAction, Context, Key, Keymaps, Node};
 use picker::{Item, Picker, Target};
 use prompt::{Prompt, PromptKind};
 use view::{File, clean};
@@ -1894,10 +1894,11 @@ impl App {
             self.count = NonZeroUsize::new(n.min(100_000_000));
             return None;
         }
-        let keymap = if self.state.mode == Mode::Select {
-            &self.keymaps.select
-        } else {
-            &self.keymaps.normal
+        let Some(keymap) = self.root_for(self.pending.first().unwrap_or(&key)) else {
+            // Unbound: drop the sequence, as Helix does.
+            self.pending.clear();
+            self.count = None;
+            return None;
         };
         let mut node = None;
         let mut menu = keymap;
@@ -1930,6 +1931,42 @@ impl App {
             .unwrap_or_default();
         self.pending = keep;
         self.execute(command)
+    }
+
+    /// The context in use, and the one its unbound keys fall back to. The order is the order
+    /// keys have always gone in: a picker, the command line, the focused tree, the comment box,
+    /// then the mode.
+    fn contexts(&self) -> (Context, Option<Context>) {
+        let mode = if self.state.mode == Mode::Select {
+            Context::Select
+        } else {
+            Context::Normal
+        };
+        if !self.pickers.is_empty() {
+            (Context::Picker, None)
+        } else if self.prompt.is_some() {
+            (Context::Prompt, None)
+        } else if self.tree.as_ref().is_some_and(|t| t.focused) {
+            (Context::Tree, None)
+        } else if let Some(b) = &self.comment_box {
+            if b.insert {
+                (Context::BoxInsert, None)
+            } else {
+                (Context::BoxNormal, Some(mode))
+            }
+        } else {
+            (mode, None)
+        }
+    }
+
+    /// The root menu that a sequence starting with `first` is walked in: the context's own, or
+    /// its fallback's when the context doesn't bind `first`.
+    fn root_for(&self, first: &Key) -> Option<&keymap::Menu> {
+        let (context, fallback) = self.contexts();
+        std::iter::once(context)
+            .chain(fallback)
+            .map(|c| self.keymaps.get(c))
+            .find(|m| m.get(*first).is_some())
     }
 
     /// What a component asked for.
@@ -2085,12 +2122,12 @@ impl App {
         } else {
             "Normal mode"
         };
-        let keymap = if self.state.mode == Mode::Select {
-            &self.keymaps.select
+        let mode = if self.state.mode == Mode::Select {
+            Context::Select
         } else {
-            &self.keymaps.normal
+            Context::Normal
         };
-        self.walk_keys(keymap, "", &mut rows);
+        self.walk_keys(self.keymaps.get(mode), "", &mut rows);
         rows.push(("C-g".into(), "These keys", None));
         (title, rows)
     }
@@ -3293,12 +3330,7 @@ impl App {
                 ),
                 NextKey::Char(_, doc) => (doc, vec![]),
             }
-        } else if !self.pending.is_empty() {
-            let keymap = if self.state.mode == Mode::Select {
-                &self.keymaps.select
-            } else {
-                &self.keymaps.normal
-            };
+        } else if let Some(keymap) = self.pending.first().and_then(|k| self.root_for(k)) {
             let mut menu = keymap;
             for k in &self.pending {
                 if let Some(Node::Menu(m)) = menu.get(*k) {

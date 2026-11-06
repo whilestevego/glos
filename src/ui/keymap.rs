@@ -671,22 +671,79 @@ fn view_defs() -> Vec<Def> {
     ]
 }
 
+/// A place that takes keys. Each has its own keys, and `App::contexts` says which one is in use.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Context {
+    Normal,
+    Select,
+    Picker,
+    Prompt,
+    Tree,
+    BoxInsert,
+    BoxNormal,
+}
+
+impl Context {
+    pub const ALL: [Context; 7] = [
+        Context::Normal,
+        Context::Select,
+        Context::Picker,
+        Context::Prompt,
+        Context::Tree,
+        Context::BoxInsert,
+        Context::BoxNormal,
+    ];
+
+    /// The title of the palette's list of keys.
+    pub fn title(self) -> &'static str {
+        match self {
+            Context::Normal => "Normal mode",
+            Context::Select => "Select mode",
+            Context::Picker => "Picker",
+            Context::Prompt => "Command line",
+            Context::Tree => "File tree",
+            Context::BoxInsert => "Comment box: insert mode",
+            Context::BoxNormal => "Comment box: normal mode",
+        }
+    }
+
+    fn defs(self) -> Vec<Def> {
+        match self {
+            Context::Normal => normal_defs(),
+            Context::Select => {
+                // Select mode is normal mode with motions extending; `v` and `esc` leave it.
+                let mut select = normal_defs();
+                select.retain(|d| !matches!(d, Def::Cmd("v" | "esc", _)));
+                select.push(cmd("v", "normal_mode"));
+                select.push(cmd("esc", "exit_select_mode"));
+                select
+            }
+            Context::Picker
+            | Context::Prompt
+            | Context::Tree
+            | Context::BoxInsert
+            | Context::BoxNormal => vec![],
+        }
+    }
+}
+
+/// Every context's keys.
 pub struct Keymaps {
-    pub normal: Menu,
-    pub select: Menu,
+    menus: Vec<(Context, Menu)>,
 }
 
 impl Keymaps {
     pub fn default() -> Keymaps {
-        let mut select = normal_defs();
-        // Select mode is normal mode with motions extending; `v` and `esc` leave it.
-        select.retain(|d| !matches!(d, Def::Cmd("v" | "esc", _)));
-        select.push(cmd("v", "normal_mode"));
-        select.push(cmd("esc", "exit_select_mode"));
         Keymaps {
-            normal: build("Normal mode", false, normal_defs()),
-            select: build("Select mode", false, select),
+            menus: Context::ALL
+                .iter()
+                .map(|&c| (c, build(c.title(), false, c.defs())))
+                .collect(),
         }
+    }
+
+    pub fn get(&self, context: Context) -> &Menu {
+        &self.menus.iter().find(|(c, _)| *c == context).unwrap().1
     }
 }
 
@@ -708,15 +765,16 @@ mod tests {
     #[test]
     fn help_joins_aliases() {
         let k = Keymaps::default();
-        let help = k.normal.help();
+        let (normal, select) = (k.get(Context::Normal), k.get(Context::Select));
+        let help = normal.help();
         assert!(help.contains(&("h, left".to_string(), "Move left", Some("move_char_left"))));
         assert!(help.contains(&("g".to_string(), "Goto", None)));
-        let Some(Node::Menu(g)) = k.normal.get(Key::parse("g").unwrap()) else {
+        let Some(Node::Menu(g)) = normal.get(Key::parse("g").unwrap()) else {
             panic!()
         };
         assert_eq!(g.name, "Goto");
         assert!(
-            matches!(k.select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode")
+            matches!(select.get(Key::parse("v").unwrap()), Some(Node::Cmd(c)) if c.name == "normal_mode")
         );
     }
 
@@ -732,7 +790,7 @@ mod tests {
     #[test]
     fn no_key_is_bound_twice_in_a_menu() {
         let k = Keymaps::default();
-        for root in [&k.normal, &k.select] {
+        for root in Context::ALL.map(|c| k.get(c)) {
             let mut menus = vec![];
             all_menus(root, &mut menus);
             for m in menus {
@@ -750,8 +808,9 @@ mod tests {
         let k = Keymaps::default();
         let mut bound = std::collections::HashSet::new();
         let mut menus = vec![];
-        all_menus(&k.normal, &mut menus);
-        all_menus(&k.select, &mut menus);
+        for c in Context::ALL {
+            all_menus(k.get(c), &mut menus);
+        }
         for m in menus {
             for (_, n) in &m.keys {
                 if let Node::Cmd(c) = n {
@@ -773,14 +832,15 @@ mod tests {
             Some(Node::Menu(m)) => Some(m.name),
             None => None,
         };
-        assert_eq!(get(&k.normal, "v"), Some("select_mode"));
-        assert_eq!(get(&k.select, "v"), Some("normal_mode"));
-        assert_eq!(get(&k.normal, "esc"), Some("normal_mode"));
-        assert_eq!(get(&k.select, "esc"), Some("exit_select_mode"));
+        let (normal, select) = (k.get(Context::Normal), k.get(Context::Select));
+        assert_eq!(get(normal, "v"), Some("select_mode"));
+        assert_eq!(get(select, "v"), Some("normal_mode"));
+        assert_eq!(get(normal, "esc"), Some("normal_mode"));
+        assert_eq!(get(select, "esc"), Some("exit_select_mode"));
         for key in ["h", "w", "x", "g", "space", "z", "/", "n", "f"] {
-            assert_eq!(get(&k.normal, key), get(&k.select, key), "{key}");
+            assert_eq!(get(normal, key), get(select, key), "{key}");
         }
-        let Some(Node::Menu(z)) = k.normal.get(Key::parse("Z").unwrap()) else {
+        let Some(Node::Menu(z)) = normal.get(Key::parse("Z").unwrap()) else {
             panic!()
         };
         assert!(z.sticky);
