@@ -1765,6 +1765,10 @@ impl App {
         };
         match name {
             "reply" => self.thread_here().is_some(),
+            "prompt_complete_next" | "prompt_complete_prev" => self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::Command)),
             "edit_comment" | "delete_comment" => self
                 .thread_here()
                 .is_some_and(|i| self.state.threads[i].latest_yours().is_some()),
@@ -1820,26 +1824,14 @@ impl App {
             }
             return None;
         }
-        // The command line takes every key; then the editor's own state (a pending `f`, the
-        // comment box, a count) does, and then the keymap.
+        // The editor's own state (a pending `f`, the comment box, a count) comes first, and
+        // then the keymap.
         let (context, _) = self.contexts();
         let editor = matches!(
             context,
             Context::Normal | Context::Select | Context::BoxInsert | Context::BoxNormal
         );
         let cx = cx!(self);
-        let outcome = if !self.pickers.is_empty() {
-            Outcome::Ignored
-        } else if let Some(p) = &mut self.prompt {
-            p.key(key, &cx)
-        } else {
-            Outcome::Ignored
-        };
-        match outcome {
-            Outcome::Ignored => {}
-            Outcome::Consumed => return None,
-            Outcome::Msg(msg) => return self.apply(msg),
-        }
         if editor && let Some(next) = self.next_key.take() {
             self.pending.clear();
             let ch = key.char().or(match key.code {
@@ -1983,12 +1975,15 @@ impl App {
 
     /// A character typed where text goes in `context`.
     fn text(&mut self, context: Context, c: char) -> Option<AppAction> {
-        if context == Context::Picker
-            && let Some(p) = self.pickers.last_mut()
-        {
-            p.text(c);
+        let outcome = match context {
+            Context::Picker => self.pickers.last_mut().map(|p| p.text(c)),
+            Context::Prompt => self.prompt.as_mut().map(|p| p.text(c)),
+            _ => None,
+        };
+        match outcome {
+            Some(Outcome::Msg(msg)) => self.apply(msg),
+            _ => None,
         }
-        None
     }
 
     /// What a component asked for.
@@ -2079,19 +2074,6 @@ impl App {
                 .map(|(k, d)| (k.to_string(), *d, None))
                 .collect()
         };
-        if let Some(p) = &self.prompt {
-            let mut rows = vec![
-                ("type", "Write the command or pattern"),
-                ("ret", "Run it"),
-                ("esc, C-c", "Cancel"),
-                ("backspace", "Delete; on an empty line, cancel"),
-            ];
-            if matches!(p.kind, PromptKind::Command) {
-                rows.push(("tab, S-tab", "Complete: the next or previous match"));
-            }
-            rows.push(("C-g", "These keys"));
-            return ("Command line", fixed(&rows));
-        }
         if let Some(b) = &self.comment_box
             && b.insert
         {
@@ -2214,6 +2196,10 @@ impl App {
                     _ => None,
                 }
             }
+            Action::Prompt(c) => match self.prompt.as_mut().map(|p| p.command(c)) {
+                Some(Outcome::Msg(msg)) => self.apply(msg),
+                _ => None,
+            },
         };
         self.count = None;
         result

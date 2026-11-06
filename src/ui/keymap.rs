@@ -23,6 +23,8 @@ pub enum Action {
     Tree(super::tree::TreeCmd),
     /// A command for the open picker.
     Picker(super::picker::PickerCmd),
+    /// A command for the command line.
+    Prompt(super::prompt::PromptCmd),
 }
 
 /// Commands that act on glos itself rather than one file's selection.
@@ -124,8 +126,9 @@ macro_rules! commands {
 
 use super::folding::FoldKey as F;
 use super::picker::PickerCmd as P;
+use super::prompt::PromptCmd as L;
 use super::tree::TreeCmd as T;
-use Action::{App, Doc, NextChar, Picker, Tree};
+use Action::{App, Doc, NextChar, Picker, Prompt, Tree};
 commands! {
     move_char_left, "Move left", Doc(c::move_char_left);
     move_char_right, "Move right", Doc(c::move_char_right);
@@ -272,6 +275,12 @@ commands! {
     picker_choose, "Open the selected item", Picker(P::Choose);
     picker_close, "Close", Picker(P::Close);
     picker_delete_char, "Delete the last character of the filter", Picker(P::DeleteChar);
+    // The command line: `:`, searches and regex prompts.
+    prompt_submit, "Run it", Prompt(L::Submit);
+    prompt_cancel, "Cancel", Prompt(L::Cancel);
+    prompt_complete_next, "Complete: the next match", Prompt(L::Complete(true));
+    prompt_complete_prev, "Complete: the previous match", Prompt(L::Complete(false));
+    prompt_delete_char, "Delete; on an empty line, cancel", Prompt(L::DeleteChar);
     dashboard, "Open the dashboard: every open review", App(AppAction::Dashboard);
     // Folding: Vim's keys, in Helix's view menu.
     fold_open, "Open the fold at the cursor", App(AppAction::Fold(F::Open));
@@ -693,6 +702,17 @@ fn picker_defs() -> Vec<Def> {
     ]
 }
 
+/// The command line's keys. Characters that aren't bound are typed.
+fn prompt_defs() -> Vec<Def> {
+    vec![
+        cmd("ret", "prompt_submit"),
+        cmd("esc|C-c", "prompt_cancel"),
+        cmd("tab", "prompt_complete_next"),
+        cmd("S-tab", "prompt_complete_prev"),
+        cmd("backspace", "prompt_delete_char"),
+    ]
+}
+
 /// The file tree's keys. `h` and `l` follow Helix's file explorer and yazi.
 fn tree_defs() -> Vec<Def> {
     vec![
@@ -798,7 +818,8 @@ impl Context {
             }
             Context::Tree => tree_defs(),
             Context::Picker => picker_defs(),
-            Context::Prompt | Context::BoxInsert | Context::BoxNormal => vec![],
+            Context::Prompt => prompt_defs(),
+            Context::BoxInsert | Context::BoxNormal => vec![],
         }
     }
 }
