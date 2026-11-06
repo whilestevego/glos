@@ -237,6 +237,11 @@ pub struct App {
     thread_hits: Vec<(u16, usize)>,
     /// Quitting with unsent comments reminds you once.
     reminded: bool,
+    /// The comment a first `space M` asked about. A second one deletes it, and any other key
+    /// forgets it.
+    delete_armed: Option<String>,
+    /// Set when the current key armed a delete, so `key` doesn't forget it straight away.
+    delete_kept: bool,
     /// `:editor` asked for; the event loop runs it, since it needs the terminal.
     run_editor: bool,
     /// The store's `data_version` when last read: it changes when another process writes.
@@ -300,6 +305,7 @@ fn blocked_in_box(action: AppAction) -> bool {
             | A::ReviewComment
             | A::Reply
             | A::EditComment
+            | A::DeleteComment
             | A::Submit(_)
             | A::ThreadPicker { .. }
             | A::NextThread(_)
@@ -463,6 +469,8 @@ impl App {
             box_area: Rect::default(),
             thread_hits: vec![],
             reminded: false,
+            delete_armed: None,
+            delete_kept: false,
             run_editor: false,
             data_version: 0,
             placed: Default::default(),
@@ -1607,6 +1615,48 @@ impl App {
         }
     }
 
+    /// `space M`: the first press asks, and a second press straight after deletes. It acts only
+    /// on the comment `space m` would edit, so it never deletes one you weren't looking at.
+    fn delete_comment(&mut self) {
+        let latest = self
+            .thread_here()
+            .and_then(|i| self.state.threads[i].latest_yours())
+            .cloned();
+        let Some(c) = latest else {
+            self.status = Some(("No comment of yours here".into(), true));
+            return;
+        };
+        if !c.unsent() {
+            self.status = Some((
+                "That comment was already sent to the agent: edit it with space m".into(),
+                true,
+            ));
+            return;
+        }
+        if self.delete_armed.take().as_ref() != Some(&c.id) {
+            let mut lines = c.body.trim_end().lines();
+            let first = lines.next().unwrap_or("");
+            let mut quote: String = first.chars().take(40).collect();
+            if quote.len() < first.len() || lines.next().is_some() {
+                quote = format!("{}…", quote.trim_end());
+            }
+            self.status = Some((
+                format!("space M again deletes your comment: «{quote}»"),
+                true,
+            ));
+            self.delete_armed = Some(c.id);
+            self.delete_kept = true;
+            return;
+        }
+        match review::delete(&self.conn, &c.id) {
+            Ok(()) => {
+                self.reload();
+                self.status = Some(("Comment deleted".into(), false));
+            }
+            Err(e) => self.status = Some((format!("{e:#}"), true)),
+        }
+    }
+
     /// `space s`: every unsent comment goes to the agent as one round, with a verdict.
     fn submit(&mut self, verdict: Verdict) {
         // The round ends: threads whose code is gone are outdated now.
@@ -1722,7 +1772,7 @@ impl App {
         };
         match name {
             "reply" => self.thread_here().is_some(),
-            "edit_comment" => self
+            "edit_comment" | "delete_comment" => self
                 .thread_here()
                 .is_some_and(|i| self.state.threads[i].latest_yours().is_some()),
             "submit_changes" | "submit_comment" => self.unsent > 0,
@@ -1747,6 +1797,21 @@ impl App {
 
     /// Handles one key. Returns the app action that needs the terminal (suspend), if any.
     fn key(&mut self, key: Key) -> Option<AppAction> {
+        self.delete_kept = false;
+        let action = self.handle_key(key);
+        // A key that finishes anything other than `space M` forgets an armed delete. Keys that
+        // are still on the way to a command (`space`, the `:` line, the palette) keep it.
+        if !self.delete_kept
+            && self.pending.is_empty()
+            && self.prompt.is_none()
+            && self.pickers.is_empty()
+        {
+            self.delete_armed = None;
+        }
+        action
+    }
+
+    fn handle_key(&mut self, key: Key) -> Option<AppAction> {
         if let Some(rec) = &mut self.recording {
             rec.push(key);
         }
@@ -2210,6 +2275,7 @@ impl App {
                     None => self.status = Some(("No comment of yours here".into(), true)),
                 }
             }
+            A::DeleteComment => self.delete_comment(),
             A::Submit(v) => self.submit(v),
             A::ThreadPicker { all } => self.pickers = vec![self.thread_picker(all)],
             A::Fold(k) => self.fold_command(k),
@@ -2786,6 +2852,7 @@ impl App {
             "review-comment" => _ = self.app_command(AppAction::ReviewComment),
             "reply" => _ = self.app_command(AppAction::Reply),
             "edit-comment" => _ = self.app_command(AppAction::EditComment),
+            "delete-comment" => _ = self.app_command(AppAction::DeleteComment),
             "submit" => match Verdict::parse(args.trim()) {
                 Some(v) => _ = self.app_command(AppAction::Submit(v)),
                 None => {

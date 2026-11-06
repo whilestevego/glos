@@ -71,3 +71,17 @@ command, the confirmation, the refusals, and the docs.
 
 - Withdrawing sent comments.
 - Deleting an agent's comments from the UI.
+
+## As built
+
+The work follows the plan. Two details weren't spelled out in it.
+
+"Any other key" means any key that finishes a command other than `space M`. The keys on the way
+to a command don't count: `space`, the keys typed on the `:` line, and the palette. Pressing
+`esc` to leave the space menu does count, so it forgets the delete.
+
+The quote is the first 40 characters of the comment's first line. It ends in "…" when the
+comment is longer than that.
+
+Editing a sent comment with `space m` makes it unsent again, so `space M` can then delete it.
+This was already true of `review::delete`, and this change keeps it.

@@ -84,6 +84,7 @@ and the rest. On top of those, it adds keys for reviewing:
 | `space C` | Comment on the review as a whole |
 | `space r` | Reply to the comment under the cursor |
 | `space m` | Edit your latest comment |
+| `space M` | Delete your latest comment, if it isn't sent yet |
 | `space x` | Resolve or reopen a thread |
 | `space s` | Submit the review |
 | `space v` | Change the view: whole file, unified, or side by side |
