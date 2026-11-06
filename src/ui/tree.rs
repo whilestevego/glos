@@ -22,10 +22,12 @@ pub struct Entry {
 }
 
 pub struct Row {
-    /// Indented folder or file name.
+    /// The name as the tree shows it: `mod.rs` for a file, `ui/` for a folder.
     pub name: String,
-    /// The file's path; `None` for a folder.
-    pub path: Option<String>,
+    /// The full path. A folder's ends in `/`, as in `src/ui/`.
+    pub path: String,
+    /// How many folders it's inside.
+    pub depth: usize,
     pub added: usize,
     pub removed: usize,
     pub threads: usize,
@@ -43,6 +45,17 @@ pub struct Tree {
     follow: bool,
 }
 
+impl Row {
+    pub fn is_folder(&self) -> bool {
+        self.path.ends_with('/')
+    }
+
+    /// The file's path; `None` for a folder.
+    pub fn file(&self) -> Option<&str> {
+        (!self.is_folder()).then_some(self.path.as_str())
+    }
+}
+
 impl Tree {
     /// Folders first-seen in path order, each file under its folder, indented by depth.
     pub fn new(mut entries: Vec<Entry>) -> Tree {
@@ -56,8 +69,9 @@ impl Tree {
             open.truncate(shared);
             for (depth, d) in dirs.iter().enumerate().skip(shared) {
                 rows.push(Row {
-                    name: format!("{}{d}/", "  ".repeat(depth)),
-                    path: None,
+                    name: format!("{d}/"),
+                    path: format!("{}/", dirs[..=depth].join("/")),
+                    depth,
                     added: 0,
                     removed: 0,
                     threads: 0,
@@ -65,14 +79,15 @@ impl Tree {
                 open.push(d);
             }
             rows.push(Row {
-                name: format!("{}{}", "  ".repeat(dirs.len()), name[0]),
-                path: Some(e.path.clone()),
+                name: name[0].to_string(),
+                path: e.path.clone(),
+                depth: dirs.len(),
                 added: e.added,
                 removed: e.removed,
                 threads: e.threads,
             });
         }
-        let cursor = rows.iter().position(|r| r.path.is_some()).unwrap_or(0);
+        let cursor = rows.iter().position(|r| !r.is_folder()).unwrap_or(0);
         Tree {
             rows,
             cursor,
@@ -84,11 +99,7 @@ impl Tree {
 
     /// Puts the cursor on `path`'s row, if it's listed.
     pub fn select(&mut self, path: &str) {
-        if let Some(i) = self
-            .rows
-            .iter()
-            .position(|r| r.path.as_deref() == Some(path))
-        {
+        if let Some(i) = self.rows.iter().position(|r| r.file() == Some(path)) {
             self.cursor = i;
             self.follow = true;
         }
@@ -96,7 +107,7 @@ impl Tree {
 
     /// `j`/`k`: to the next or previous file, skipping folders.
     pub fn step(&mut self, down: bool) {
-        let files = |i: &usize| self.rows[*i].path.is_some();
+        let files = |i: &usize| !self.rows[*i].is_folder();
         let next = if down {
             (self.cursor + 1..self.rows.len()).find(files)
         } else {
@@ -109,13 +120,13 @@ impl Tree {
     }
 
     pub fn selected(&self) -> Option<&str> {
-        self.rows.get(self.cursor)?.path.as_deref()
+        self.rows.get(self.cursor)?.file()
     }
 
     /// The file on the screen row `y` of `area`, as last drawn.
     pub fn path_at(&self, area: Rect, y: u16) -> Option<&str> {
         let i = self.top + y.checked_sub(area.y + 1)? as usize;
-        self.rows.get(i)?.path.as_deref()
+        self.rows.get(i)?.file()
     }
 
     fn render_in(&mut self, buf: &mut Buffer, area: Rect, current: &str, theme: &Theme) {
@@ -135,12 +146,12 @@ impl Tree {
         let w = area.width.saturating_sub(1) as usize; // the last column separates it
         for (row, r) in self.rows.iter().enumerate().skip(self.top).take(height) {
             let y = area.y + 1 + (row - self.top) as u16;
-            let mut style = theme.get(if r.path.is_some() {
+            let mut style = theme.get(if !r.is_folder() {
                 "ui.text"
             } else {
                 "ui.text.directory"
             });
-            if r.path.as_deref() == Some(current) {
+            if r.file() == Some(current) {
                 style = style.patch(theme.get("ui.text.focus"));
             }
             if row == self.cursor && self.focused {
@@ -149,7 +160,7 @@ impl Tree {
             }
             // Right-aligned: +added -removed and a thread badge.
             let mut tail = vec![];
-            if r.path.is_some() {
+            if !r.is_folder() {
                 if r.added > 0 {
                     tail.push((format!("+{}", r.added), theme.get("diff.plus")));
                 }
@@ -161,7 +172,7 @@ impl Tree {
                 }
             }
             let tail_w: usize = tail.iter().map(|(t, _)| t.width() + 1).sum();
-            let name = clean(&r.name);
+            let name = format!("{}{}", "  ".repeat(r.depth), clean(&r.name));
             buf.set_stringn(area.x + 1, y, &name, w.saturating_sub(tail_w + 2), style);
             let mut x = area.x as usize + w.saturating_sub(tail_w);
             for (t, s) in tail {
@@ -254,18 +265,22 @@ mod tests {
             e("src/ui/view.rs", 1, 1, 0),
             e("tests/mcp.rs", 9, 0, 0),
         ]);
-        let names: Vec<&str> = t.rows.iter().map(|r| r.name.as_str()).collect();
+        let rows: Vec<(usize, &str, &str)> = t
+            .rows
+            .iter()
+            .map(|r| (r.depth, r.name.as_str(), r.path.as_str()))
+            .collect();
         assert_eq!(
-            names,
+            rows,
             [
-                "README.md",
-                "src/",
-                "  main.rs",
-                "  ui/",
-                "    mod.rs",
-                "    view.rs",
-                "tests/",
-                "  mcp.rs"
+                (0, "README.md", "README.md"),
+                (0, "src/", "src/"),
+                (1, "main.rs", "src/main.rs"),
+                (1, "ui/", "src/ui/"),
+                (2, "mod.rs", "src/ui/mod.rs"),
+                (2, "view.rs", "src/ui/view.rs"),
+                (0, "tests/", "tests/"),
+                (1, "mcp.rs", "tests/mcp.rs")
             ]
         );
         assert_eq!(t.selected(), Some("README.md"));
