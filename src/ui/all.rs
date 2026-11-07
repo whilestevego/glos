@@ -36,6 +36,10 @@ pub(super) struct AllFiles {
     /// What `docs` were built with: the generation of the threads and files, and the lines of
     /// context. Either changing builds them again.
     built: (u64, usize),
+    /// From the last draw, for the mouse: each file's text on screen, with the file and the
+    /// line at its top, and each header's row, with its file.
+    regions: Vec<(Rect, usize, usize)>,
+    headers: Vec<(u16, usize)>,
 }
 
 impl AllFiles {
@@ -245,12 +249,14 @@ impl App {
         let cur = self.cur_index();
         let none = Style::default();
         let (mut hits, mut drawn) = (vec![], vec![]);
+        let (mut regions, mut headers) = (vec![], vec![]);
         let (mut y, (mut i, mut line)) = (area.y, self.all.top);
         while y < area.bottom() && i < n {
             self.prepare(i);
             drawn.push(i);
             let f = self.section_file(i);
             if line == 0 {
+                headers.push((y, i));
                 let style = self.theme.get("ui.statusline.inactive");
                 buf.set_style(Rect::new(area.x, y, area.width, 1), style);
                 buf.set_stringn(
@@ -294,6 +300,7 @@ impl App {
                     ((none, none, none, none), 0)
                 };
                 let rest = Rect::new(area.x, y, area.width, height);
+                regions.push((rest, i, line));
                 let (h, end) = view::draw_text(
                     buf,
                     rest,
@@ -311,6 +318,7 @@ impl App {
             }
             (i, line) = (i + 1, 0);
         }
+        (self.all.regions, self.all.headers) = (regions, headers);
         self.trim(&drawn);
         hits
     }
@@ -429,6 +437,106 @@ impl App {
         }
         self.cursor_to_line(p.1);
         self.all.top = top;
+    }
+
+    /// The mouse wheel: scrolls the review `n` lines, and moves the cursor only if it would
+    /// leave the screen, into another file if need be.
+    pub(super) fn all_wheel(&mut self, n: usize, down: bool) {
+        for _ in 0..n {
+            let top = self.all.top;
+            let next = if down {
+                self.next_pos(top)
+            } else {
+                self.prev_pos(top)
+            };
+            match next {
+                Some(p) => self.all.top = p,
+                None => break,
+            }
+        }
+        // Where the cursor may be with the screen where it is now: as `follow_cursor` keeps it.
+        let height = self.view.height as usize;
+        let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
+        let mut threads = HashMap::new();
+        let top = self.all.top;
+        let first = if top.1 == 0 {
+            top
+        } else {
+            let mut p = top;
+            for _ in 0..so {
+                match self.next_pos(p) {
+                    Some(q) => p = q,
+                    None => break,
+                }
+            }
+            p
+        };
+        let (mut rows, mut p, mut last) = (0, top, top);
+        loop {
+            self.prepare(p.0);
+            let header = if p.1 == 0 { self.header_rows(p.0) } else { 0 };
+            if rows + header + so >= height && p > top {
+                break;
+            }
+            last = p;
+            rows += self.rows_at(p, &mut threads);
+            match self.next_pos(p) {
+                Some(q) => p = q,
+                None => break,
+            }
+        }
+        let cur = self.cursor_pos();
+        let to = if cur < first {
+            first
+        } else if cur > last {
+            last
+        } else {
+            return;
+        };
+        if to.0 != self.cur_index() {
+            self.enter_file(to.0, false);
+        }
+        self.cursor_to_line(to.1);
+    }
+
+    /// Before a click or drag in all-files mode: moves the cursor into the file under the
+    /// pointer, so the click lands in it. A click on a header goes to the file's first line.
+    /// Returns whether the click lands on text; a drag stays in the file it started in.
+    pub(super) fn all_focus_at(&mut self, x: u16, y: u16, drag: bool) -> bool {
+        if let Some(&(_, i)) = self.all.headers.iter().find(|(hy, _)| *hy == y) {
+            if !drag {
+                if i != self.cur_index() {
+                    self.enter_file(i, false);
+                }
+                self.cursor_to_line(0);
+            }
+            return false;
+        }
+        let Some(&(_, i, _)) = self
+            .all
+            .regions
+            .iter()
+            .find(|(r, ..)| r.contains((x, y).into()))
+        else {
+            return false;
+        };
+        if i != self.cur_index() {
+            if drag {
+                return false;
+            }
+            self.enter_file(i, false);
+        }
+        true
+    }
+
+    /// The text area and the top line under row `y`, in the file under the cursor.
+    pub(super) fn all_region_at(&self, y: u16) -> Option<(Rect, usize)> {
+        let cur = self.cur_index();
+        self.all
+            .regions
+            .iter()
+            .find(|(r, i, _)| *i == cur && r.y <= y && y < r.bottom())
+            .map(|&(r, _, line)| (r, line))
     }
 
     /// `' v a`, `:all` and `:one`: shows every file, or the file under the cursor alone. The

@@ -158,9 +158,13 @@ Steps 1 and 2, in the first pull request:
   because the cursor never rests on the header of an open file.
 - **At most 50 documents** are kept (`MAX_LOADED`). Files far from the screen are dropped, and
   read again when they come back.
-- **Not yet.** Search, `]g`, the thread keys and the mouse still work within the file under the
-  cursor. Clicks in the code don't land in the right place in all-files mode. These are steps 4
-  and 5.
+- **The mouse came forward from step 5.** In one-file mode the wheel moves the cursor within its
+  file, which stopped scrolling at the end of a file. `all_wheel` scrolls the review and moves
+  the cursor only to keep it on screen. A click moves the cursor into the file under it, and a
+  click on a header goes to the file's first line (`all_focus_at`). A drag stays in the file it
+  started in.
+- **Not yet.** Search, `]g` and the thread keys still work within the file under the cursor.
+  They're step 4.
 
 ## Relevant code
 

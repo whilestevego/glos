@@ -234,3 +234,69 @@ fn far_files_are_dropped_and_read_again() {
     assert_eq!(at(&t), ("f00.rs".into(), 1));
     assert!(t.screen().contains("f00.rs  +1 -1"));
 }
+
+/// Four files of 8 new lines each, on a screen `h` rows high.
+fn four(h: u16) -> T {
+    all_files(72, h, |o, n| {
+        for f in ["a", "b", "c", "d"] {
+            std::fs::write(o.join(format!("{f}.rs")), "old\n").unwrap();
+            std::fs::write(n.join(format!("{f}.rs")), numbered(8)).unwrap();
+        }
+    })
+}
+
+#[test]
+fn the_wheel_scrolls_through_every_file() {
+    let mut t = four(12);
+    t.keys("g g");
+    for _ in 0..20 {
+        t.mouse(MouseEventKind::ScrollDown, 30, 5);
+    }
+    // The wheel went past the end of a.rs, and the cursor came along to stay on screen.
+    assert_eq!(t.path(), "d.rs");
+    assert!(!t.screen().contains("a.rs  +8 -1"), "{}", t.screen());
+    for _ in 0..20 {
+        t.mouse(MouseEventKind::ScrollUp, 30, 5);
+    }
+    assert_eq!(t.app.all.top, (0, 0));
+    assert_eq!(t.path(), "a.rs");
+}
+
+#[test]
+fn the_wheel_leaves_the_cursor_while_it_is_on_screen() {
+    // The cursor is in the middle of the screen, on b.rs's fifth line.
+    let mut t = four(30);
+    t.keys("g g");
+    t.keys(&"j ".repeat(12));
+    let before = at(&t);
+    assert_eq!(before, ("b.rs".into(), 5));
+    t.mouse(MouseEventKind::ScrollDown, 30, 5);
+    assert_eq!(at(&t), before);
+    assert_ne!(t.app.all.top, (0, 0));
+}
+
+/// The screen row showing `text`.
+fn row_of(t: &T, text: &str) -> u16 {
+    t.screen()
+        .lines()
+        .position(|l| l.contains(text))
+        .unwrap_or_else(|| panic!("{text} isn't on screen:\n{}", t.screen())) as u16
+}
+
+#[test]
+fn a_click_lands_in_the_file_under_it() {
+    let mut t = four(30);
+    t.keys("g g");
+    // b.rs's header and its first lines are on screen below a.rs.
+    let y = row_of(&t, "b.rs  +8 -1") + 3;
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 12, y);
+    assert_eq!(at(&t), ("b.rs".into(), 3));
+    // A click on a header goes to that file's first line.
+    let y = row_of(&t, "c.rs  +8 -1");
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 12, y);
+    assert_eq!(at(&t), ("c.rs".into(), 1));
+    // And a click back in an earlier file goes there.
+    let y = row_of(&t, "b.rs  +8 -1") + 1;
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 12, y);
+    assert_eq!(at(&t), ("b.rs".into(), 1));
+}

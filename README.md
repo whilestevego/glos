@@ -114,9 +114,9 @@ In one scroll, `j` and `k` carry on into the next and previous file, `gg` and `G
 start of the first file and the end of the last, and the page keys scroll through the whole
 review. `gn`, `gp`, the tree and `space g` go to a file's header. The other files are read only
 when they come near the screen, so a big review opens as fast as one file. For now this works in
-the whole-file view, and the unified and side-by-side views show one file. Search, `]g` and the
-thread keys still stay within the file the cursor is in, and clicks in the code don't land in the
-right place yet.
+the whole-file view, and the unified and side-by-side views show one file. The mouse wheel
+scrolls through every file, and a click moves the cursor into the file under it. Search, `]g`
+and the thread keys still stay within the file the cursor is in.
 
 ### Folding
 

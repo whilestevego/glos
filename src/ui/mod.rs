@@ -2796,6 +2796,21 @@ impl App {
             self.scroll_sideways(right);
             return;
         }
+        if self.all_shown() && !boxed {
+            match m.kind {
+                K::ScrollDown | K::ScrollUp => {
+                    self.all_wheel(3, m.kind == K::ScrollDown);
+                    return;
+                }
+                K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
+                    let drag = matches!(m.kind, K::Drag(_));
+                    if !self.all_focus_at(m.column, m.row, drag) {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         match m.kind {
             K::ScrollDown | K::ScrollUp => {
                 // Scroll 3 lines, like Helix's default `editor.scroll-lines`. The cursor moves
@@ -2880,7 +2895,13 @@ impl App {
                 self.annotations(),
             ),
         };
-        let header = file.notices.len() as u16;
+        // With every file on screen, the file's text starts where it was drawn, below its
+        // header and notices, from the line at the top of that part of the screen.
+        let (area, header, top) = match self.all_region_at(y) {
+            Some((r, line)) if self.comment_box.is_none() && self.all_shown() => (r, 0, line),
+            _ if self.comment_box.is_none() && self.all_shown() => return None,
+            _ => (area, file.notices.len() as u16, file.top),
+        };
         let gutter = file.gutter_width() as u16;
         if y < area.y + header
             || y >= area.bottom()
@@ -2896,7 +2917,7 @@ impl App {
         let left = if fmt.soft_wrap { 0 } else { file.left };
         let row = (y - area.y - header) as isize;
         let col = left + (x - area.x - gutter) as usize;
-        let anchor = text.line_to_char(file.top.min(text.len_lines() - 1));
+        let anchor = text.line_to_char(top.min(text.len_lines() - 1));
         let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &annotations);
         Some(pos)
     }
