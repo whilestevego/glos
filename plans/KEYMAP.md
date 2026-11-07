@@ -364,26 +364,26 @@ Summary: 154 done, 147 not applicable, 16 to do, 4 replaced.
 | `space s a` | `submit_approve` |
 | `space s r` | `submit_changes` |
 | `space s c` | `submit_comment` |
-| `space v c` | `comment` |
-| `space v C` | `review_comment` |
-| `space v r` | `reply` |
-| `space v m` | `edit_comment` |
-| `space v M` | `delete_comment` |
-| `space v x` | `toggle_resolved` |
-| `space v n` | `goto_suggestion` |
-| `space v d` | `diagnostics_picker` |
-| `space v D` | `workspace_diagnostics_picker` |
-| `space v l` | `dashboard` |
-| `space v s a` | `submit_approve` |
-| `space v s r` | `submit_changes` |
-| `space v s c` | `submit_comment` |
-| `space v v f` | `view_file` |
-| `space v v u` | `view_unified` |
-| `space v v s` | `view_split` |
-| `space v o b` | `scope_base` |
-| `space v o r` | `scope_since_review` |
-| `space v o c` | `scope_commits` |
-| `space v o f` | `filter_files` |
+| `' c` | `comment` |
+| `' C` | `review_comment` |
+| `' r` | `reply` |
+| `' m` | `edit_comment` |
+| `' M` | `delete_comment` |
+| `' x` | `toggle_resolved` |
+| `' n` | `goto_suggestion` |
+| `' d` | `diagnostics_picker` |
+| `' D` | `workspace_diagnostics_picker` |
+| `' l` | `dashboard` |
+| `' s a` | `submit_approve` |
+| `' s r` | `submit_changes` |
+| `' s c` | `submit_comment` |
+| `' v f` | `view_file` |
+| `' v u` | `view_unified` |
+| `' v s` | `view_split` |
+| `' o b` | `scope_base` |
+| `' o r` | `scope_since_review` |
+| `' o c` | `scope_commits` |
+| `' o f` | `filter_files` |
 | `C-g` | `command_palette` |
 
 ## Keys in the file tree

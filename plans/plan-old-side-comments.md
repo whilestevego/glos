@@ -8,7 +8,7 @@ have to comment on a nearby new line. This plan lets you comment on removed line
 
 ## What it looks like
 
-- In the unified and side-by-side views, `space c` (`space v c` after `plan-review-menu.md`) on
+- In the unified and side-by-side views, `space c` (`' c` after `plan-review-menu.md`) on
   removed lines starts a thread on them. A selection that covers both removed and added lines
   goes on the new side, as today.
 - The thread shows under its removed lines in the unified and side-by-side views. In the

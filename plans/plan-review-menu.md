@@ -23,24 +23,25 @@ those plans are built, so each key moves when its Helix command arrives.
 
 ## The menu
 
-Every review command goes under one key in space mode, `space v`, which Helix doesn't use. The
-menu's title in the key help panel is "Review".
+Every review command goes under one key of its own, `'`, which Helix doesn't use in normal or
+select mode. The menu's title in the key help panel is "Review". Each command is two keys, as it
+was under `space` before, except the ones that open a choice: a verdict, a view or a scope.
 
 | Keys | Command |
 |---|---|
-| `space v c` | Comment on the selection |
-| `space v C` | Comment on the whole review |
-| `space v r` | Reply to the thread under the cursor |
-| `space v m` | Edit your latest comment |
-| `space v M` | Delete your latest unsent comment |
-| `space v x` | Resolve or reopen a thread |
-| `space v n` | Go to the line the agent suggested |
-| `space v d` | Pick a thread in this file |
-| `space v D` | Pick a thread in the review |
-| `space v s` then `a`, `r` or `c` | Submit with a verdict |
-| `space v v` then `f`, `u`, `s` or `a` | Change the view, or switch between all files and one file |
-| `space v o` then `b`, `r`, `c` or `f` | Change what's shown |
-| `space v l` | The dashboard |
+| `' c` | Comment on the selection |
+| `' C` | Comment on the whole review |
+| `' r` | Reply to the thread under the cursor |
+| `' m` | Edit your latest comment |
+| `' M` | Delete your latest unsent comment |
+| `' x` | Resolve or reopen a thread |
+| `' n` | Go to the line the agent suggested |
+| `' d` | Pick a thread in this file |
+| `' D` | Pick a thread in the review |
+| `' s` then `a`, `r` or `c` | Submit with a verdict |
+| `' v` then `f`, `u`, `s` or `a` | Change the view, or switch between all files and one file |
+| `' o` then `b`, `r`, `c` or `f` | Change what's shown |
+| `' l` | The dashboard |
 
 Threads get their own bracket keys, `]r` `[r` for the next and previous thread and `]R` `[R` for
 the last and first. Helix leaves `]r` free. The unread keys `]u` `[u` and the commit keys `]C`
@@ -50,11 +51,11 @@ the last and first. Helix leaves `]r` free. The unread keys `]u` `[u` and the co
 
 ## Steps
 
-1. **Build the whole menu.** Move the View menu to `space v v` and the scope menu to
-   `space v o`, and add every review command to the Review menu at `space v`. Add `]r` `[r`
-   `]R` `[R`. The keys that never clashed (`space m`, `space M`, `space x`, `space n`,
-   `space o` and `space l`) leave their old places. The clashing keys stay at their old places
-   too, as duplicates, so nothing you use today stops working.
+1. **Build the whole menu.** Add the Review menu at `'` with every review command in it,
+   including the View menu at `' v` and the scope menu at `' o`. Add `]r` `[r` `]R` `[R`. The
+   keys that never clashed (`space m`, `space M`, `space x`, `space n`, `space o`, `space l` and
+   the View menu at `space v`) leave their old places. The clashing keys stay at their old
+   places too, as duplicates, so nothing you use today stops working.
 2. **With language servers.** Remove the duplicates at `space s`, `space d`, `space D` and the
    `]d` family. `plan-language-servers.md` then binds Helix's commands to them.
 3. **With editing.** Remove the duplicates at `space c`, `space C` and `space r`.
@@ -69,7 +70,7 @@ because it works on actions, not keys.
 
 - In `src/ui/keymap.rs` tests, each moved command is reached by its new keys, and the old key
   runs Helix's command or nothing.
-- The key help panel snapshot for `space v` shows the Review menu.
+- The key help panel snapshot for `'` shows the Review menu.
 - `plans/KEYMAP.md` lists none of the keys in the first table as "replaced" once both plans are
   built.
 
@@ -78,6 +79,10 @@ because it works on actions, not keys.
 - The whole menu is built in step 1, including the commands that don't clash, so you learn the
   new keys once rather than in three rounds (2026-11-06). The clashing keys keep working at their
   old places until steps 2 and 3 need them, which is why those steps only remove keys.
+- The menu is at `'`, not `space v` (2026-11-06). Under `space v`, every command took three
+  keys, which is too many for the commands used most. Free letters in the space menu were the
+  other option, but they make poor mnemonics, and Helix adds most new commands there. `'` keeps
+  the letters glos already used, one key from the menu.
 
 ## Relevant code
 

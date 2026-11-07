@@ -59,14 +59,14 @@ for output a program can read.
 2. Read through the changes. Unchanged code is folded away, leaving three lines around each
    change. Changed lines are marked in the gutter. `]g` jumps to the next change and `gn` to the
    next file. The file tree on the left shows every changed file.
-3. To comment, put the cursor on a line (or select a few with `x`) and press `space v c`. Type your
+3. To comment, put the cursor on a line (or select a few with `x`) and press `' c`. Type your
    comment, press `esc`, then `enter` to save it. You can't lose a comment: everything is saved
    as you type, even if you quit or glos crashes.
-4. When you're done, press `space v s` and pick a verdict: approve, request changes, or just send
+4. When you're done, press `' s` and pick a verdict: approve, request changes, or just send
    comments. The agent gets all your comments at once.
 5. As the agent works, glos updates by itself without moving your screen. Its replies show up
    under your comments, marked unread. Press `]u` to jump to the next one.
-6. For the next round, press `space v o` then `r` to see only what changed since your last review.
+6. For the next round, press `' o` then `r` to see only what changed since your last review.
    Reply, resolve or reopen threads, and submit again.
 7. Once you've approved, `:close` closes the review.
 
@@ -80,18 +80,18 @@ and the rest. On top of those, it adds keys for reviewing:
 
 | Key | What it does |
 |---|---|
-| `space v c` | Comment on the selected lines |
-| `space v C` | Comment on the review as a whole |
-| `space v r` | Reply to the comment under the cursor |
-| `space v m` | Edit your latest comment |
-| `space v M` | Delete your latest comment, if it isn't sent yet |
-| `space v x` | Resolve or reopen a thread |
-| `space v s` | Submit the review |
-| `space v v` | Change the view: whole file, unified, or side by side |
-| `space v o` | Change what's shown: the whole branch, since your last review, one commit at a time, or a filter |
-| `space v d` | Pick a thread in this file (`space v D` for the whole review) |
-| `space v l` | The dashboard: every open review |
-| `space v n` | Go to the line the agent asked you to look at |
+| `' c` | Comment on the selected lines |
+| `' C` | Comment on the review as a whole |
+| `' r` | Reply to the comment under the cursor |
+| `' m` | Edit your latest comment |
+| `' M` | Delete your latest comment, if it isn't sent yet |
+| `' x` | Resolve or reopen a thread |
+| `' s` | Submit the review |
+| `' v` | Change the view: whole file, unified, or side by side |
+| `' o` | Change what's shown: the whole branch, since your last review, one commit at a time, or a filter |
+| `' d` | Pick a thread in this file (`' D` for the whole review) |
+| `' l` | The dashboard: every open review |
+| `' n` | Go to the line the agent asked you to look at |
 | `space g` | Pick a changed file |
 | `space f` | Open any file in the project, for context |
 | `space e` | Open, focus or close the file tree |
@@ -100,7 +100,7 @@ and the rest. On top of those, it adds keys for reviewing:
 | `gn` `gp` | Next or previous changed file |
 | `enter` | Open or collapse the thread under the cursor, or open a fold |
 
-Review commands live under `space v` so that Helix keeps its own keys. Until glos has language
+Review commands live under `'` so that Helix keeps its own keys. Until glos has language
 servers and editing, `space c`, `space C`, `space r`, `space s`, `space d`, `space D` and `]d`
 still work as before.
 
@@ -143,7 +143,7 @@ Shift while you turn the wheel.
 
 ## Several agents at once
 
-If you have agents working on several branches or worktrees, `glos dashboard` (or `space v l`
+If you have agents working on several branches or worktrees, `glos dashboard` (or `' l`
 inside glos) lists every open review. Each row shows what the agent is doing and what's waiting
 on you, like unsent comments and unread replies. Press `enter` to open a review.
 

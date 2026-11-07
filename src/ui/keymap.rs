@@ -60,16 +60,16 @@ pub enum AppAction {
     RepeatLastMotion,
     RecordMacro,
     ReplayMacro,
-    /// `space v c`: comment on the selected lines.
+    /// `' c`: comment on the selected lines.
     Comment,
-    /// `space v C`: a review-level comment.
+    /// `' C`: a review-level comment.
     ReviewComment,
     Reply,
     EditComment,
-    /// `space v M`: delete your latest unsent comment, after pressing it twice.
+    /// `' M`: delete your latest unsent comment, after pressing it twice.
     DeleteComment,
     Submit(crate::review::Verdict),
-    /// `space v d` / `space v D`: threads in this file, or the whole review.
+    /// `' d` / `' D`: threads in this file, or the whole review.
     ThreadPicker {
         all: bool,
     },
@@ -79,23 +79,23 @@ pub enum AppAction {
     EdgeThread(bool),
     /// `]u` / `[u`: the next or previous thread with an agent's reply you haven't read.
     NextUnread(bool),
-    /// `space v x`: resolve the thread under the cursor, or reopen it.
+    /// `' x`: resolve the thread under the cursor, or reopen it.
     ToggleResolved,
-    /// `space v n`: the line an agent suggested.
+    /// `' n`: the line an agent suggested.
     GotoSuggestion,
-    /// `space v v` then `f`, `u` or `s`.
+    /// `' v` then `f`, `u` or `s`.
     View(super::ViewKind),
-    /// `space v o` then `b`, `r` or `c`.
+    /// `' o` then `b`, `r` or `c`.
     Scope(ScopeKey),
     /// `]C` / `[C`: the next or previous commit, in the per-commit scope.
     NextCommit(bool),
-    /// `space v o f`: the `:filter` prompt.
+    /// `' o f`: the `:filter` prompt.
     FilterPrompt,
     /// `space e`: open, focus or close the file tree.
     FileTree,
     /// `space ?` (and `C-g` anywhere): the palette of keys for where you are.
     CommandPalette,
-    /// `space v l`: every open review.
+    /// `' l`: every open review.
     Dashboard,
     /// The `z` fold keys.
     Fold(super::folding::FoldKey),
@@ -662,48 +662,48 @@ fn normal_defs() -> Vec<Def> {
                 cmd("D", "workspace_diagnostics_picker"),
                 cmd("y", "yank_to_clipboard"),
                 cmd("Y", "yank_main_selection_to_clipboard"),
-                // These duplicate the Review menu's keys until Helix's language server and
-                // editing commands take them back.
+                // These duplicate the Review menu's keys at `'` until Helix's language
+                // server and editing commands take them back.
                 cmd("c", "comment"),
                 cmd("C", "review_comment"),
                 cmd("r", "reply"),
                 menu("s", "Submit", submit_defs()),
                 cmd("e", "file_explorer"),
                 cmd("?", "command_palette"),
+            ],
+        ),
+        menu(
+            "'",
+            "Review",
+            vec![
+                cmd("c", "comment"),
+                cmd("C", "review_comment"),
+                cmd("r", "reply"),
+                cmd("m", "edit_comment"),
+                cmd("M", "delete_comment"),
+                cmd("x", "toggle_resolved"),
+                cmd("n", "goto_suggestion"),
+                cmd("d", "diagnostics_picker"),
+                cmd("D", "workspace_diagnostics_picker"),
+                cmd("l", "dashboard"),
+                menu("s", "Submit", submit_defs()),
                 menu(
                     "v",
-                    "Review",
+                    "View",
                     vec![
-                        cmd("c", "comment"),
-                        cmd("C", "review_comment"),
-                        cmd("r", "reply"),
-                        cmd("m", "edit_comment"),
-                        cmd("M", "delete_comment"),
-                        cmd("x", "toggle_resolved"),
-                        cmd("n", "goto_suggestion"),
-                        cmd("d", "diagnostics_picker"),
-                        cmd("D", "workspace_diagnostics_picker"),
-                        cmd("l", "dashboard"),
-                        menu("s", "Submit", submit_defs()),
-                        menu(
-                            "v",
-                            "View",
-                            vec![
-                                cmd("f", "view_file"),
-                                cmd("u", "view_unified"),
-                                cmd("s", "view_split"),
-                            ],
-                        ),
-                        menu(
-                            "o",
-                            "Scope",
-                            vec![
-                                cmd("b", "scope_base"),
-                                cmd("r", "scope_since_review"),
-                                cmd("c", "scope_commits"),
-                                cmd("f", "filter_files"),
-                            ],
-                        ),
+                        cmd("f", "view_file"),
+                        cmd("u", "view_unified"),
+                        cmd("s", "view_split"),
+                    ],
+                ),
+                menu(
+                    "o",
+                    "Scope",
+                    vec![
+                        cmd("b", "scope_base"),
+                        cmd("r", "scope_since_review"),
+                        cmd("c", "scope_commits"),
+                        cmd("f", "filter_files"),
                     ],
                 ),
             ],
@@ -1148,29 +1148,29 @@ mod tests {
     }
 
     #[test]
-    fn review_commands_live_under_space_v() {
+    fn review_commands_live_under_the_quote_key() {
         let k = Keymaps::default();
         for (keys, name) in [
-            ("space v c", "comment"),
-            ("space v C", "review_comment"),
-            ("space v r", "reply"),
-            ("space v m", "edit_comment"),
-            ("space v M", "delete_comment"),
-            ("space v x", "toggle_resolved"),
-            ("space v n", "goto_suggestion"),
-            ("space v d", "diagnostics_picker"),
-            ("space v D", "workspace_diagnostics_picker"),
-            ("space v l", "dashboard"),
-            ("space v s a", "submit_approve"),
-            ("space v s r", "submit_changes"),
-            ("space v s c", "submit_comment"),
-            ("space v v f", "view_file"),
-            ("space v v u", "view_unified"),
-            ("space v v s", "view_split"),
-            ("space v o b", "scope_base"),
-            ("space v o r", "scope_since_review"),
-            ("space v o c", "scope_commits"),
-            ("space v o f", "filter_files"),
+            ("' c", "comment"),
+            ("' C", "review_comment"),
+            ("' r", "reply"),
+            ("' m", "edit_comment"),
+            ("' M", "delete_comment"),
+            ("' x", "toggle_resolved"),
+            ("' n", "goto_suggestion"),
+            ("' d", "diagnostics_picker"),
+            ("' D", "workspace_diagnostics_picker"),
+            ("' l", "dashboard"),
+            ("' s a", "submit_approve"),
+            ("' s r", "submit_changes"),
+            ("' s c", "submit_comment"),
+            ("' v f", "view_file"),
+            ("' v u", "view_unified"),
+            ("' v s", "view_split"),
+            ("' o b", "scope_base"),
+            ("' o r", "scope_since_review"),
+            ("' o c", "scope_commits"),
+            ("' o f", "filter_files"),
             ("] r", "goto_next_diag"),
             ("[ r", "goto_prev_diag"),
             ("] R", "goto_last_diag"),
@@ -1191,17 +1191,19 @@ mod tests {
             "space n",
             "space l",
             "space o b",
+            "space v v f",
         ] {
             assert_eq!(bound_seq(&k, keys), None, "{keys}");
         }
-        let Some(Node::Menu(space)) = k.get(Context::Normal).get(Key::parse("space").unwrap())
-        else {
+        let Some(Node::Menu(review)) = k.get(Context::Normal).get(Key::parse("'").unwrap()) else {
             panic!()
         };
-        let Some(Node::Menu(v)) = space.get(Key::parse("v").unwrap()) else {
-            panic!()
-        };
-        assert_eq!(v.name, "Review");
+        assert_eq!(review.name, "Review");
+        // Select mode reaches the menu too, as it does every normal-mode menu.
+        assert!(matches!(
+            k.get(Context::Select).get(Key::parse("'").unwrap()),
+            Some(Node::Menu(m)) if m.name == "Review"
+        ));
     }
 
     #[test]

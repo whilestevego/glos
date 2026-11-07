@@ -245,11 +245,11 @@ fn sideways_scrolling() {
     assert!(t.shows("hij"));
 
     // In the side-by-side view, both sides scroll together.
-    t.keys("g g space v v s");
+    t.keys("g g ' v s");
     t.mouse(MouseEventKind::ScrollRight, 60, 5);
     assert_eq!(left(&t), 6);
     // With soft wrap on, sideways scrolling does nothing.
-    t.keys("space v v f g g");
+    t.keys("' v f g g");
     t.keys(":").typed("toggle soft-wrap").keys("ret");
     t.mouse(MouseEventKind::ScrollRight, 30, 5);
     assert_eq!(left(&t), 0);
