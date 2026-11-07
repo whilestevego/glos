@@ -2573,6 +2573,11 @@ impl App {
                     self.toggle_thread(i);
                     return None;
                 }
+                // With every file on screen, ret collapses or expands the cursor's file.
+                if self.all_shown() {
+                    self.toggle_file(self.cur_index());
+                    return None;
+                }
                 let file = self.base_file_mut();
                 let marker = "generated file, collapsed; enter expands";
                 if file.notices.iter().any(|n| n == marker) || file.collapsed {

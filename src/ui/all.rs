@@ -9,7 +9,11 @@
 use std::collections::HashMap;
 
 use glos_helix::{commands::SCROLLOFF, text::Selection};
-use ratatui::{buffer::Buffer, layout::Rect, style::Style};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+};
 
 use super::{
     App, Cur, ViewKind,
@@ -58,7 +62,7 @@ impl App {
         self.all.on && matches!(self.state.cur, Cur::Change(_)) && self.view_kind == ViewKind::File
     }
 
-    fn cur_index(&self) -> usize {
+    pub(super) fn cur_index(&self) -> usize {
         match self.state.cur {
             Cur::Change(i) => i,
             Cur::Context(_) => usize::MAX,
@@ -127,9 +131,16 @@ impl App {
         }
     }
 
-    /// The header row and the notices under it.
+    /// The rows above file `i`'s first line: a blank row after the file before it, the header
+    /// row and the notices under it.
     fn header_rows(&self, i: usize) -> usize {
-        1 + self.section_file(i).notices.len()
+        usize::from(i > 0) + 1 + self.section_file(i).notices.len()
+    }
+
+    /// The rows the pinned header takes with `top` at the top of the screen. While a file's
+    /// header has scrolled off, a copy of it stays on the top row.
+    fn pinned(top: Pos) -> usize {
+        usize::from(top.1 > 0)
     }
 
     /// The screen rows place `pos` takes: its line, the thread rows under it, and for line 0
@@ -198,7 +209,7 @@ impl App {
             return;
         }
         // The rows from the top of the screen to the cursor's line, its header included.
-        let (mut rows, mut p) = (0, self.all.top);
+        let (mut rows, mut p) = (Self::pinned(self.all.top), self.all.top);
         while p < cur && rows <= 2 * height {
             rows += self.rows_at(p, threads);
             match self.next_pos(p) {
@@ -219,11 +230,13 @@ impl App {
             return;
         }
         while rows + so >= height && self.all.top < cur {
-            rows -= self.rows_at(self.all.top, threads);
+            let was = Self::pinned(self.all.top);
+            rows -= self.rows_at(self.all.top, threads) + was;
             match self.next_pos(self.all.top) {
                 Some(q) => self.all.top = q,
                 None => break,
             }
+            rows += Self::pinned(self.all.top);
         }
     }
 
@@ -251,22 +264,27 @@ impl App {
         let (mut hits, mut drawn) = (vec![], vec![]);
         let (mut regions, mut headers) = (vec![], vec![]);
         let (mut y, (mut i, mut line)) = (area.y, self.all.top);
+        if Self::pinned(self.all.top) > 0 {
+            headers.push((y, i));
+            self.draw_header(buf, area, y, i);
+            y += 1;
+        }
         while y < area.bottom() && i < n {
             self.prepare(i);
             drawn.push(i);
             let f = self.section_file(i);
             if line == 0 {
+                // The blank row between files isn't needed at the top of the screen.
+                if i > 0 && y > area.y {
+                    y += 1;
+                }
+                if y >= area.bottom() {
+                    break;
+                }
                 headers.push((y, i));
-                let style = self.theme.get("ui.statusline.inactive");
-                buf.set_style(Rect::new(area.x, y, area.width, 1), style);
-                buf.set_stringn(
-                    area.x + 1,
-                    y,
-                    self.header(i),
-                    area.width.saturating_sub(1) as usize,
-                    style,
-                );
+                self.draw_header(buf, area, y, i);
                 y += 1;
+                let f = self.section_file(i);
                 for notice in &f.notices {
                     if y >= area.bottom() {
                         break;
@@ -323,6 +341,23 @@ impl App {
         hits
     }
 
+    /// Draws file `i`'s header on row `y`: a rule across the screen with the header's text
+    /// set into it.
+    fn draw_header(&self, buf: &mut Buffer, area: Rect, y: u16, i: usize) {
+        let style = self
+            .theme
+            .get("ui.linenr.selected")
+            .add_modifier(Modifier::BOLD);
+        let open = if self.section_file(i).collapsed {
+            '▸'
+        } else {
+            '▾'
+        };
+        let rule = "─".repeat(area.width as usize);
+        let text = format!("── {open} {} {rule}", self.header(i));
+        buf.set_stringn(area.x, y, text, area.width as usize, style);
+    }
+
     /// A file's header: its path, the lines added and removed, and its open threads.
     fn header(&self, i: usize) -> String {
         let path = &self.state.source.changes[i].path;
@@ -353,7 +388,12 @@ impl App {
         }
         let cur = self.cur_index();
         for i in 0..self.state.files.len() {
+            // A file the reviewer collapsed or expanded stays loaded, so it stays that way.
+            let toggled = self.state.files[i].as_ref().is_some_and(|f| {
+                f.collapsed != self.state.source.collapsed(&self.state.source.changes[i])
+            });
             let keep = i == cur
+                || toggled
                 || drawn.contains(&i)
                 || self.jumps.iter().any(|(c, _)| *c == Cur::Change(i));
             if !keep {
@@ -471,7 +511,7 @@ impl App {
             }
             p
         };
-        let (mut rows, mut p, mut last) = (0, top, top);
+        let (mut rows, mut p, mut last) = (Self::pinned(top), top, top);
         loop {
             self.prepare(p.0);
             let header = if p.1 == 0 { self.header_rows(p.0) } else { 0 };
@@ -500,15 +540,12 @@ impl App {
     }
 
     /// Before a click or drag in all-files mode: moves the cursor into the file under the
-    /// pointer, so the click lands in it. A click on a header goes to the file's first line.
+    /// pointer, so the click lands in it. A click on a header collapses or expands its file.
     /// Returns whether the click lands on text; a drag stays in the file it started in.
     pub(super) fn all_focus_at(&mut self, x: u16, y: u16, drag: bool) -> bool {
         if let Some(&(_, i)) = self.all.headers.iter().find(|(hy, _)| *hy == y) {
             if !drag {
-                if i != self.cur_index() {
-                    self.enter_file(i, false);
-                }
-                self.cursor_to_line(0);
+                self.toggle_file(i);
             }
             return false;
         }
@@ -527,6 +564,18 @@ impl App {
             self.enter_file(i, false);
         }
         true
+    }
+
+    /// Collapses file `i` to its header, or expands it. Its folds stay as they were, and so
+    /// does the cursor in it.
+    pub(super) fn toggle_file(&mut self, i: usize) {
+        self.load(i);
+        let f = self.state.files[i].as_mut().expect("loaded above");
+        f.collapsed = !f.collapsed;
+        self.all.docs.remove(&i);
+        if i == self.cur_index() {
+            self.refold(None);
+        }
     }
 
     /// The text area and the top line under row `y`, in the file under the cursor.

@@ -151,18 +151,26 @@ Steps 1 and 2, in the first pull request:
   (`all_files_motion`).
 - **The header has the path, `+added -removed` and the open threads.** The kind of change
   stays in the notices under the header, as in one-file mode, rather than repeating there.
+- **Headers are rules, with a blank row above them.** The first build drew each header as a
+  bar in `ui.statusline.inactive`, which the reviewer found too faint to tell where one file
+  ended. Now a blank row comes before each file after the first, and the header is a rule
+  across the screen in bold `ui.linenr.selected`, such as `── ▾ b.rs  +1 -0 ─────`
+  (`draw_header`). While a file's header has scrolled off the top, a copy of it stays pinned
+  on the top row, as GitHub's file headers do (`pinned`).
 - **The empty line after a file's last newline isn't shown** in all-files mode, so files follow
   one another without a blank numbered line between them.
-- **Collapsed files.** A collapsed or binary file is its header and notices. The cursor stops on
-  it as one line, and `enter` expands it. Collapsing an open file from its header isn't built,
-  because the cursor never rests on the header of an open file.
+- **Collapsed files.** A collapsed or binary file is its header and notices, and its header
+  shows `▸` rather than `▾`. The cursor stops on it as one line. A click on any header,
+  pinned or not, collapses or expands its file, and `enter` does the same for the cursor's
+  file when it isn't on a fold or a thread (`toggle_file`). The file's folds are kept by path,
+  so they're as they were when it opens again, and so is the cursor. A file the reviewer
+  collapsed or expanded stays loaded, so it doesn't go back to its default when it's dropped.
 - **At most 50 documents** are kept (`MAX_LOADED`). Files far from the screen are dropped, and
   read again when they come back.
 - **The mouse came forward from step 5.** In one-file mode the wheel moves the cursor within its
   file, which stopped scrolling at the end of a file. `all_wheel` scrolls the review and moves
-  the cursor only to keep it on screen. A click moves the cursor into the file under it, and a
-  click on a header goes to the file's first line (`all_focus_at`). A drag stays in the file it
-  started in.
+  the cursor only to keep it on screen. A click moves the cursor into the file under it
+  (`all_focus_at`), and a drag stays in the file it started in.
 - **Not yet.** Search, `]g` and the thread keys still work within the file under the cursor.
   They're step 4.
 

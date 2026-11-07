@@ -291,12 +291,93 @@ fn a_click_lands_in_the_file_under_it() {
     let y = row_of(&t, "b.rs  +8 -1") + 3;
     t.mouse(MouseEventKind::Down(MouseButton::Left), 12, y);
     assert_eq!(at(&t), ("b.rs".into(), 3));
-    // A click on a header goes to that file's first line.
-    let y = row_of(&t, "c.rs  +8 -1");
+    // A click in a later file goes there, and a click back in an earlier file goes there.
+    let y = row_of(&t, "c.rs  +8 -1") + 2;
     t.mouse(MouseEventKind::Down(MouseButton::Left), 12, y);
-    assert_eq!(at(&t), ("c.rs".into(), 1));
-    // And a click back in an earlier file goes there.
+    assert_eq!(at(&t), ("c.rs".into(), 2));
     let y = row_of(&t, "b.rs  +8 -1") + 1;
     t.mouse(MouseEventKind::Down(MouseButton::Left), 12, y);
     assert_eq!(at(&t), ("b.rs".into(), 1));
+}
+
+#[test]
+fn files_are_set_apart_by_a_blank_row_and_a_rule() {
+    let t = all_files(72, 30, three);
+    let s = t.screen();
+    let lines: Vec<&str> = s.lines().collect();
+    let b = row_of(&t, "▾ b.rs") as usize;
+    assert_eq!(lines[b - 1].trim(), "", "{s}");
+    assert!(lines[b].starts_with("── ▾ b.rs  +1 -0 ──"), "{s}");
+    assert!(lines[b].trim_end().ends_with('─'), "{s}");
+    // The first file's header is on the top row, with no blank row above it.
+    assert!(lines[0].starts_with("── ▾ a.rs"), "{s}");
+}
+
+#[test]
+fn a_click_on_a_header_collapses_and_expands_the_file_and_keeps_its_folds() {
+    let mut t = all_files(72, 60, three);
+    // Open a.rs's folds, then move on to c.rs.
+    t.keys("g g z R G");
+    assert!(!t.screen().contains("↕ lines 1–16"));
+    let here = at(&t);
+    let y = row_of(&t, "a.rs  +1 -1");
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
+    let s = t.screen();
+    assert!(s.contains("── ▸ a.rs  +1 -1"), "{s}");
+    assert!(!s.contains("line twenty"), "{s}");
+    // The cursor stays where it was.
+    assert_eq!(at(&t), here);
+    let y = row_of(&t, "a.rs  +1 -1");
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
+    let s = t.screen();
+    assert!(s.contains("── ▾ a.rs  +1 -1"), "{s}");
+    // The folds are still open.
+    assert!(!s.contains("↕ lines 1–16"), "{s}");
+    assert!(s.contains("line twenty"), "{s}");
+}
+
+#[test]
+fn ret_collapses_and_expands_the_cursors_file() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g j j");
+    let before = (at(&t), t.sel());
+    t.keys("ret");
+    let s = t.screen();
+    assert!(s.contains("── ▸ a.rs"), "{s}");
+    assert!(!s.contains("line 17"), "{s}");
+    t.keys("ret");
+    let s = t.screen();
+    assert!(s.contains("── ▾ a.rs"), "{s}");
+    assert!(s.contains("↕ lines 1–16"), "{s}");
+    assert_eq!((at(&t), t.sel()), before);
+    // j from a collapsed file goes on into the next one.
+    t.keys("ret j");
+    assert_eq!(t.path(), "b.rs");
+    t.keys("k");
+    assert_eq!(t.path(), "a.rs");
+}
+
+#[test]
+fn the_header_of_the_file_at_the_top_stays_pinned() {
+    let mut t = four(12);
+    t.keys("g g");
+    t.keys(&"j ".repeat(14));
+    assert_eq!(t.path(), "b.rs");
+    let top = t.app.all.top;
+    assert!(top.1 > 0, "{top:?}");
+    let s = t.screen();
+    let first = s.lines().next().unwrap();
+    assert!(
+        first.starts_with(&format!("── ▾ {}.rs", ["a", "b", "c", "d"][top.0])),
+        "{s}"
+    );
+    // The cursor's line is still on screen, below the pinned header.
+    let line = format!("{:>5} ", t.app.cursor_new_line() + 1);
+    assert!(s.lines().skip(1).any(|l| l.starts_with(&line)), "{s}");
+    // A click on the pinned header collapses its file.
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 20, 0);
+    assert!(
+        t.screen()
+            .contains(&format!("── ▸ {}.rs", ["a", "b", "c", "d"][top.0]))
+    );
 }
