@@ -334,9 +334,13 @@ Summary: 154 done, 147 not applicable, 16 to do, 4 replaced.
 
 | Key | glos command |
 |---|---|
+| `[ r` | `goto_prev_diag` |
+| `[ R` | `goto_first_diag` |
 | `[ u` | `goto_prev_unread` |
 | `[ C` | `goto_prev_commit` |
 | `[ x` | `goto_prev_xml_element` |
+| `] r` | `goto_next_diag` |
+| `] R` | `goto_last_diag` |
 | `] u` | `goto_next_unread` |
 | `] C` | `goto_next_commit` |
 | `] x` | `goto_next_xml_element` |
@@ -357,21 +361,29 @@ Summary: 154 done, 147 not applicable, 16 to do, 4 replaced.
 | `Z +` | `fold_more_context` |
 | `Z minus` | `fold_less_context` |
 | `ret` | `toggle_collapse` |
-| `space m` | `edit_comment` |
-| `space M` | `delete_comment` |
-| `space x` | `toggle_resolved` |
-| `space n` | `goto_suggestion` |
-| `space l` | `dashboard` |
-| `space v f` | `view_file` |
-| `space v u` | `view_unified` |
-| `space v s` | `view_split` |
-| `space o b` | `scope_base` |
-| `space o r` | `scope_since_review` |
-| `space o c` | `scope_commits` |
-| `space o f` | `filter_files` |
 | `space s a` | `submit_approve` |
 | `space s r` | `submit_changes` |
 | `space s c` | `submit_comment` |
+| `' c` | `comment` |
+| `' C` | `review_comment` |
+| `' r` | `reply` |
+| `' m` | `edit_comment` |
+| `' M` | `delete_comment` |
+| `' x` | `toggle_resolved` |
+| `' n` | `goto_suggestion` |
+| `' d` | `diagnostics_picker` |
+| `' D` | `workspace_diagnostics_picker` |
+| `' l` | `dashboard` |
+| `' s a` | `submit_approve` |
+| `' s r` | `submit_changes` |
+| `' s c` | `submit_comment` |
+| `' v f` | `view_file` |
+| `' v u` | `view_unified` |
+| `' v s` | `view_split` |
+| `' o b` | `scope_base` |
+| `' o r` | `scope_since_review` |
+| `' o c` | `scope_commits` |
+| `' o f` | `filter_files` |
 | `C-g` | `command_palette` |
 
 ## Keys in the file tree

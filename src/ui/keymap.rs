@@ -60,42 +60,42 @@ pub enum AppAction {
     RepeatLastMotion,
     RecordMacro,
     ReplayMacro,
-    /// `space c`: comment on the selected lines.
+    /// `' c`: comment on the selected lines.
     Comment,
-    /// `space C`: a review-level comment.
+    /// `' C`: a review-level comment.
     ReviewComment,
     Reply,
     EditComment,
-    /// `space M`: delete your latest unsent comment, after pressing it twice.
+    /// `' M`: delete your latest unsent comment, after pressing it twice.
     DeleteComment,
     Submit(crate::review::Verdict),
-    /// `space d` / `space D`: threads in this file, or the whole review.
+    /// `' d` / `' D`: threads in this file, or the whole review.
     ThreadPicker {
         all: bool,
     },
-    /// `]d` / `[d`: `true` goes forward.
+    /// `]r` / `[r`: `true` goes forward.
     NextThread(bool),
-    /// `]D` / `[D`: `true` goes to the last.
+    /// `]R` / `[R`: `true` goes to the last.
     EdgeThread(bool),
     /// `]u` / `[u`: the next or previous thread with an agent's reply you haven't read.
     NextUnread(bool),
-    /// `space x`: resolve the thread under the cursor, or reopen it.
+    /// `' x`: resolve the thread under the cursor, or reopen it.
     ToggleResolved,
-    /// `space n`: the line an agent suggested.
+    /// `' n`: the line an agent suggested.
     GotoSuggestion,
-    /// `space v` then `f`, `u` or `s`.
+    /// `' v` then `f`, `u` or `s`.
     View(super::ViewKind),
-    /// `space o` then `b`, `r` or `c`.
+    /// `' o` then `b`, `r` or `c`.
     Scope(ScopeKey),
     /// `]C` / `[C`: the next or previous commit, in the per-commit scope.
     NextCommit(bool),
-    /// `space o f`: the `:filter` prompt.
+    /// `' o f`: the `:filter` prompt.
     FilterPrompt,
     /// `space e`: open, focus or close the file tree.
     FileTree,
     /// `space ?` (and `C-g` anywhere): the palette of keys for where you are.
     CommandPalette,
-    /// `space l`: every open review.
+    /// `' l`: every open review.
     Dashboard,
     /// The `z` fold keys.
     Fold(super::folding::FoldKey),
@@ -580,6 +580,8 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("d", "goto_prev_diag"),
                 cmd("D", "goto_first_diag"),
+                cmd("r", "goto_prev_diag"),
+                cmd("R", "goto_first_diag"),
                 cmd("u", "goto_prev_unread"),
                 cmd("C", "goto_prev_commit"),
                 cmd("g", "goto_prev_change"),
@@ -600,6 +602,8 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("d", "goto_next_diag"),
                 cmd("D", "goto_last_diag"),
+                cmd("r", "goto_next_diag"),
+                cmd("R", "goto_last_diag"),
                 cmd("u", "goto_next_unread"),
                 cmd("C", "goto_next_commit"),
                 cmd("g", "goto_next_change"),
@@ -658,7 +662,20 @@ fn normal_defs() -> Vec<Def> {
                 cmd("D", "workspace_diagnostics_picker"),
                 cmd("y", "yank_to_clipboard"),
                 cmd("Y", "yank_main_selection_to_clipboard"),
-                // Review actions, where Helix has LSP and editing commands.
+                // These duplicate the Review menu's keys at `'` until Helix's language
+                // server and editing commands take them back.
+                cmd("c", "comment"),
+                cmd("C", "review_comment"),
+                cmd("r", "reply"),
+                menu("s", "Submit", submit_defs()),
+                cmd("e", "file_explorer"),
+                cmd("?", "command_palette"),
+            ],
+        ),
+        menu(
+            "'",
+            "Review",
+            vec![
                 cmd("c", "comment"),
                 cmd("C", "review_comment"),
                 cmd("r", "reply"),
@@ -666,9 +683,10 @@ fn normal_defs() -> Vec<Def> {
                 cmd("M", "delete_comment"),
                 cmd("x", "toggle_resolved"),
                 cmd("n", "goto_suggestion"),
-                cmd("e", "file_explorer"),
+                cmd("d", "diagnostics_picker"),
+                cmd("D", "workspace_diagnostics_picker"),
                 cmd("l", "dashboard"),
-                cmd("?", "command_palette"),
+                menu("s", "Submit", submit_defs()),
                 menu(
                     "v",
                     "View",
@@ -688,15 +706,6 @@ fn normal_defs() -> Vec<Def> {
                         cmd("f", "filter_files"),
                     ],
                 ),
-                menu(
-                    "s",
-                    "Submit",
-                    vec![
-                        cmd("a", "submit_approve"),
-                        cmd("r", "submit_changes"),
-                        cmd("c", "submit_comment"),
-                    ],
-                ),
             ],
         ),
         cmd("C-b|pageup", "page_up"),
@@ -706,6 +715,14 @@ fn normal_defs() -> Vec<Def> {
         cmd("C-z", "suspend"),
         // glos: the palette, in every context.
         cmd("C-g", "command_palette"),
+    ]
+}
+
+fn submit_defs() -> Vec<Def> {
+    vec![
+        cmd("a", "submit_approve"),
+        cmd("r", "submit_changes"),
+        cmd("c", "submit_comment"),
     ]
 }
 
@@ -1114,6 +1131,79 @@ mod tests {
             panic!()
         };
         assert!(z.sticky);
+    }
+
+    /// The command a sequence of keys runs in normal mode, if any.
+    fn bound_seq(k: &Keymaps, keys: &str) -> Option<&'static str> {
+        let mut menu = k.get(Context::Normal);
+        let mut keys = keys.split(' ').peekable();
+        while let Some(key) = keys.next() {
+            match menu.get(Key::parse(key).unwrap())? {
+                Node::Cmd(c) if keys.peek().is_none() => return Some(c.name),
+                Node::Menu(m) => menu = m,
+                Node::Cmd(_) => return None,
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn review_commands_live_under_the_quote_key() {
+        let k = Keymaps::default();
+        for (keys, name) in [
+            ("' c", "comment"),
+            ("' C", "review_comment"),
+            ("' r", "reply"),
+            ("' m", "edit_comment"),
+            ("' M", "delete_comment"),
+            ("' x", "toggle_resolved"),
+            ("' n", "goto_suggestion"),
+            ("' d", "diagnostics_picker"),
+            ("' D", "workspace_diagnostics_picker"),
+            ("' l", "dashboard"),
+            ("' s a", "submit_approve"),
+            ("' s r", "submit_changes"),
+            ("' s c", "submit_comment"),
+            ("' v f", "view_file"),
+            ("' v u", "view_unified"),
+            ("' v s", "view_split"),
+            ("' o b", "scope_base"),
+            ("' o r", "scope_since_review"),
+            ("' o c", "scope_commits"),
+            ("' o f", "filter_files"),
+            ("] r", "goto_next_diag"),
+            ("[ r", "goto_prev_diag"),
+            ("] R", "goto_last_diag"),
+            ("[ R", "goto_first_diag"),
+            // These stay until Helix's own commands need them.
+            ("space c", "comment"),
+            ("space s a", "submit_approve"),
+            ("space d", "diagnostics_picker"),
+            ("] d", "goto_next_diag"),
+        ] {
+            assert_eq!(bound_seq(&k, keys), Some(name), "{keys}");
+        }
+        // The keys that never clashed with Helix moved outright.
+        for keys in [
+            "space m",
+            "space M",
+            "space x",
+            "space n",
+            "space l",
+            "space o b",
+            "space v v f",
+        ] {
+            assert_eq!(bound_seq(&k, keys), None, "{keys}");
+        }
+        let Some(Node::Menu(review)) = k.get(Context::Normal).get(Key::parse("'").unwrap()) else {
+            panic!()
+        };
+        assert_eq!(review.name, "Review");
+        // Select mode reaches the menu too, as it does every normal-mode menu.
+        assert!(matches!(
+            k.get(Context::Select).get(Key::parse("'").unwrap()),
+            Some(Node::Menu(m)) if m.name == "Review"
+        ));
     }
 
     #[test]

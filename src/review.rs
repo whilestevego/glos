@@ -217,7 +217,7 @@ impl Review {
         }
     }
 
-    /// An agent points you at a line; an open glos shows it, and `space n` goes there.
+    /// An agent points you at a line; an open glos shows it, and `' n` goes there.
     pub fn suggest(
         &self,
         conn: &Connection,
@@ -454,7 +454,7 @@ impl Thread {
         })
     }
 
-    /// Your latest comment in the thread, which `space m` edits.
+    /// Your latest comment in the thread, which `' m` edits.
     pub fn latest_yours(&self) -> Option<&Comment> {
         self.comments.iter().rev().find(|c| c.author == YOU)
     }

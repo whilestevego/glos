@@ -477,12 +477,20 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
   things in glos and Helix.
 - **Rejected:** moving only the clashing commands to spare letters, which scatters the review
   commands, and moving every key at once before it's needed.
+- **Amended (2026-11-06):** the Review menu is built whole in step 1, with every review command
+  in it, so you learn the new keys once. The keys that never clashed leave their old places then.
+  The clashing keys keep working at their old places until Helix's command needs them, so nothing
+  breaks before it must.
+- **Amended again (2026-11-06):** the Review menu is at `'`, not `space v`, so the commands used
+  most take two keys rather than three. `'` is free in Helix's normal and select modes, and the
+  commands keep the letters they had under `space`. Free letters in Helix's space menu were
+  rejected because they make poor mnemonics, and Helix adds most new commands to that menu.
 
 ## All files on one screen by default (2026-11-06)
 
 - **Chosen:** an all-files mode that shows every changed file in one scroll, works with each of
   the three views, and is the default. `[editor] all-files = false` turns it off, and
-  `space v a` switches modes. `plan-all-files.md` has the design.
+  `' v a` switches modes. `plan-all-files.md` has the design.
 - **Why:** reading a review file by file hides how the changes fit together, and search should
   find every match in the review. GitHub's "Files changed" page and Zed's multibuffer work this
   way.

@@ -17,9 +17,8 @@ multibuffer do. You scroll through the whole review, and search finds matches in
   file's two sides.
 - **It's the default.** glos opens in all-files mode. `[editor] all-files = false` in
   `config.toml` opens on one file instead.
-- **One key switches modes.** `space v a` switches between all files and the file under the
-  cursor, and the cursor stays on the same line. When `plan-review-menu.md` moves the views to
-  `space v v`, it becomes `space v v a`. `:all` and `:one` do the same.
+- **One key switches modes.** `' v a` switches between all files and the file under
+  the cursor, and the cursor stays on the same line. `:all` and `:one` do the same.
 - **Each file has a header.** The header is one row with the path, the kind of change (added,
   deleted or renamed), `+added -removed`, and the open-thread count, as the tree shows them.
   `enter` on a header collapses or expands that file. Lockfiles and generated files start
@@ -32,7 +31,7 @@ multibuffer do. You scroll through the whole review, and search finds matches in
 - **Search covers the review.** `/`, `?`, `n`, `N` and `*` search through every file in order,
   and wrap around at the end of the review. `]g` and `[g` move through every change.
 - **Files outside the review stay alone.** A file opened for context with `space f` isn't part
-  of the review, so it shows in one-file mode. `space v a` goes back to all files.
+  of the review, so it shows in one-file mode. `' v a` goes back to all files.
 - **Filters and scopes apply.** `:filter` and `space o` decide which files are in the scroll.
 
 ## How it works
@@ -90,7 +89,7 @@ they carry over to all-files mode as they are. `zR` and `zM` act on the file und
 1. **Keep every file's hunks and row counts** from `tree_entries`, and use them for the tree as
    today.
 2. **All-files mode in the whole-file view.** Stack the sections with headers, scroll and move
-   across them, load and drop documents, and switch modes with `space v a`, `:all` and `:one`.
+   across them, load and drop documents, and switch modes with `' v a`, `:all` and `:one`.
    Add `[editor] all-files`.
 3. **The unified and side-by-side views** in all-files mode.
 4. **Search, `]g`, the thread keys, `gn` and `gp`** across files, and the tree following the
@@ -106,7 +105,7 @@ they carry over to all-files mode as they are. `zR` and `zM` act on the file und
   `gg` comes back.
 - `/` finds a match in a later file, `n` wraps from the last file to the first, and `]g` crosses
   files.
-- `space v a` keeps the cursor on the same line in both directions.
+- `' v a` keeps the cursor on the same line in both directions.
 - A click in the tree moves to that file's header, and the tree marks the file under the cursor.
 - A comment made in all-files mode lands on the right file and line.
 - An agent's change to one file keeps the cursor and scroll where they were, in that file and in
@@ -141,6 +140,6 @@ they carry over to all-files mode as they are. `zR` and `zM` act on the file und
 - `src/ui/view.rs` `File` and `draw`.
 - `src/ui/folding.rs`.
 - `src/ui/tree.rs`, for marking the file under the cursor.
-- `src/ui/keymap.rs` `normal_defs`, for `space v a`.
+- `src/ui/keymap.rs` `normal_defs`, for `' v a`.
 - `src/config.rs` `Editor`.
 - `src/ui/tests/perf.rs`.

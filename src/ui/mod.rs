@@ -237,7 +237,7 @@ pub struct App {
     thread_hits: Vec<(u16, usize)>,
     /// Quitting with unsent comments reminds you once.
     reminded: bool,
-    /// The comment a first `space M` asked about. A second one deletes it, and any other key
+    /// The comment a first `' M` asked about. A second one deletes it, and any other key
     /// forgets it.
     delete_armed: Option<String>,
     /// Set when the current key armed a delete, so `key` doesn't forget it straight away.
@@ -558,7 +558,7 @@ impl App {
             };
             self.status = Some((
                 format!(
-                    "{} suggests {}:{}{note} · space n goes there",
+                    "{} suggests {}:{}{note} · ' n goes there",
                     s.by, s.path, s.line
                 ),
                 false,
@@ -1408,7 +1408,7 @@ impl App {
                                 self.status = Some((
                                     format!(
                                         "Its code isn't in what's shown: it was made on {on} \
-                                         (space o changes the scope)"
+                                         (' o changes the scope)"
                                     ),
                                     true,
                                 ));
@@ -1598,7 +1598,7 @@ impl App {
                 self.reload();
                 let unsent = match self.unsent {
                     n if n > 0 && msg != "Nothing to save" => {
-                        format!(" · {n} unsent; space s submits")
+                        format!(" · {n} unsent; ' s submits")
                     }
                     _ => String::new(),
                 };
@@ -1608,8 +1608,8 @@ impl App {
         }
     }
 
-    /// `space M`: the first press asks, and a second press straight after deletes. It acts only
-    /// on the comment `space m` would edit, so it never deletes one you weren't looking at.
+    /// `' M`: the first press asks, and a second press straight after deletes. It acts only
+    /// on the comment `' m` would edit, so it never deletes one you weren't looking at.
     fn delete_comment(&mut self) {
         let latest = self
             .thread_here()
@@ -1621,7 +1621,7 @@ impl App {
         };
         if !c.unsent() {
             self.status = Some((
-                "That comment was already sent to the agent: edit it with space m".into(),
+                "That comment was already sent to the agent: edit it with ' m".into(),
                 true,
             ));
             return;
@@ -1633,10 +1633,7 @@ impl App {
             if quote.len() < first.len() || lines.next().is_some() {
                 quote = format!("{}…", quote.trim_end());
             }
-            self.status = Some((
-                format!("space M again deletes your comment: «{quote}»"),
-                true,
-            ));
+            self.status = Some((format!("' M again deletes your comment: «{quote}»"), true));
             self.delete_armed = Some(c.id);
             self.delete_kept = true;
             return;
@@ -1650,7 +1647,7 @@ impl App {
         }
     }
 
-    /// `space s`: every unsent comment goes to the agent as one round, with a verdict.
+    /// `' s`: every unsent comment goes to the agent as one round, with a verdict.
     fn submit(&mut self, verdict: Verdict) {
         // The round ends: threads whose code is gone are outdated now.
         self.changed_at = None;
@@ -1718,7 +1715,7 @@ impl App {
         }
     }
 
-    /// `space d` / `space D`: Helix's diagnostic pickers, over threads.
+    /// `' d` / `' D`: Helix's diagnostic pickers, over threads.
     fn thread_picker(&self, all: bool) -> Picker {
         let t = &self.theme;
         let path = self.state.main_path();
@@ -1796,7 +1793,7 @@ impl App {
     fn key(&mut self, key: Key) -> Option<AppAction> {
         self.delete_kept = false;
         let action = self.handle_key(key);
-        // A key that finishes anything other than `space M` forgets an armed delete. Keys that
+        // A key that finishes anything other than `' M` forgets an armed delete. Keys that
         // are still on the way to a command (`space`, the `:` line, the palette) keep it.
         if !self.delete_kept
             && self.pending.is_empty()
@@ -2426,7 +2423,7 @@ impl App {
                         self.rescope(Scope::Commit(j), self.filter.clone());
                     }
                 }
-                _ => self.status = Some(("Not in the per-commit scope: space o c".into(), true)),
+                _ => self.status = Some(("Not in the per-commit scope: ' o c".into(), true)),
             },
             A::FilterPrompt => {
                 let mut p = Prompt::new(PromptKind::Command);
@@ -2908,7 +2905,7 @@ impl App {
                 let n = self.unsent;
                 self.status = Some((
                     format!(
-                        "{n} comment{} not sent to the agent: space s submits; :q again quits and keeps {}",
+                        "{n} comment{} not sent to the agent: ' s submits; :q again quits and keeps {}",
                         if n == 1 { "" } else { "s" },
                         if n == 1 { "it" } else { "them" }
                     ),
