@@ -31,6 +31,9 @@ pub struct Editor {
     /// glos's: unchanged lines kept around each change; the rest are folded. `z+` and `z-`
     /// change it while glos runs.
     pub diff_context: usize,
+    /// glos's: every changed file in one scroll, each under a header. `' v a` switches between
+    /// this and one file at a time while glos runs.
+    pub all_files: bool,
 }
 
 /// Helix's `[editor.soft-wrap]`: off by default, as in Helix.
@@ -57,6 +60,7 @@ impl Default for Editor {
             soft_wrap: SoftWrap::default(),
             file_tree: true,
             diff_context: 3,
+            all_files: false,
         }
     }
 }
@@ -126,6 +130,17 @@ mod tests {
                 .unwrap()
                 .editor
                 .file_tree
+        );
+    }
+
+    #[test]
+    fn all_files_is_a_setting() {
+        assert!(!Config::default().editor.all_files);
+        assert!(
+            parse("[editor]\nall-files = true\n")
+                .unwrap()
+                .editor
+                .all_files
         );
     }
 

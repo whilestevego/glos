@@ -62,6 +62,10 @@ fn source_file(n: usize, edit: bool) -> String {
 /// Two folders of `files` changed files of `lines` lines each, opened on a 160×48 screen
 /// with the file tree, as glos starts by default.
 fn big_review(files: usize, lines: usize) -> T {
+    big_review_with(files, lines, &Config::default())
+}
+
+fn big_review_with(files: usize, lines: usize, config: &Config) -> T {
     let dir = tempfile::tempdir().unwrap();
     let (o, n) = (dir.path().join("old"), dir.path().join("new"));
     for i in 0..files {
@@ -73,7 +77,7 @@ fn big_review(files: usize, lines: usize) -> T {
         std::fs::write(n.join(&path), source_file(lines, true)).unwrap();
     }
     let source = Source::diff(&o, &n).unwrap();
-    T::new(source, dir, 160, 48, &Config::default())
+    T::new(source, dir, 160, 48, config)
 }
 
 #[test]
@@ -132,4 +136,26 @@ fn perf_keys_through_a_big_review() {
         }
     });
     assert!(t.shows("Is this right?"));
+}
+
+#[test]
+fn perf_all_files() {
+    let mut config = Config::default();
+    config.editor.all_files = true;
+    // Opening reads and highlights only the files on the first screen.
+    let mut t = within("open 150 files × 2,000 lines, all files", 1_000, || {
+        big_review_with(150, 2_000, &config)
+    });
+    assert!(t.shows("file_000.rs  +50 -50"));
+    within("scroll through all files", 7_000, || {
+        t.keys(&"j ".repeat(100));
+        t.keys(&"C-d ".repeat(200));
+        t.keys(&"g n ".repeat(20));
+        t.keys("G g g");
+    });
+    let loaded = t.app.state.files.iter().filter(|f| f.is_some()).count();
+    assert!(
+        loaded <= super::super::all::MAX_LOADED,
+        "{loaded} files loaded"
+    );
 }

@@ -48,6 +48,8 @@ const TYPABLE: &[(&str, &[&str], &str)] = &[
         &[],
         "Show the file whole, unified, or split side by side",
     ),
+    ("all", &[], "Show every changed file in one scroll"),
+    ("one", &[], "Show one file at a time"),
     (
         "scope",
         &[],
