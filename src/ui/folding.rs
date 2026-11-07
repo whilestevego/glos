@@ -34,9 +34,13 @@ impl App {
     /// The threads of the file on screen, as new-side line ranges: they keep their lines in
     /// view.
     fn fold_threads(&self) -> Vec<(usize, usize)> {
-        let path = self.state.main_path();
+        self.fold_threads_in(self.state.main_path(), self.base_file())
+    }
+
+    /// The threads of file `path`, whose text is `base`'s, as new-side line ranges.
+    fn fold_threads_in(&self, path: &str, base: &File) -> Vec<(usize, usize)> {
         let mut v: Vec<(usize, usize)> = self
-            .shown_threads()
+            .shown_threads_in(path, base)
             .iter()
             .filter_map(|t| t.anchor.as_ref())
             .filter(|a| a.path == path)
@@ -54,14 +58,19 @@ impl App {
     /// The view of the file on screen, folded as it is now; `None` for a view this file can't
     /// have (unified or side by side of a context file, a binary or collapsed file).
     fn built(&self) -> Option<Built> {
-        let base = self.base_file();
+        self.built_for(self.state.main_path(), self.base_file())
+    }
+
+    /// The whole-file view of file `path`, whose file is `base`, folded as it is now; `None`
+    /// for a binary or collapsed file. In the other views it's the file on screen's view.
+    pub(super) fn built_for(&self, path: &str, base: &File) -> Option<Built> {
         if base.binary || base.collapsed {
             return None;
         }
-        let threads = self.fold_threads();
+        let threads = self.fold_threads_in(path, base);
         let folds = self
             .folds
-            .get(&self.fold_key())
+            .get(&(path.to_string(), self.view_kind))
             .cloned()
             .unwrap_or_default();
         let (kind, ctx) = (self.view_kind, self.diff_context);
@@ -323,7 +332,7 @@ impl App {
         }
     }
 
-    fn cursor_line(&self) -> usize {
+    pub(super) fn cursor_line(&self) -> usize {
         let f = self.main_file();
         let t = f.text.slice(..);
         t.char_to_line(f.sel.primary().cursor(t))
