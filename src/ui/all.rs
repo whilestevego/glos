@@ -349,9 +349,9 @@ impl App {
             .get("ui.linenr.selected")
             .add_modifier(Modifier::BOLD);
         let open = if self.section_file(i).collapsed {
-            '▸'
+            '▶'
         } else {
-            '▾'
+            '▼'
         };
         let rule = "─".repeat(area.width as usize);
         let text = format!("── {open} {} {rule}", self.header(i));

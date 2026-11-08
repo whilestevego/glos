@@ -154,13 +154,13 @@ Steps 1 and 2, in the first pull request:
 - **Headers are rules, with a blank row above them.** The first build drew each header as a
   bar in `ui.statusline.inactive`, which the reviewer found too faint to tell where one file
   ended. Now a blank row comes before each file after the first, and the header is a rule
-  across the screen in bold `ui.linenr.selected`, such as `── ▾ b.rs  +1 -0 ─────`
+  across the screen in bold `ui.linenr.selected`, such as `── ▼ b.rs  +1 -0 ─────`
   (`draw_header`). While a file's header has scrolled off the top, a copy of it stays pinned
   on the top row, as GitHub's file headers do (`pinned`).
 - **The empty line after a file's last newline isn't shown** in all-files mode, so files follow
   one another without a blank numbered line between them.
 - **Collapsed files.** A collapsed or binary file is its header and notices, and its header
-  shows `▸` rather than `▾`. The cursor stops on it as one line. A click on any header,
+  shows `▶` rather than `▼`. The cursor stops on it as one line. A click on any header,
   pinned or not, collapses or expands its file, and `enter` does the same for the cursor's
   file when it isn't on a fold or a thread (`toggle_file`). The file's folds are kept by path,
   so they're as they were when it opens again, and so is the cursor. A file the reviewer

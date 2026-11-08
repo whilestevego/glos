@@ -305,12 +305,12 @@ fn files_are_set_apart_by_a_blank_row_and_a_rule() {
     let t = all_files(72, 30, three);
     let s = t.screen();
     let lines: Vec<&str> = s.lines().collect();
-    let b = row_of(&t, "▾ b.rs") as usize;
+    let b = row_of(&t, "▼ b.rs") as usize;
     assert_eq!(lines[b - 1].trim(), "", "{s}");
-    assert!(lines[b].starts_with("── ▾ b.rs  +1 -0 ──"), "{s}");
+    assert!(lines[b].starts_with("── ▼ b.rs  +1 -0 ──"), "{s}");
     assert!(lines[b].trim_end().ends_with('─'), "{s}");
     // The first file's header is on the top row, with no blank row above it.
-    assert!(lines[0].starts_with("── ▾ a.rs"), "{s}");
+    assert!(lines[0].starts_with("── ▼ a.rs"), "{s}");
 }
 
 #[test]
@@ -323,14 +323,14 @@ fn a_click_on_a_header_collapses_and_expands_the_file_and_keeps_its_folds() {
     let y = row_of(&t, "a.rs  +1 -1");
     t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
     let s = t.screen();
-    assert!(s.contains("── ▸ a.rs  +1 -1"), "{s}");
+    assert!(s.contains("── ▶ a.rs  +1 -1"), "{s}");
     assert!(!s.contains("line twenty"), "{s}");
     // The cursor stays where it was.
     assert_eq!(at(&t), here);
     let y = row_of(&t, "a.rs  +1 -1");
     t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
     let s = t.screen();
-    assert!(s.contains("── ▾ a.rs  +1 -1"), "{s}");
+    assert!(s.contains("── ▼ a.rs  +1 -1"), "{s}");
     // The folds are still open.
     assert!(!s.contains("↕ lines 1–16"), "{s}");
     assert!(s.contains("line twenty"), "{s}");
@@ -343,11 +343,11 @@ fn ret_collapses_and_expands_the_cursors_file() {
     let before = (at(&t), t.sel());
     t.keys("ret");
     let s = t.screen();
-    assert!(s.contains("── ▸ a.rs"), "{s}");
+    assert!(s.contains("── ▶ a.rs"), "{s}");
     assert!(!s.contains("line 17"), "{s}");
     t.keys("ret");
     let s = t.screen();
-    assert!(s.contains("── ▾ a.rs"), "{s}");
+    assert!(s.contains("── ▼ a.rs"), "{s}");
     assert!(s.contains("↕ lines 1–16"), "{s}");
     assert_eq!((at(&t), t.sel()), before);
     // j from a collapsed file goes on into the next one.
@@ -368,7 +368,7 @@ fn the_header_of_the_file_at_the_top_stays_pinned() {
     let s = t.screen();
     let first = s.lines().next().unwrap();
     assert!(
-        first.starts_with(&format!("── ▾ {}.rs", ["a", "b", "c", "d"][top.0])),
+        first.starts_with(&format!("── ▼ {}.rs", ["a", "b", "c", "d"][top.0])),
         "{s}"
     );
     // The cursor's line is still on screen, below the pinned header.
@@ -378,6 +378,6 @@ fn the_header_of_the_file_at_the_top_stays_pinned() {
     t.mouse(MouseEventKind::Down(MouseButton::Left), 20, 0);
     assert!(
         t.screen()
-            .contains(&format!("── ▸ {}.rs", ["a", "b", "c", "d"][top.0]))
+            .contains(&format!("── ▶ {}.rs", ["a", "b", "c", "d"][top.0]))
     );
 }
