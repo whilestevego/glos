@@ -21,11 +21,13 @@ struct T {
 const OLD: &str = "fn main() {\n    println!(\"hi\");\n}\n\nfn gone() {}\n";
 const NEW: &str = "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n";
 
-/// The defaults, but without the file tree, so screens and clicks are about the file view;
-/// `the_file_tree_starts_open` tests the default.
+/// The defaults, but without the file tree, so screens and clicks are about the file view,
+/// and one file at a time, so a screen shows the file under test alone. The tests for
+/// all-files mode turn it on, and `the_file_tree_starts_open` tests the default tree.
 fn config() -> Config {
     let mut c = Config::default();
     c.editor.file_tree = false;
+    c.editor.all_files = false;
     c
 }
 

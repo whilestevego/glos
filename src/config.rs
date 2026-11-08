@@ -60,7 +60,7 @@ impl Default for Editor {
             soft_wrap: SoftWrap::default(),
             file_tree: true,
             diff_context: 3,
-            all_files: false,
+            all_files: true,
         }
     }
 }
@@ -134,10 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn all_files_is_a_setting() {
-        assert!(!Config::default().editor.all_files);
+    fn all_files_is_on_unless_turned_off() {
+        assert!(Config::default().editor.all_files);
         assert!(
-            parse("[editor]\nall-files = true\n")
+            !parse("[editor]\nall-files = false\n")
                 .unwrap()
                 .editor
                 .all_files

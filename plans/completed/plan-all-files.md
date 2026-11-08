@@ -1,8 +1,6 @@
 # All files on one screen
 
-**Status:** In progress on branch `all-files-2`. Steps 1 and 2 were merged on 2026-11-08 in
-PR #12. Steps 3 to 5 are built on this branch. The mode is off by default until step 6, the
-last pull request.
+**Status:** Implemented (2026-11-08) in PRs #12, #13 and #14.
 
 Today glos shows one file at a time. You move between files with `gn` and `gp`, the tree, or
 `space g`. Search and the change keys (`]g`) stay inside the file on screen.
@@ -137,7 +135,7 @@ they carry over to all-files mode as they are. `zR` and `zM` act on the file und
   of the file that took its place, or the last file. The status line says which file went. A new
   file appears in its place in the order, and the cursor stays where it was.
 
-## As built so far
+## As built
 
 Steps 1 and 2, in the first pull request:
 
@@ -220,6 +218,16 @@ Steps 3 and 5, in the same pull request:
 - **Step 5 was mostly done in step 2.** Clicks on the left column of side by side move the
   cursor into that file. They don't place the cursor on a line of the old side, as one-file mode
   doesn't either.
+
+Step 6, in the third pull request:
+
+- **All-files mode is the default.** `src/config.rs` `Editor::default` sets `all_files`, and
+  `all-files = false` turns it off. The test helper `config` in `src/ui/tests.rs` turns it off,
+  so the one-file tests keep showing the file under test alone, and `big_review` does the same
+  for the one-file perf tests. `all_files_is_on_unless_turned_off` checks that a fresh config
+  opens in one scroll.
+- **The overview's "Viewing the code" section** in `completed/plan-overview.md` describes the
+  scroll, and its keys now say `' v` and `' o`, which moved under the Review menu in PR #11.
 
 ## Relevant code
 

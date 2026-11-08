@@ -490,7 +490,7 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
 
 - **Chosen:** an all-files mode that shows every changed file in one scroll, works with each of
   the three views, and is the default. `[editor] all-files = false` turns it off, and
-  `' v a` switches modes. `plan-all-files.md` has the design.
+  `' v a` switches modes. `completed/plan-all-files.md` has the design.
 - **Why:** reading a review file by file hides how the changes fit together, and search should
   find every match in the review. GitHub's "Files changed" page and Zed's multibuffer work this
   way.
