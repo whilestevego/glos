@@ -20,6 +20,9 @@ use crate::{
 
 use super::comments::Threads;
 
+/// The notice on a generated file, which starts collapsed.
+pub const GENERATED: &str = "generated file, collapsed; enter expands";
+
 /// A file loaded for viewing: a changed file of the review, or any file opened for context.
 pub struct File {
     pub text: Rope,
@@ -146,7 +149,7 @@ impl File {
         }
         let collapsed = source.collapsed(change);
         if collapsed {
-            notices.push("generated file, collapsed; enter expands".to_string());
+            notices.push(GENERATED.to_string());
         }
         let (hunks, words) = if binary || change.new == Content::None {
             (vec![], HashMap::new())

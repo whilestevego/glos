@@ -132,9 +132,36 @@ impl App {
     }
 
     /// The rows above file `i`'s first line: a blank row after the file before it, the header
-    /// row and the notices under it.
+    /// row, the notices under it, and a collapsed file's summary.
     fn header_rows(&self, i: usize) -> usize {
-        usize::from(i > 0) + 1 + self.section_file(i).notices.len()
+        usize::from(i > 0) + 1 + self.notices(i).count() + usize::from(self.summary(i).is_some())
+    }
+
+    /// File `i`'s notices. The one a generated file has says how to expand it, which its
+    /// summary says instead.
+    fn notices(&self, i: usize) -> impl Iterator<Item = &String> {
+        let f = self.section_file(i);
+        f.notices.iter().filter(|n| *n != view::GENERATED)
+    }
+
+    /// The line under a collapsed file's header, in place of its code: how many lines it has.
+    fn summary(&self, i: usize) -> Option<String> {
+        let f = self.section_file(i);
+        if !f.collapsed || f.binary {
+            return None;
+        }
+        let t = f.text.slice(..);
+        let mut n = t.len_lines();
+        if n > 1 && t.char(t.len_chars() - 1) == '\n' {
+            n -= 1;
+        }
+        let lines = if n == 1 { "line" } else { "lines" };
+        let generated = if f.notices.iter().any(|n| n == view::GENERATED) {
+            ", generated file"
+        } else {
+            ""
+        };
+        Some(format!("↕ {n} {lines} collapsed{generated}"))
     }
 
     /// The rows the pinned header takes with `top` at the top of the screen. While a file's
@@ -284,18 +311,22 @@ impl App {
                 headers.push((y, i));
                 self.draw_header(buf, area, y, i);
                 y += 1;
-                let f = self.section_file(i);
-                for notice in &f.notices {
+                let style = self.theme.get("ui.virtual");
+                let mut rows: Vec<(String, u16)> = self
+                    .notices(i)
+                    .map(|n| (clean(n).into_owned(), 1))
+                    .collect();
+                rows.extend(self.summary(i).map(|s| (s, 3)));
+                for (text, x) in rows {
                     if y >= area.bottom() {
                         break;
                     }
-                    buf.set_stringn(
-                        area.x + 1,
-                        y,
-                        clean(notice),
-                        area.width.saturating_sub(1) as usize,
-                        self.theme.get("ui.virtual"),
-                    );
+                    // A click on the summary opens the file, as one on the header does.
+                    if x == 3 {
+                        headers.push((y, i));
+                    }
+                    let width = area.width.saturating_sub(x) as usize;
+                    buf.set_stringn(area.x + x, y, text, width, style);
                     y += 1;
                 }
             }

@@ -2579,8 +2579,7 @@ impl App {
                     return None;
                 }
                 let file = self.base_file_mut();
-                let marker = "generated file, collapsed; enter expands";
-                if file.notices.iter().any(|n| n == marker) || file.collapsed {
+                if file.notices.iter().any(|n| n == view::GENERATED) || file.collapsed {
                     file.collapsed = !file.collapsed;
                 }
                 self.refold(None);

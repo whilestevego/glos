@@ -47,14 +47,18 @@ fn all_files_screen() {
 }
 
 #[test]
-fn a_collapsed_file_shows_only_its_header() {
+fn a_collapsed_file_shows_its_header_and_a_summary() {
     let t = all_files(72, 30, |o, n| {
         three(o, n);
         std::fs::write(n.join("Cargo.lock"), numbered(50)).unwrap();
     });
     let s = t.screen();
     assert!(s.contains("Cargo.lock  +50 -0"), "{s}");
-    assert!(s.contains("generated file, collapsed"), "{s}");
+    assert!(
+        s.contains("   ↕ 50 lines collapsed, generated file\n"),
+        "{s}"
+    );
+    assert!(!s.contains("enter expands"), "{s}");
     assert!(!s.contains("line 49"), "{s}");
 }
 
@@ -334,6 +338,13 @@ fn a_click_on_a_header_collapses_and_expands_the_file_and_keeps_its_folds() {
     // The folds are still open.
     assert!(!s.contains("↕ lines 1–16"), "{s}");
     assert!(s.contains("line twenty"), "{s}");
+    // A click on a collapsed file's summary opens it too.
+    let y = row_of(&t, "a.rs  +1 -1");
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
+    let y = row_of(&t, "30 lines collapsed");
+    t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
+    assert!(t.screen().contains("── ▼ a.rs"), "{}", t.screen());
+    assert_eq!(at(&t), here);
 }
 
 #[test]
@@ -345,6 +356,10 @@ fn ret_collapses_and_expands_the_cursors_file() {
     let s = t.screen();
     assert!(s.contains("── ▶ a.rs"), "{s}");
     assert!(!s.contains("line 17"), "{s}");
+    // The summary says how many lines the file has, without repeating how to open it.
+    let summary = s.lines().nth(1).unwrap();
+    assert_eq!(summary.trim_end(), "   ↕ 30 lines collapsed", "{s}");
+    assert_eq!(row_of(&t, "▼ b.rs"), 3, "{s}");
     t.keys("ret");
     let s = t.screen();
     assert!(s.contains("── ▼ a.rs"), "{s}");
