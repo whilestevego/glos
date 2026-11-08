@@ -54,10 +54,7 @@ fn a_collapsed_file_shows_its_header_and_a_summary() {
     });
     let s = t.screen();
     assert!(s.contains("Cargo.lock  +50 -0"), "{s}");
-    assert!(
-        s.contains("   ↕ 50 lines collapsed, generated file\n"),
-        "{s}"
-    );
+    assert!(s.contains("   ↕ 50 lines, generated file\n"), "{s}");
     assert!(!s.contains("enter expands"), "{s}");
     assert!(!s.contains("line 49"), "{s}");
 }
@@ -341,7 +338,7 @@ fn a_click_on_a_header_collapses_and_expands_the_file_and_keeps_its_folds() {
     // A click on a collapsed file's summary opens it too.
     let y = row_of(&t, "a.rs  +1 -1");
     t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
-    let y = row_of(&t, "30 lines collapsed");
+    let y = row_of(&t, "↕ 30 lines");
     t.mouse(MouseEventKind::Down(MouseButton::Left), 20, y);
     assert!(t.screen().contains("── ▼ a.rs"), "{}", t.screen());
     assert_eq!(at(&t), here);
@@ -358,7 +355,7 @@ fn ret_collapses_and_expands_the_cursors_file() {
     assert!(!s.contains("line 17"), "{s}");
     // The summary says how many lines the file has, without repeating how to open it.
     let summary = s.lines().nth(1).unwrap();
-    assert_eq!(summary.trim_end(), "   ↕ 30 lines collapsed", "{s}");
+    assert_eq!(summary.trim_end(), "   ↕ 30 lines", "{s}");
     assert_eq!(row_of(&t, "▼ b.rs"), 3, "{s}");
     t.keys("ret");
     let s = t.screen();
@@ -395,4 +392,22 @@ fn the_header_of_the_file_at_the_top_stays_pinned() {
         t.screen()
             .contains(&format!("── ▶ {}.rs", ["a", "b", "c", "d"][top.0]))
     );
+}
+
+#[test]
+fn a_headers_counts_are_coloured_as_added_and_removed() {
+    let t = all_files(72, 30, three);
+    // The header row's cells, one symbol each, so a position is a column.
+    let row: Vec<String> = (0..72).map(|x| t.cell(x, 0).symbol().to_string()).collect();
+    let col = |text: &str| {
+        let first = text.chars().next().unwrap().to_string();
+        let second = text.chars().nth(1).unwrap().to_string();
+        (0..71)
+            .find(|&x| row[x] == first && row[x + 1] == second)
+            .unwrap() as u16
+    };
+    let (plus, minus) = (t.app.theme.get("diff.plus"), t.app.theme.get("diff.minus"));
+    assert_eq!(t.cell(col("+1"), 0).fg, plus.fg.unwrap());
+    assert_eq!(t.cell(col("-1"), 0).fg, minus.fg.unwrap());
+    assert_ne!(t.cell(col("a."), 0).fg, plus.fg.unwrap());
 }

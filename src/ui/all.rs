@@ -13,6 +13,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
+    text::{Line, Span},
 };
 
 use super::{
@@ -156,12 +157,13 @@ impl App {
             n -= 1;
         }
         let lines = if n == 1 { "line" } else { "lines" };
+        // The ▶ in the header already says the file is collapsed.
         let generated = if f.notices.iter().any(|n| n == view::GENERATED) {
             ", generated file"
         } else {
             ""
         };
-        Some(format!("↕ {n} {lines} collapsed{generated}"))
+        Some(format!("↕ {n} {lines}{generated}"))
     }
 
     /// The rows the pinned header takes with `top` at the top of the screen. While a file's
@@ -384,18 +386,25 @@ impl App {
         } else {
             '▼'
         };
+        let (text, added, removed, threads) = self.header(i);
         let rule = "─".repeat(area.width as usize);
-        let text = format!("── {open} {} {rule}", self.header(i));
-        buf.set_stringn(area.x, y, text, area.width as usize, style);
+        let line = Line::from(vec![
+            Span::styled(format!("── {open} {text}  "), style),
+            Span::styled(added, style.patch(self.theme.get("diff.plus"))),
+            Span::styled(" ", style),
+            Span::styled(removed, style.patch(self.theme.get("diff.minus"))),
+            Span::styled(format!("{threads} {rule}"), style),
+        ]);
+        buf.set_line(area.x, y, &line, area.width);
     }
 
     /// A file's header: its path, the lines added and removed, and its open threads.
-    fn header(&self, i: usize) -> String {
+    fn header(&self, i: usize) -> (String, String, String, String) {
         let path = &self.state.source.changes[i].path;
         let base = self.state.files[i].as_ref().expect("prepared");
         let added: u32 = base.hunks.iter().map(|h| h.after.len() as u32).sum();
         let removed: u32 = base.hunks.iter().map(|h| h.before.len() as u32).sum();
-        let mut s = format!("{}  +{added} -{removed}", clean(path));
+        let mut s = String::new();
         let open = self
             .state
             .threads
@@ -407,7 +416,12 @@ impl App {
             1 => s += "  1 thread",
             n => s += &format!("  {n} threads"),
         }
-        s
+        (
+            clean(path).into_owned(),
+            format!("+{added}"),
+            format!("-{removed}"),
+            s,
+        )
     }
 
     /// Drops the documents of files far from the screen once more than [`MAX_LOADED`] are

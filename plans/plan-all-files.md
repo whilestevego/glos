@@ -160,7 +160,7 @@ Steps 1 and 2, in the first pull request:
 - **The empty line after a file's last newline isn't shown** in all-files mode, so files follow
   one another without a blank numbered line between them.
 - **Collapsed files.** A collapsed file is its header, its notices and a summary line such as
-  `↕ 42 lines collapsed` (`summary`), and its header shows `▶` rather than `▼`. The summary
+  `↕ 42 lines` (`summary`), and its header shows `▶` rather than `▼`. The summary
   doesn't say how to open the file, because the reviewer found that repetitive on every
   collapsed file, and a generated file's "enter expands" notice gives way to it. A binary file
   is its header and notices. The cursor stops on either as one line. A click on any header,

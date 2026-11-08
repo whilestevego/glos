@@ -113,7 +113,7 @@ to the top of the screen. `:all` and `:one` also switch, and `all-files = true` 
 starts glos in one scroll.
 
 Click a file's header to collapse the file, and click it again to expand it. A collapsed file
-shows a line such as `↕ 42 lines collapsed` under its header in place of its code, and a click
+shows a line such as `↕ 42 lines` under its header in place of its code, and a click
 on that line expands it too.
 `enter` does the same for the file the cursor is in, unless the cursor is on a fold or a thread.
 A collapsed file keeps its folds, so it opens again as you left it.
