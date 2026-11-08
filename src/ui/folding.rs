@@ -58,12 +58,12 @@ impl App {
     /// The view of the file on screen, folded as it is now; `None` for a view this file can't
     /// have (unified or side by side of a context file, a binary or collapsed file).
     fn built(&self) -> Option<Built> {
-        self.built_for(self.state.main_path(), self.base_file())
+        self.built_for(&self.state.cur, self.state.main_path(), self.base_file())
     }
 
-    /// The whole-file view of file `path`, whose file is `base`, folded as it is now; `None`
-    /// for a binary or collapsed file. In the other views it's the file on screen's view.
-    pub(super) fn built_for(&self, path: &str, base: &File) -> Option<Built> {
+    /// The view of `cur`, whose path is `path` and whose file is `base`, folded as it is now;
+    /// `None` for a binary or collapsed file, or a context file outside the whole-file view.
+    pub(super) fn built_for(&self, cur: &Cur, path: &str, base: &File) -> Option<Built> {
         if base.binary || base.collapsed {
             return None;
         }
@@ -87,7 +87,7 @@ impl App {
                 &self.theme,
             ));
         }
-        let Cur::Change(i) = self.state.cur else {
+        let Cur::Change(i) = *cur else {
             return None; // a context file has no diff
         };
         let change = &self.state.source.changes[i];

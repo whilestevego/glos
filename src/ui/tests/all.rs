@@ -207,12 +207,19 @@ fn all_files_is_off_unless_set() {
 }
 
 #[test]
-fn other_views_show_one_file() {
+fn all_files_unified() {
     let mut t = all_files(72, 30, three);
-    t.keys("' v u");
-    assert!(!t.app.all_shown());
-    t.keys("' v f");
+    t.keys("g g ' v u");
     assert!(t.app.all_shown());
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn all_files_side_by_side() {
+    let mut t = all_files(100, 30, three);
+    t.keys("g g ' v s");
+    assert!(t.app.all_shown());
+    insta::assert_snapshot!(t.screen());
 }
 
 #[test]
@@ -508,4 +515,41 @@ fn the_tree_marks_the_file_under_the_cursor() {
     assert_eq!(t.app.tree.as_ref().unwrap().selected(), Some("b.rs"));
     t.keys("] g");
     assert_eq!(t.app.tree.as_ref().unwrap().selected(), Some("c.rs"));
+}
+
+#[test]
+fn keys_and_the_mouse_cross_files_in_the_other_views() {
+    for view in ["u", "s"] {
+        let mut t = all_files(100, 30, three);
+        t.keys(&format!("g g ' v {view}"));
+        t.keys("g e j");
+        assert_eq!(t.path(), "b.rs", "{view}");
+        t.keys("] g");
+        assert_eq!(t.path(), "c.rs", "{view}");
+        t.keys("g g / n e w ret");
+        assert_eq!(t.path(), "c.rs", "{view}");
+        // A click in b.rs moves the cursor there, and the wheel scrolls the whole review.
+        let y = row_of(&t, "fn b() {}");
+        t.mouse(MouseEventKind::Down(MouseButton::Left), 80, y);
+        assert_eq!(t.path(), "b.rs", "{view}");
+        for _ in 0..10 {
+            t.mouse(MouseEventKind::ScrollDown, 80, 5);
+        }
+        assert_ne!(t.app.all.top, (0, 0), "{view}");
+    }
+}
+
+#[test]
+fn switching_views_keeps_every_file_on_screen() {
+    let mut t = all_files(100, 30, three);
+    t.keys("g g g n");
+    for view in ["u", "s", "f"] {
+        t.keys(&format!("' v {view}"));
+        assert_eq!(t.path(), "b.rs", "{view}");
+        let s = t.screen();
+        assert!(
+            s.contains("── ▼ b.rs") && s.contains("── ▼ c.rs"),
+            "{view}\n{s}"
+        );
+    }
 }

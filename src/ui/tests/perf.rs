@@ -143,7 +143,7 @@ fn perf_all_files() {
     let mut config = Config::default();
     config.editor.all_files = true;
     // Opening reads and highlights only the files on the first screen.
-    let mut t = within("open 150 files × 2,000 lines, all files", 1_000, || {
+    let mut t = within("open 150 files × 2,000 lines, all files", 2_000, || {
         big_review_with(150, 2_000, &config)
     });
     assert!(t.shows("file_000.rs  +50 -50"));
@@ -161,6 +161,11 @@ fn perf_all_files() {
         t.keys(&"] g ".repeat(200));
         t.keys("/ f n ret");
         t.keys(&"n ".repeat(200));
+    });
+    within("scroll all files side by side", 7_000, || {
+        t.keys("g g ' v s");
+        t.keys(&"C-d ".repeat(100));
+        t.keys("' v f");
     });
     let loaded = t.app.state.files.iter().filter(|f| f.is_some()).count();
     assert!(

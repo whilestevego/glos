@@ -38,12 +38,13 @@ pub(super) struct AllFiles {
     pub on: bool,
     /// The place at the top of the screen.
     pub top: Pos,
-    /// The whole-file view of each file drawn that the cursor isn't in. It's `None` when
-    /// nothing in the file is folded, so the file itself is drawn.
-    docs: HashMap<usize, Option<File>>,
-    /// What `docs` were built with: the generation of the threads and files, and the lines of
-    /// context. Either changing builds them again.
-    built: (u64, usize),
+    /// The view of each file drawn that the cursor isn't in, with its old side in the
+    /// side-by-side view. It's `None` when the file itself is drawn: in the whole-file view
+    /// with nothing folded, or for a binary or collapsed file.
+    docs: HashMap<usize, Option<(File, Option<File>)>>,
+    /// What `docs` were built with: the generation of the threads and files, the lines of
+    /// context and the view. Any of them changing builds them again.
+    built: (u64, usize, Option<ViewKind>),
     /// From the last draw, for the mouse: each file's text on screen, with the file and the
     /// line at its top, and each header's row, with its file.
     regions: Vec<(Rect, usize, usize)>,
@@ -60,10 +61,10 @@ impl AllFiles {
 }
 
 impl App {
-    /// The screen shows every file: the mode is on, the cursor is in one of the review's
-    /// changes, and the view is the whole-file one.
+    /// The screen shows every file: the mode is on, and the cursor is in one of the review's
+    /// changes.
     pub(super) fn all_shown(&self) -> bool {
-        self.all.on && matches!(self.state.cur, Cur::Change(_)) && self.view_kind == ViewKind::File
+        self.all.on && matches!(self.state.cur, Cur::Change(_))
     }
 
     pub(super) fn cur_index(&self) -> usize {
@@ -75,9 +76,10 @@ impl App {
 
     /// Reads file `i` if it isn't loaded, and builds its view unless the cursor is in it.
     fn prepare(&mut self, i: usize) {
-        if (self.generation, self.diff_context) != self.all.built {
+        let built = (self.generation, self.diff_context, Some(self.view_kind));
+        if built != self.all.built {
             self.all.docs.clear();
-            self.all.built = (self.generation, self.diff_context);
+            self.all.built = built;
         }
         self.load(i);
         if i == self.cur_index() {
@@ -91,10 +93,11 @@ impl App {
         }
         let path = self.state.source.changes[i].path.clone();
         let base = self.state.files[i].as_ref().expect("loaded above");
+        let whole = self.view_kind == ViewKind::File;
         let doc = self
-            .built_for(&path, base)
-            .filter(|b| b.folded)
-            .map(|b| b.doc);
+            .built_for(&Cur::Change(i), &path, base)
+            .filter(|b| b.folded || !whole)
+            .map(|b| (b.doc, b.left));
         self.all.docs.insert(i, doc);
     }
 
@@ -104,9 +107,25 @@ impl App {
             return self.main_file();
         }
         match self.all.docs.get(&i) {
-            Some(Some(doc)) => doc,
+            Some(Some((doc, _))) => doc,
             _ => self.state.files[i].as_ref().expect("prepared"),
         }
+    }
+
+    /// File `i`'s old side, in the side-by-side view. It must be prepared.
+    fn section_left(&self, i: usize) -> Option<&File> {
+        if i == self.cur_index() {
+            return self.split_left();
+        }
+        match self.all.docs.get(&i) {
+            Some(Some((_, left))) => left.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Whether lines wrap: as set, except side by side.
+    fn all_wrap(&self) -> bool {
+        self.state.wrap && self.left_view.width == 0
     }
 
     fn section_threads(&self, i: usize) -> Threads {
@@ -144,7 +163,8 @@ impl App {
     /// File `i`'s notices. The one a generated file has says how to expand it, which its
     /// summary says instead.
     fn notices(&self, i: usize) -> impl Iterator<Item = &String> {
-        let f = self.section_file(i);
+        // From the file itself, as the unified and side-by-side views have none of their own.
+        let f = self.state.files[i].as_ref().expect("prepared");
         f.notices.iter().filter(|n| *n != view::GENERATED)
     }
 
@@ -185,7 +205,7 @@ impl App {
         if !(f.collapsed || f.binary) {
             let t = threads.entry(i).or_insert_with(|| self.section_threads(i));
             let width = self.view.width.saturating_sub(f.gutter_width() as u16);
-            let fmt = view::text_format(f, width, self.state.wrap);
+            let fmt = view::text_format(f, width, self.all_wrap());
             rows += view::line_rows(f, line, &fmt, t);
         }
         rows
@@ -293,6 +313,14 @@ impl App {
 
         let cur = self.cur_index();
         let none = Style::default();
+        // Headers go across both columns in the side-by-side view.
+        let left_col = self.left_view;
+        let area = if left_col.width > 0 {
+            Rect::new(left_col.x, area.y, area.right() - left_col.x, area.height)
+        } else {
+            area
+        };
+        let right_x = self.view.x;
         let (mut hits, mut drawn) = (vec![], vec![]);
         let (mut regions, mut headers) = (vec![], vec![]);
         let (mut y, (mut i, mut line)) = (area.y, self.all.top);
@@ -353,15 +381,32 @@ impl App {
                 } else {
                     ((none, none, none, none), 0)
                 };
-                let rest = Rect::new(area.x, y, area.width, height);
+                let rest = Rect::new(right_x, y, area.right() - right_x, height);
                 regions.push((rest, i, line));
+                if let Some(old) = self.section_left(i) {
+                    let col = Rect::new(left_col.x, y, left_col.width, height);
+                    regions.push((col, i, line));
+                    let blank = super::blank_threads(t);
+                    view::draw_text(
+                        buf,
+                        col,
+                        old,
+                        line,
+                        left,
+                        false,
+                        &self.state.loader,
+                        &self.theme,
+                        Some((none, none, none, none)),
+                        &blank,
+                    );
+                }
                 let (h, end) = view::draw_text(
                     buf,
                     rest,
                     f,
                     line,
                     left,
-                    self.state.wrap,
+                    self.all_wrap(),
                     &self.state.loader,
                     &self.theme,
                     Some(main),
@@ -650,17 +695,12 @@ impl App {
             self.main_file_mut().top = top;
             self.scroll_to_cursor(false);
         }
-        self.status = Some((
-            match (on, self.view_kind) {
-                (false, _) => "One file at a time".into(),
-                (true, ViewKind::File) => "All files".into(),
-                (true, kind) => format!(
-                    "All files shows in the whole-file view; the {} view shows one file",
-                    kind.name()
-                ),
-            },
-            false,
-        ));
+        let status = if on {
+            "All files"
+        } else {
+            "One file at a time"
+        };
+        self.status = Some((status.into(), false));
     }
 
     /// Puts the cursor back in file `i`, where it was in that file, with `top` at the top of

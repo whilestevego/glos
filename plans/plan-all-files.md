@@ -1,7 +1,8 @@
 # All files on one screen
 
-**Status:** In progress on branch `all-files`. Steps 1 and 2 are built, and the mode is off by
-default until step 6. Steps 3 to 5 come next, in a second pull request.
+**Status:** In progress on branch `all-files-2`. Steps 1 and 2 were merged on 2026-11-08 in
+PR #12. Steps 3 to 5 are built on this branch. The mode is off by default until step 6, the
+last pull request.
 
 Today glos shows one file at a time. You move between files with `gn` and `gp`, the tree, or
 `space g`. Search and the change keys (`]g`) stay inside the file on screen.
@@ -190,6 +191,23 @@ Step 4, in the second pull request:
 - **The tree already followed the cursor.** It marks the file on screen when it draws, so it
   needed no change, only a test.
 - **`gn` and `gp`** already went to a file's header in step 2.
+
+Steps 3 and 5, in the same pull request:
+
+- **Every view builds each file's view.** `built_for` now takes the file to build, so
+  `AllFiles::prepare` builds the unified or side-by-side view of each file near the screen, as
+  it builds the folded whole-file view. The cached views are built again when the view
+  changes. Switching views moves the top of the screen to the start of its file, because line
+  numbers differ between views, and the screen then follows the cursor.
+- **Side by side keeps two columns for every file.** `layout` splits the screen whenever
+  all-files mode is in the side-by-side view, even when the cursor's file is binary or
+  collapsed. Headers go across both columns, and each file's old side is drawn in the left
+  column with blank thread rows, as in one-file mode (`blank_threads`).
+- **Notices come from the file itself.** The built views have no notices, so "new file" and the
+  rest would have gone missing from the headers in the unified and side-by-side views.
+- **Step 5 was mostly done in step 2.** Clicks on the left column of side by side move the
+  cursor into that file. They don't place the cursor on a line of the old side, as one-file mode
+  doesn't either.
 
 ## Relevant code
 

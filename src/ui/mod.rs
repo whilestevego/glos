@@ -1061,7 +1061,10 @@ impl App {
         let (x, rest) = (tree_w, w - tree_w);
         self.view = Rect::new(x, 0, rest, h - box_h);
         self.left_view = Rect::default();
-        if self.split_left().is_some() {
+        // With every file on screen, side by side keeps its two columns whatever the cursor's
+        // file is.
+        let all_split = self.all_shown() && self.view_kind == ViewKind::Split;
+        if self.split_left().is_some() || all_split {
             let half = rest / 2;
             self.left_view = Rect::new(x, 0, half, h - box_h);
             self.view = Rect::new(x + half, 0, rest - half, h - box_h);
@@ -2475,8 +2478,14 @@ impl App {
             },
             A::AllFiles(on) => self.set_all_files(on.unwrap_or(!self.all.on)),
             A::View(kind) => {
+                let was = self.view_kind;
                 self.view_kind = kind;
                 self.ensure_alt();
+                // Lines differ between views, so the top of the screen goes to the start of
+                // its file, and the screen then follows the cursor.
+                if was != kind {
+                    self.all.top.1 = 0;
+                }
                 if kind != ViewKind::File && self.split_left().is_none() && self.alt.is_none() {
                     self.status = Some((
                         format!(
@@ -3289,21 +3298,9 @@ impl App {
     fn draw_one(&mut self, buf: &mut Buffer, styles: view::SelectionStyles) {
         let threads = self.main_threads();
         if let Some(left) = self.split_left() {
-            // The old side follows the new side's scroll; its thread rows are blank so the
-            // sides stay level.
+            // The old side follows the new side's scroll.
             let right = self.main_file();
-            let mut blank = Threads::default();
-            for (line, rows) in &threads.rows {
-                let pad = rows
-                    .iter()
-                    .map(|r| comments::ThreadRow {
-                        text: String::new(),
-                        style: Style::default(),
-                        thread: r.thread,
-                    })
-                    .collect();
-                blank.rows.insert(*line, pad);
-            }
+            let blank = blank_threads(&threads);
             let none = Style::default();
             view::draw(
                 buf,
@@ -3525,6 +3522,23 @@ fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
+}
+
+/// The old side's thread rows in the side-by-side view: blank, so the two sides stay level.
+fn blank_threads(threads: &Threads) -> Threads {
+    let mut blank = Threads::default();
+    for (line, rows) in &threads.rows {
+        let pad = rows
+            .iter()
+            .map(|r| comments::ThreadRow {
+                text: String::new(),
+                style: Style::default(),
+                thread: r.thread,
+            })
+            .collect();
+        blank.rows.insert(*line, pad);
+    }
+    blank
 }
 
 #[cfg(test)]
