@@ -63,8 +63,6 @@ pub enum Row {
     },
     Added(usize),
     Removed(usize),
-    /// A line of the file as it is, in the whole-file view when something in it is folded.
-    Line(usize),
     /// Rows folded away: from row `start` of the whole view, `len` of them, holding `changes`
     /// changed rows and `threads` threads (a fold you made can hide those), and the first and
     /// last lines they hide on each side, if any.
@@ -84,7 +82,7 @@ impl Row {
     /// The new side's line, for comments and threads.
     pub fn new_line(self) -> Option<usize> {
         match self {
-            Row::Same { new, .. } | Row::Added(new) | Row::Line(new) => Some(new),
+            Row::Same { new, .. } | Row::Added(new) => Some(new),
             _ => None,
         }
     }
@@ -579,14 +577,14 @@ pub fn draw_text(
             None if file.rows.is_some() => None,
             None => Some(line),
             Some(Row::Same { old, new }) => Some(if file.old_numbers { old } else { new }),
-            Some(Row::Added(n) | Row::Removed(n) | Row::Line(n)) => Some(n),
+            Some(Row::Added(n) | Row::Removed(n)) => Some(n),
             Some(Row::Fold { .. } | Row::Filler) => None,
         };
         let sign = match kind {
             Some(Row::Added(_)) => Some(("▍", added, true)),
             Some(Row::Removed(_)) => Some(("▍", deleted, true)),
             Some(Row::Fold { changes: 1.., .. }) => Some(("▍", modified, true)),
-            Some(Row::Line(_)) | None => {
+            None => {
                 file.hunks
                     .get(hunk_i)
                     .filter(|h| h.after.start <= l)
@@ -607,12 +605,12 @@ pub fn draw_text(
             .iter()
             .find(|(s, e, _)| *s <= line && line <= *e)
             .map(|m| m.2);
-        // A changed line's background. In the whole-file view the added and modified lines
-        // are tinted as additions, since they're the new text, and removed lines aren't shown.
+        // A changed line's background. A file drawn as it is, without a view, tints its added
+        // and modified lines as additions, since they're the new text.
         let (tint, word_tint) = match kind {
             Some(Row::Added(_)) => (plus_line, plus_word),
             Some(Row::Removed(_)) => (minus_line, minus_word),
-            Some(Row::Line(_)) | None => match file.hunks.get(hunk_i) {
+            None => match file.hunks.get(hunk_i) {
                 Some(h) if h.after.contains(&l) => (plus_line, plus_word),
                 _ => (None, None),
             },

@@ -152,8 +152,8 @@ fn next_file_and_the_picker_go_to_a_header() {
 #[test]
 fn a_comment_lands_on_the_file_under_the_cursor() {
     let mut t = all_files(72, 30, three);
-    t.keys("g g g n j");
-    // b.rs has one line, so j went on into c.rs.
+    t.keys("g g g n j j");
+    // b.rs has one line, so j went on into c.rs, past its removed line to its first new one.
     t.keys("x ' c").typed("on c").keys("esc ret");
     let threads = &t.app.state.threads;
     let a = threads[0].anchor.as_ref().unwrap();
@@ -222,14 +222,6 @@ fn all_files_is_on_unless_turned_off() {
 }
 
 #[test]
-fn all_files_unified() {
-    let mut t = all_files(72, 30, three);
-    t.keys("g g ' v u");
-    assert!(t.app.all_shown());
-    insta::assert_snapshot!(t.screen());
-}
-
-#[test]
 fn all_files_side_by_side() {
     let mut t = all_files(100, 30, three);
     t.keys("g g ' v s");
@@ -287,12 +279,12 @@ fn the_wheel_scrolls_through_every_file() {
 
 #[test]
 fn the_wheel_leaves_the_cursor_while_it_is_on_screen() {
-    // The cursor is in the middle of the screen, on b.rs's fifth line.
+    // The cursor is in the middle of the screen, on b.rs's fourth row.
     let mut t = four(30);
     t.keys("g g");
     t.keys(&"j ".repeat(12));
     let before = at(&t);
-    assert_eq!(before, ("b.rs".into(), 5));
+    assert_eq!(before, ("b.rs".into(), 4));
     t.mouse(MouseEventKind::ScrollDown, 30, 5);
     assert_eq!(at(&t), before);
     assert_ne!(t.app.all.top, (0, 0));
@@ -486,7 +478,7 @@ fn next_change_goes_on_into_the_next_file() {
     assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
     t.keys("] g");
     assert_eq!(t.path(), "c.rs");
-    assert!(t.sel().starts_with("#[new\nnewer"), "{}", t.sel());
+    assert!(t.sel().starts_with("#[old\nnew\nnewer"), "{}", t.sel());
     // There's nothing after the last file's last change, and the cursor stays.
     t.keys("] g");
     assert_eq!(t.path(), "c.rs");
@@ -620,8 +612,9 @@ fn syntax_jumps_go_on_into_the_next_file() {
 #[test]
 fn a_count_on_j_and_k_carries_on_into_the_next_file() {
     let mut t = four(40);
+    // a.rs is nine rows: its removed line and eight new ones.
     t.keys("g g 1 0 j");
-    assert_eq!(at(&t), ("b.rs".into(), 3));
+    assert_eq!(at(&t), ("b.rs".into(), 2));
     t.keys("5 k");
     assert_eq!(at(&t), ("a.rs".into(), 6));
 }
@@ -664,7 +657,7 @@ fn the_last_and_first_change_are_the_reviews() {
     let mut t = all_files(72, 30, three);
     t.keys("g g ] G");
     assert_eq!(t.path(), "c.rs");
-    assert!(t.sel().starts_with("#[new\nnewer"), "{}", t.sel());
+    assert!(t.sel().starts_with("#[old\nnew\nnewer"), "{}", t.sel());
     t.keys("[ G");
     assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
 }

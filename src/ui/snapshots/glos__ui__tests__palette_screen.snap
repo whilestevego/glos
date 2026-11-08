@@ -4,11 +4,11 @@ expression: t.screen()
 ---
     1  fn main() {
     2┌ Keys · context: normal ────────────────────────────────────────────────────────────────┐
-    3│                                                                                153/153 │
-    4│────────────────────────────────────────────────────────────────────────────────────────│
-    5│   keys     Normal mode                                                                 │
-     │ > h, left  Move left                                                                   │
-     │   j, down  Move down                                                                   │
+    2│                                                                                152/152 │
+    3│────────────────────────────────────────────────────────────────────────────────────────│
+    4│   keys     Normal mode                                                                 │
+    4│ > h, left  Move left                                                                   │
+    5│   j, down  Move down                                                                   │
      │   k, up    Move up                                                                     │
      │   l, right Move right                                                                  │
      │   t        Move till next occurrence of char                                           │

@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests.rs
-assertion_line: 1358
 expression: t.screen()
 ---
     1  fn main() {
@@ -15,4 +14,4 @@ expression: t.screen()
 
 
 
- NOR  main.rs · unified                           1/1 files  1 sel  2:1
+ NOR  main.rs                                     1/1 files  1 sel  2:1

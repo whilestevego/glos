@@ -1,14 +1,14 @@
 ---
-source: src/ui/mod.rs
-expression: "screen(&mut app(d.path()), \"v 2 w\")"
+source: src/ui/tests.rs
+expression: "T::files(OLD, NEW).keys(\"v 2 w\").screen()"
 ---
     1  fn main() {
+    2 ▍    println!("hi");
     2 ▍    println!("hello");
     3 ▍    let x = 1;
     4  }
-    5 ▔
-
-
+    4 ▍
+    5 ▍fn gone() {}
 
 
 

@@ -377,9 +377,9 @@ Summary: 154 done, 147 not applicable, 16 to do, 4 replaced.
 | `' s a` | `submit_approve` |
 | `' s r` | `submit_changes` |
 | `' s c` | `submit_comment` |
-| `' v f` | `view_file` |
 | `' v u` | `view_unified` |
 | `' v s` | `view_split` |
+| `' v a` | `toggle_all_files` |
 | `' o b` | `scope_base` |
 | `' o r` | `scope_since_review` |
 | `' o c` | `scope_commits` |

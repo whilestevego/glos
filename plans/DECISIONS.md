@@ -508,3 +508,18 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
   and outdated a thread when the agent fixed a typo in it.
 - **Rejected:** fuzzy search across the whole file, which finds look-alike code anywhere, and no
   search at all, which outdates every thread whose code moved.
+
+## Unified and side by side only (2026-11-08)
+
+- **Chosen:** the whole-file view is removed, and unified is the default view. `' v u` and
+  `' v s` switch between unified and side by side, and `:view` takes `unified` or `split`.
+- **Why:** once the whole-file view folded unchanged code, it showed the same changes with the
+  same context as unified, and differed only by hiding the removed lines. The reviewer couldn't
+  tell the two apart, and the plan to draw removed lines in it would have made them the same.
+- **Rejected:** keeping the whole-file view and drawing removed lines in it
+  (`abandoned/plan-removed-lines.md`), and making it show the whole file again by not folding,
+  which undoes folding by default.
+- **Open:** `plan-in-place-editing.md` edited only in the whole-file view, because the other views
+  mix lines from both sides. Editing now has to work in unified, on the new side's lines.
+- **Supersedes:** "full file + gutter by default" under "Views", and the whole-file part of
+  "Folding".

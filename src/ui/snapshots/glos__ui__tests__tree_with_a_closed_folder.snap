@@ -4,7 +4,7 @@ expression: t.screen()
 ---
  Changed files         │ new file
  README.md          +1 │    1 ▍x
- ▾ src/             +3 │    2
+ ▾ src/             +3 │
    main.rs          +1 │
    ▾ ui/            +2 │
      mod.rs         +1 │

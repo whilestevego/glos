@@ -39,8 +39,8 @@ pub(super) struct AllFiles {
     /// The place at the top of the screen.
     pub top: Pos,
     /// The view of each file drawn that the cursor isn't in, with its old side in the
-    /// side-by-side view. It's `None` when the file itself is drawn: in the whole-file view
-    /// with nothing folded, or for a binary or collapsed file.
+    /// side-by-side view. It's `None` when the file itself is drawn, for a binary or collapsed
+    /// file.
     docs: HashMap<usize, Option<(File, Option<File>)>>,
     /// What `docs` were built with: the generation of the threads and files, the lines of
     /// context and the view. Any of them changing builds them again.
@@ -93,10 +93,8 @@ impl App {
         }
         let path = self.state.source.changes[i].path.clone();
         let base = self.state.files[i].as_ref().expect("loaded above");
-        let whole = self.view_kind == ViewKind::File;
         let doc = self
             .built_for(&Cur::Change(i), &path, base)
-            .filter(|b| b.folded || !whole)
             .map(|b| (b.doc, b.left));
         self.all.docs.insert(i, doc);
     }

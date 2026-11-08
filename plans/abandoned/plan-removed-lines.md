@@ -1,6 +1,9 @@
 # Removed lines in the whole-file view
 
-**Status:** Draft (2026-11-06).
+**Status:** Abandoned (2026-11-08). The whole-file view it would have changed was removed, and the
+unified view, now the default, already shows removed lines at their change. `plans/DECISIONS.md`
+records why under "Unified and side by side only". A view of the new file alone, without removed
+lines, would bring it back.
 
 The whole-file view shows the new file, with changes marked in the gutter. When a change deleted
 or replaced lines, you can't see what was there without switching to the unified or

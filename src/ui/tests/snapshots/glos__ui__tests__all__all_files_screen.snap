@@ -7,6 +7,7 @@ expression: t.screen()
      17  line 17
      18  line 18
      19  line 19
+     20 ▍line 20
      20 ▍line twenty
      21  line 21
      22  line 22
@@ -18,10 +19,9 @@ expression: t.screen()
     1 ▍fn b() {}
 
 ── ▼ c.rs  +2 -1 ───────────────────────────────────────────────────────
+    1 ▍old
     1 ▍new
     2 ▍newer
-
-
 
 
 

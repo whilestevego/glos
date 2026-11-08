@@ -244,7 +244,7 @@ fn styles_follow_the_theme() {
         t.cell(4, 3).fg,
         theme.get("ui.linenr").fg.unwrap_or(Color::Reset)
     );
-    // Lines 2–3 replace one old line, so they're one modified hunk; line 5 shows a removal.
+    // Row 2 is the removed line, rows 3 and 4 the lines added in its place.
     let sign = |y| {
         (
             t.cell(gutter - 1, y).symbol().to_string(),
@@ -252,9 +252,9 @@ fn styles_follow_the_theme() {
         )
     };
     let fg = |scope| theme.get(scope).fg.unwrap_or(Color::Reset);
-    assert_eq!(sign(1), ("▍".into(), fg("diff.delta.gutter")));
-    assert_eq!(sign(2), ("▍".into(), fg("diff.delta.gutter")));
-    assert_eq!(sign(4), ("▔".into(), fg("diff.minus.gutter")));
+    assert_eq!(sign(1), ("▍".into(), fg("diff.minus.gutter")));
+    assert_eq!(sign(2), ("▍".into(), fg("diff.plus.gutter")));
+    assert_eq!(sign(3), ("▍".into(), fg("diff.plus.gutter")));
     assert_eq!(sign(0).0, " ");
 }
 
@@ -1579,13 +1579,13 @@ impl T {
 }
 
 #[test]
-fn changed_lines_are_tinted_in_the_file_view() {
+fn changed_lines_are_tinted_to_the_edge() {
     let mut t = T::files(OLD, NEW);
     let plus = t.bg("diff.plus.line");
     assert!(plus.is_some() && plus != t.bg("ui.background"));
     let x0 = t.app.main_file().gutter_width() as u16;
-    // Lines 2 and 3 are modified and added; both are the new text, so both take the plus tint.
-    for y in [1, 2] {
+    // Rows 3 and 4 are the new lines 2 and 3, under the removed line they replace.
+    for y in [2, 3] {
         assert_eq!(t.cell_bg(x0 + 4, y), plus, "line {}", y + 1);
         assert_eq!(
             t.cell_bg(71, y),
@@ -1596,13 +1596,13 @@ fn changed_lines_are_tinted_in_the_file_view() {
         assert_ne!(t.cell_bg(0, y), plus, "the gutter isn't tinted");
         assert_ne!(t.cell_bg(x0 - 1, y), plus, "nor the diff sign");
     }
-    for y in [0, 3] {
-        assert_ne!(t.cell_bg(x0 + 1, y), plus, "line {} is unchanged", y + 1);
+    for y in [0, 4] {
+        assert_ne!(t.cell_bg(x0 + 1, y), plus, "row {} is unchanged", y + 1);
     }
-    // The cursor opens on line 2, and is drawn over the tint, as is a selection. A theme draws
-    // them with a background of their own, or by reversing the colours.
+    // The cursor opens on the new line 2, and is drawn over the tint, as is a selection. A
+    // theme draws them with a background of their own, or by reversing the colours.
     let drawn_over = |t: &T, x, style: ratatui::style::Style| {
-        let cell = t.cell(x, 1);
+        let cell = t.cell(x, 2);
         match style.bg {
             Some(bg) => cell.bg == bg,
             None => cell.modifier.contains(style.add_modifier),
@@ -1621,7 +1621,6 @@ fn removed_and_added_lines_are_tinted_in_the_unified_and_split_views() {
     let mut t = T::files(OLD, NEW);
     let (plus, minus) = (t.bg("diff.plus.line"), t.bg("diff.minus.line"));
     assert_ne!(plus, minus);
-    t.keys("' v u");
     let x0 = t.app.main_file().gutter_width() as u16;
     // Rows: same, removed, added, added, same, removed, removed.
     let rows: Vec<_> = (0..7).map(|y| t.cell_bg(70, y)).collect();
@@ -1656,22 +1655,15 @@ fn changed_words_get_a_stronger_tint_in_every_view() {
             .map(|i| t.cell_bg(x0 + 14 + i, y))
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        word(&t, x0, 1, 5),
-        vec![plus_word; 5],
-        "hello, in the file view"
-    );
-    assert_eq!(t.cell_bg(x0 + 6, 1), plus, "println, unchanged");
-    assert_eq!(t.cell_bg(x0 + 20, 1), plus, "the quote after it");
-    assert!(
-        (x0..x0 + 14).all(|x| t.cell_bg(x, 2) != plus_word),
-        "an added line with no pair has no words"
-    );
-    t.keys("' v u");
-    let x0 = t.app.main_file().gutter_width() as u16;
     assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, removed");
     assert_eq!(word(&t, x0, 2, 5), vec![plus_word; 5], "hello, added");
     assert_eq!(t.cell_bg(x0 + 16, 1), minus, "the quote after hi");
+    assert_eq!(t.cell_bg(x0 + 6, 2), plus, "println, unchanged");
+    assert_eq!(t.cell_bg(x0 + 20, 2), plus, "the quote after hello");
+    assert!(
+        (x0..x0 + 14).all(|x| t.cell_bg(x, 3) != plus_word),
+        "an added line with no pair has no words"
+    );
     t.keys("' v s");
     let right = col(&t, 1, "2 ▍", true) + 3;
     assert_eq!(word(&t, x0, 1, 2), vec![minus_word; 2], "hi, on the left");
@@ -1745,9 +1737,7 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     let old = lines(20);
     let new = old.replace("line 10\n", "line ten\n");
     let mut t = T::files(&old, &new);
-    t.keys("' v u");
     assert!(t.shows("↕ lines 1–6 (6)"), "{}", t.screen());
-    assert!(t.shows(" unified"));
     // The cursor opens on the change; the line above it is the removed one.
     assert_eq!(t.app.cursor_new_line(), 9);
     t.keys("k space c");
@@ -1761,11 +1751,11 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     assert!(t.shows("Comment on main.rs:10 "), "{}", t.screen());
     t.typed("ten?").keys("esc ret");
     assert_eq!(t.thread_lines(), [(10, 10, "open".into())]);
-    // The thread shows under its line in the view, and in the file view too.
+    // The thread shows under its line, in this view and side by side.
     assert!(t.shows("▸ you: ten?"));
     let row = |t: &T, s: &str| t.screen().lines().position(|l| l.contains(s)).unwrap();
     assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
-    t.keys("' v f");
+    t.keys("' v s");
     assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
 }
 
@@ -2116,15 +2106,20 @@ fn file_tree() {
 #[test]
 fn view_and_scope_help_list_what_applies() {
     let mut t = T::files(OLD, NEW);
+    // The view on screen isn't offered.
     t.keys("' v");
-    assert!(!t.shows("The whole file") && t.shows("Unified") && t.shows("Side by side"));
+    assert!(
+        !t.shows("Unified") && t.shows("Side by side"),
+        "{}",
+        t.screen()
+    );
     t.keys("esc ' o");
     assert!(!t.shows("One commit at a time"), "not git");
     assert!(!t.shows("Since your last review"), "nothing submitted");
     assert!(t.shows("Filter files"));
     t.keys("esc");
     let (_, items) = completions("view ");
-    assert_eq!(items.len(), 3);
+    assert_eq!(items.len(), 2);
 }
 
 #[test]
@@ -2598,8 +2593,8 @@ fn row_of(t: &T, s: &str) -> usize {
         .unwrap_or_else(|| panic!("{s} not shown:\n{}", t.screen()))
 }
 
-const FOLDED: &str = "↕ lines 1–16 (16)  ret opens\nline 17\nline 18\nline 19\nline twenty\n\
-                      line 21\nline 22\nline 23\n↕ lines 24–40 (17)  ret opens\n";
+const FOLDED: &str = "↕ lines 1–16 (16)  ret opens\nline 17\nline 18\nline 19\nline 20\n\
+                      line twenty\nline 21\nline 22\nline 23\n↕ lines 24–40 (17)  ret opens\n";
 
 #[test]
 fn folded_file_view() {
@@ -2616,7 +2611,7 @@ fn a_review_opens_folded_on_its_changes() {
     assert!(t.shows("   20 ▍line twenty"), "{}", t.screen());
     // A file with nothing far from its changes isn't folded at all.
     let t = T::files(OLD, NEW);
-    assert!(t.app.file().rows.is_none());
+    assert!(!text(&t).contains('↕'), "{}", text(&t));
     // Nor is one opened for context.
     let mut t = T::folders(|o, n| {
         std::fs::write(o.join("a"), "x\n").unwrap();
@@ -2648,8 +2643,10 @@ fn opening_and_closing_folds() {
     assert_eq!(t.said(), "No fold here");
     // zR shows the whole file; zM folds everything again.
     t.keys("z R");
-    assert!(t.app.file().rows.is_none(), "the file itself");
-    assert_eq!(text(&t), lines(40).replace("line 20\n", "line twenty\n"));
+    assert_eq!(
+        text(&t),
+        lines(40).replace("line 20\n", "line 20\nline twenty\n")
+    );
     assert_eq!(t.app.cursor_new_line(), 19, "the cursor stays");
     t.keys("z M");
     assert_eq!(text(&t), FOLDED);
@@ -2658,7 +2655,7 @@ fn opening_and_closing_folds() {
     assert_eq!(t.said(), "No fold here");
     // Sticky Z works too.
     t.keys("Z R esc");
-    assert!(t.app.file().rows.is_none());
+    assert!(!text(&t).contains('↕'));
 }
 
 #[test]
@@ -2689,7 +2686,7 @@ fn context_lines_and_the_cursor_staying_put() {
     assert_eq!(t.said(), "0 lines of context");
     assert_eq!(
         text(&t),
-        "↕ lines 1–19 (19)  ret opens\nline twenty\n↕ lines 21–40 (20)  ret opens\n"
+        "↕ lines 1–19 (19)  ret opens\nline 20\nline twenty\n↕ lines 21–40 (20)  ret opens\n"
     );
     t.keys("z minus");
     assert_eq!(t.said(), "0 lines of context", "never below 0");
@@ -2697,7 +2694,7 @@ fn context_lines_and_the_cursor_staying_put() {
     t.keys("g g z o z +");
     assert!(text(&t).starts_with("line 1\n"), "{}", text(&t));
     // The context applies to every file and view.
-    t.keys("' v u");
+    t.keys("' v s");
     assert!(t.shows("line twenty"));
     assert!(t.shows("line 19") && !t.shows("line 18"), "{}", t.screen());
 }
@@ -2806,7 +2803,7 @@ fn unified_and_side_by_side_fold_with_the_same_keys() {
     t.keys("' v u");
     assert!(text(&t).starts_with("↕ lines 1–16"));
     // A comment next to a fold goes on the right line.
-    t.keys("' v f g g j x space c");
+    t.keys("g g j x space c");
     assert!(t.shows("Comment on main.rs:17 "), "{}", t.screen());
 }
 
@@ -2829,12 +2826,8 @@ fn tree_sitter_objects_and_motions() {
         "{}",
         t.sel()
     );
+    // Objects come from the new side and select its rows, with the removed ones among them.
     t.keys("g g ] f");
-    assert!(t.sel().contains("#[fn b() {\n    two\n}|]#"), "{}", t.sel());
-    t.keys("[ f");
-    assert!(t.sel().contains("#[|fn a() {\n    1\n}]#"), "{}", t.sel());
-    // In the unified view, objects come from the new side and select its rows.
-    t.keys("' v u g g ] f");
     assert!(
         t.sel().contains("#[fn b() {\n    2\n    two\n}|]#"),
         "{}",
@@ -2868,7 +2861,8 @@ fn a_text_object_opens_the_folds_it_covers() {
     assert!(t.sel().starts_with("#[fn a() {"), "{}", t.sel());
     assert!(t.sel().ends_with("}|]#\n"), "{}", t.sel());
     t.keys("z f");
-    assert_eq!(text(&t), "↕ lines 1–22 (22) · 1 changed  ret opens\n");
+    // The fold holds the function's 22 lines and the removed line, two changed rows.
+    assert_eq!(text(&t), "↕ lines 1–22 (23) · 2 changed  ret opens\n");
     // The status bar gives the line a fold starts on.
     assert!(
         t.screen().lines().any(|l| l.ends_with("sel  1:1")),
@@ -2922,3 +2916,17 @@ fn a_fold_is_a_band_across_the_view() {
 mod all;
 mod mouse;
 mod perf;
+
+#[test]
+fn a_line_number_goes_to_that_line_past_removed_lines_and_folds() {
+    // Line 20 was replaced, so the view has a removed row above it, and folds before and after.
+    let mut t = folded();
+    t.keys(":").typed("21").keys("ret");
+    assert!(t.sel().contains("#[l|]#ine 21"), "{}", t.sel());
+    // A folded line comes out of its fold.
+    t.keys("3 0 G");
+    assert!(t.sel().contains("#[l|]#ine 30"), "{}", t.sel());
+    t.keys("5 g g");
+    assert!(t.sel().contains("#[l|]#ine 5\n"), "{}", t.sel());
+    assert!(t.shows("    5  line 5"), "{}", t.screen());
+}

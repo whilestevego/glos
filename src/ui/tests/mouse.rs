@@ -13,7 +13,8 @@ const UP: MouseEventKind = MouseEventKind::ScrollUp;
 fn many() -> T {
     let mut t = T::folders(|o, n| {
         for i in 0..30 {
-            std::fs::write(o.join(format!("f{i:02}.rs")), lines(40)).unwrap();
+            // Every line added and none removed, so the view is the file's 40 lines.
+            std::fs::write(o.join(format!("f{i:02}.rs")), "").unwrap();
             let new: String = (1..=40).map(|l| format!("new {l}\n")).collect();
             std::fs::write(n.join(format!("f{i:02}.rs")), new).unwrap();
         }
@@ -249,7 +250,7 @@ fn sideways_scrolling() {
     t.mouse(MouseEventKind::ScrollRight, 60, 5);
     assert_eq!(left(&t), 6);
     // With soft wrap on, sideways scrolling does nothing.
-    t.keys("' v f g g");
+    t.keys("' v u g g");
     t.keys(":").typed("toggle soft-wrap").keys("ret");
     t.mouse(MouseEventKind::ScrollRight, 30, 5);
     assert_eq!(left(&t), 0);

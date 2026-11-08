@@ -62,7 +62,7 @@ impl App {
     }
 
     /// The view of `cur`, whose path is `path` and whose file is `base`, folded as it is now;
-    /// `None` for a binary or collapsed file, or a context file outside the whole-file view.
+    /// `None` for a binary or collapsed file, or a context file, which has no diff.
     pub(super) fn built_for(&self, cur: &Cur, path: &str, base: &File) -> Option<Built> {
         if base.binary || base.collapsed {
             return None;
@@ -74,19 +74,6 @@ impl App {
             .cloned()
             .unwrap_or_default();
         let (kind, ctx) = (self.view_kind, self.diff_context);
-        if kind == ViewKind::File {
-            return Some(diffview::build(
-                kind,
-                base,
-                base,
-                &base.hunks,
-                ctx,
-                &folds,
-                &threads,
-                &self.state.loader,
-                &self.theme,
-            ));
-        }
         let Cur::Change(i) = *cur else {
             return None; // a context file has no diff
         };
@@ -119,12 +106,11 @@ impl App {
         let Some(b) = self.built() else {
             return;
         };
-        if self.view_kind == ViewKind::File && !b.folded {
-            return;
-        }
         let threads = self.fold_threads();
         let base = self.base_file();
         let mut doc = b.doc;
+        // A view has no notices of its own, and the file's say what kind of change it is.
+        doc.notices = base.notices.clone();
         let t = base.text.slice(..);
         let cursor = base.sel.primary().cursor(t);
         let line = t.char_to_line(cursor);
@@ -151,7 +137,7 @@ impl App {
     }
 
     /// The view on screen, if it's built.
-    fn shown_alt(&self) -> Option<&Alt> {
+    pub(super) fn shown_alt(&self) -> Option<&Alt> {
         self.alt
             .as_ref()
             .filter(|a| a.cur == self.state.cur && a.kind == self.view_kind)
@@ -393,8 +379,9 @@ impl App {
             && a.threads != self.fold_threads()
         {
             self.refold(None);
-        } else if self.shown_alt().is_none() && self.view_kind == ViewKind::File {
-            // A whole file may now fold, now that a thread moved.
+        } else if self.shown_alt().is_none() {
+            // Nothing is built yet, as when glos starts, or a file may now fold now that a
+            // thread moved.
             self.build_alt();
         }
     }
@@ -490,10 +477,12 @@ fn to_base(view: &File, base: &File, pos: usize) -> usize {
     let (vt, bt) = (view.text.slice(..), base.text.slice(..));
     let line = vt.char_to_line(pos);
     let col = pos - vt.line_to_char(line);
-    let n = view
-        .new_line_near(line)
-        .unwrap_or(0)
-        .min(bt.len_lines() - 1);
+    // Past the view's last row is the end of the file.
+    let past_end = view.rows.as_ref().is_some_and(|r| line >= r.len());
+    let (false, Some(n)) = (past_end, view.new_line_near(line)) else {
+        return bt.len_chars();
+    };
+    let n = n.min(bt.len_lines() - 1);
     let len = glos_helix::text::line_end_char_index(&bt, n) - bt.line_to_char(n);
     let col = if view.new_line_at(line).is_some() {
         col.min(len)

@@ -57,8 +57,8 @@ for output a program can read.
 1. The agent finishes its work and asks for a review. If glos is already open, you'll see the
    request at the bottom of the screen. If not, run `glos` in the project folder.
 2. Read through the changes. Every changed file is in one scroll, each under its own header.
-   Unchanged code is folded away, leaving three lines around each change. Changed lines are
-   marked in the gutter. `]g` jumps to the next change and `gn` to the next file. The file tree
+   Unchanged code is folded away, leaving three lines around each change. Each removed line
+   shows in red right above the lines that replaced it, and added lines show in green. `]g` jumps to the next change and `gn` to the next file. The file tree
    on the left shows every changed file.
 3. To comment, put the cursor on a line (or select a few with `x`) and press `' c`. Type your
    comment, press `esc`, then `enter` to save it. You can't lose a comment: everything is saved
@@ -88,7 +88,7 @@ and the rest. On top of those, it adds keys for reviewing:
 | `' M` | Delete your latest comment, if it isn't sent yet |
 | `' x` | Resolve or reopen a thread |
 | `' s` | Submit the review |
-| `' v` | Change the view: whole file, unified, or side by side |
+| `' v` | Change the view: unified or side by side, or one file at a time |
 | `' o` | Change what's shown: the whole branch, since your last review, one commit at a time, or a filter |
 | `' d` | Pick a thread in this file (`' D` for the whole review) |
 | `' l` | The dashboard: every open review |
