@@ -200,7 +200,22 @@ fn a_file_that_is_no_longer_changed_hands_over_to_the_next() {
 }
 
 #[test]
-fn all_files_is_off_unless_set() {
+fn all_files_is_on_unless_turned_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let (o, n) = (dir.path().join("old"), dir.path().join("new"));
+    std::fs::create_dir_all(&o).unwrap();
+    std::fs::create_dir_all(&n).unwrap();
+    three(&o, &n);
+    let t = T::new(
+        Source::diff(&o, &n).unwrap(),
+        dir,
+        100,
+        30,
+        &Config::default(),
+    );
+    assert!(t.app.all_shown());
+    assert!(t.screen().contains("── ▼ b.rs  +1 -0"), "{}", t.screen());
+    // With the setting off, glos shows one file at a time.
     let t = T::folders(three);
     assert!(!t.app.all_shown());
     assert!(!t.screen().contains("b.rs  +1 -0"));

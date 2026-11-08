@@ -34,7 +34,7 @@ A removed line's text and highlighting come from the old side's `File`, which `s
 already builds for the other views. Its changed words come from `src/diff_words.rs` `changed`,
 which already works out both sides.
 
-In the all-files mode of `plan-all-files.md`, a file's row count includes its removed lines, so
+In the all-files mode of `completed/plan-all-files.md`, a file's row count includes its removed lines, so
 the scroll stays exact.
 
 ## Steps

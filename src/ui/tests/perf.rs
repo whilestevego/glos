@@ -60,9 +60,11 @@ fn source_file(n: usize, edit: bool) -> String {
 }
 
 /// Two folders of `files` changed files of `lines` lines each, opened on a 160×48 screen
-/// with the file tree, as glos starts by default.
+/// with the file tree, one file at a time. `perf_all_files` covers all-files mode.
 fn big_review(files: usize, lines: usize) -> T {
-    big_review_with(files, lines, &Config::default())
+    let mut config = Config::default();
+    config.editor.all_files = false;
+    big_review_with(files, lines, &config)
 }
 
 fn big_review_with(files: usize, lines: usize, config: &Config) -> T {
@@ -140,8 +142,7 @@ fn perf_keys_through_a_big_review() {
 
 #[test]
 fn perf_all_files() {
-    let mut config = Config::default();
-    config.editor.all_files = true;
+    let config = Config::default();
     // Opening reads and highlights only the files on the first screen.
     let mut t = within("open 150 files × 2,000 lines, all files", 2_000, || {
         big_review_with(150, 2_000, &config)

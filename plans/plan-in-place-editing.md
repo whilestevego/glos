@@ -19,7 +19,7 @@ Edits in glos are for quick fixes. Bigger work stays in your editor, as the over
   disk, and the editing keys say so in the status line and do nothing.
 - **Only in the whole-file view.** The unified and side-by-side views are made of lines from both
   sides (`src/ui/diffview.rs`), so they stay read-only. Editing in the all-files mode of
-  `plan-all-files.md` is a later step, below.
+  `completed/plan-all-files.md` is a later step, below.
 
 ## How it works
 
@@ -89,7 +89,7 @@ with `plan-language-servers.md`.
 3. Merge an agent's change into a modified file.
 4. List your saved edits in `wait_for_review` and `glos show`.
 5. Move the comment box onto the same editing commands.
-6. Edit in the whole-file view of the all-files mode, once `plan-all-files.md` is built. An edit
+6. Edit in the whole-file view of the all-files mode, now that `completed/plan-all-files.md` is built. An edit
    there goes to the file of the section the cursor is in.
 
 ## Tests

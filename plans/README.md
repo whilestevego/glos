@@ -31,7 +31,6 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 
 | Plan | Status |
 |---|---|
-| [plan-all-files.md](plan-all-files.md) | In progress. Every changed file in one scroll, searchable, in each view, and the default. Steps 1 and 2 are merged, and steps 3 to 5 are built. |
 | [plan-review-menu.md](plan-review-menu.md) | In progress. Review commands move under `'` so Helix gets its keys back. Step 1 builds the menu. Steps 2 and 3 remove the old keys when Helix needs them. |
 | [plan-language-servers.md](plan-language-servers.md) | Draft. Diagnostics, going to definitions and references, hover and symbol pickers. Needs step 2 of `plan-review-menu.md`. |
 | [plan-in-place-editing.md](plan-in-place-editing.md) | Draft. Edit any file on disk with Helix's keys, and merge an agent's changes into unsaved edits. Needs step 3 of `plan-review-menu.md`. |
@@ -53,6 +52,7 @@ None.
 
 | Plan | Delivered |
 |---|---|
+| [completed/plan-all-files.md](completed/plan-all-files.md) | 2026-11-08, PRs #12, #13 and #14. Every changed file in one scroll, by default, in each view, with search and jumps that cross files. |
 | [completed/plan-default-theme.md](completed/plan-default-theme.md) | 2026-11-06, PR #10. catppuccin_mocha is the default theme, and 256-colour diff tints are green and red instead of grey. |
 | [completed/plan-diff-highlight.md](completed/plan-diff-highlight.md) | 2026-11-06, PR #9. Changed lines get a tint mixed from the theme, and changed words get a stronger one. |
 | [completed/plan-keymap-contexts.md](completed/plan-keymap-contexts.md) | 2026-11-06, PR #8. One keymap binds every context's keys, and `Ctrl-G` names the context in its border. |

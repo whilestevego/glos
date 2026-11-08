@@ -174,15 +174,22 @@ reviews older than a set age and any snapshot content nothing refers to any more
 
 ## Viewing the code
 
-Three views, all on the same review. `space v` (or `:view <name>`) switches between them and keeps
-your place:
+Every changed file is shown in one scroll, each under a header with its path, its added and
+removed lines and its open threads, as GitHub's "Files changed" page does. Only the files near
+the screen are read. Moving, searching and jumping carry on from one file into the next, and a
+click on a header collapses its file. `' v a`, `:one` and `:all` switch to one file at a time
+and back, and `[editor] all-files = false` starts glos that way. `completed/plan-all-files.md`
+has the details.
+
+Three views, all on the same review. `' v` (or `:view <name>`) switches between them and keeps
+your place, in one scroll or one file at a time:
 
 - **Full file + gutter (default):** the whole new file, changed lines marked in the gutter as Helix
   does. Removed lines can be shown inline under a change on demand.
 - **Unified:** classic hunks with context, best in narrow panes.
 - **Side by side:** old and new in two columns.
 
-Scopes, switched with `space o` or `:scope`, which you can combine with a files filter:
+Scopes, switched with `' o` or `:scope`, which you can combine with a files filter:
 
 - **Old vs new** (default for two files or folders).
 - **Branch vs base** (default for git): the merge-base with `main` (or origin's default branch)
@@ -196,7 +203,8 @@ colour, and the words that changed within it get a stronger tint, as on GitHub a
 In the whole-file view, added and modified lines take the addition tint, since they're the new
 text. `plan-diff-highlight.md` has the details.
 
-Navigation: the changed-file picker (`space g`) is primary; `gn` / `gp` step through changed files;
+Navigation: the changed-file picker (`space g`) is primary; `gn` / `gp` step through changed files,
+going to a file's header in one scroll;
 `space f` opens any file in the repo, read-only, for context; `space e` toggles a file tree with
 change counts and thread badges. Threads are drawn inline under their lines as virtual text,
 collapsed to a one-line marker until you open them, like Helix's inline diagnostics.
@@ -576,7 +584,7 @@ the dashboard.
 - **After the MVP:** in-place editing with the Helix model (`edit`), remappable keys, and polish;
   channel push once Claude Code channels are no longer experimental. Editing and channels now
   have plans, `plan-in-place-editing.md` and `plan-channels.md`, along with
-  `plan-language-servers.md` and `plan-all-files.md`.
+  `plan-language-servers.md` and `completed/plan-all-files.md`.
 
 In-place editing is listed after the MVP because the reviewer is useful without it, and it's the
 largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be needed daily.

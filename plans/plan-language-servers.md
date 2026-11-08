@@ -98,7 +98,7 @@ Going to a definition in a file outside the review opens it for context, as `spa
 
 - Should diagnostics be part of the review? For example, `' s` could warn before you
   approve a change with errors in it, or the agent could get the diagnostics with your review.
-- In the all-files mode of `plan-all-files.md`, should `space d` list every changed file's
+- In the all-files mode of `completed/plan-all-files.md`, should `space d` list every changed file's
   diagnostics rather than one file's?
 
 ## Relevant code

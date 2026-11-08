@@ -56,9 +56,10 @@ for output a program can read.
 
 1. The agent finishes its work and asks for a review. If glos is already open, you'll see the
    request at the bottom of the screen. If not, run `glos` in the project folder.
-2. Read through the changes. Unchanged code is folded away, leaving three lines around each
-   change. Changed lines are marked in the gutter. `]g` jumps to the next change and `gn` to the
-   next file. The file tree on the left shows every changed file.
+2. Read through the changes. Every changed file is in one scroll, each under its own header.
+   Unchanged code is folded away, leaving three lines around each change. Changed lines are
+   marked in the gutter. `]g` jumps to the next change and `gn` to the next file. The file tree
+   on the left shows every changed file.
 3. To comment, put the cursor on a line (or select a few with `x`) and press `' c`. Type your
    comment, press `esc`, then `enter` to save it. You can't lose a comment: everything is saved
    as you type, even if you quit or glos crashes.
@@ -106,17 +107,16 @@ still work as before.
 
 ### All files in one scroll
 
-`' v a` switches between showing one file at a time and showing every changed file in one
-scroll. Each file starts with a rule across the screen that names its path, its added and
-removed lines, and its open threads. While you scroll through a file, its header stays pinned
-to the top of the screen. `:all` and `:one` also switch, and `all-files = true` in the settings
-starts glos in one scroll.
+glos shows every changed file in one scroll, as GitHub's "Files changed" page does. Each file
+starts with a rule across the screen that names its path, its added and removed lines, and its
+open threads. While you scroll through a file, its header stays pinned to the top of the screen.
+`' v a` switches to one file at a time and back, and so do `:one` and `:all`. To start glos with
+one file at a time, set `all-files = false` in the settings.
 
 Click a file's header to collapse the file, and click it again to expand it. A collapsed file
-shows a line such as `↕ 42 lines` under its header in place of its code, and a click
-on that line expands it too.
-`enter` does the same for the file the cursor is in, unless the cursor is on a fold or a thread.
-A collapsed file keeps its folds, so it opens again as you left it.
+shows a line such as `↕ 42 lines` under its header in place of its code, and a click on that
+line expands it too. `enter` does the same for the file the cursor is in, unless the cursor is
+on a fold or a thread. A collapsed file keeps its folds, so it opens again as you left it.
 
 In one scroll, `j` and `k` carry on into the next and previous file, `gg` and `G` go to the
 start of the first file and the end of the last, and the page keys scroll through the whole
@@ -189,7 +189,7 @@ open-command = "tmux split-window -h"
 mouse = true          # set to false to turn the mouse off
 file-tree = true      # show the file tree when glos starts
 diff-context = 3      # unchanged lines shown around each change; the rest are folded
-all-files = false     # show every changed file in one scroll, rather than one at a time
+all-files = true      # every changed file in one scroll; false shows one file at a time
 
 [editor.soft-wrap]
 enable = false        # wrap long lines
