@@ -1,6 +1,7 @@
 //! The reader: the full-file view, the statusline, the command line, the key help panel and the
 //! pickers.
 
+mod all;
 mod comments;
 mod component;
 mod dashboard;
@@ -281,6 +282,8 @@ pub struct App {
     hold_left: Option<usize>,
     /// A review chosen in the dashboard: glos closes this one and opens it.
     pub switch: Option<Source>,
+    /// All-files mode: whether it's on, where its scroll is, and the other files' views.
+    all: all::AllFiles,
 }
 
 /// A palette row: the keys, what they do, and the command to run (none for a key only listed).
@@ -314,12 +317,18 @@ fn blocked_in_box(action: AppAction) -> bool {
             | A::ToggleResolved
             | A::GotoSuggestion
             | A::View(_)
+            | A::AllFiles(_)
             | A::Scope(_)
             | A::NextCommit(_)
             | A::FilterPrompt
             | A::FileTree
             | A::Dashboard
     )
+}
+
+/// The index of the change to file `path`, if it's one of the review's.
+fn changes_index(app: &App, path: &str) -> Option<usize> {
+    app.state.source.changes.iter().position(|c| c.path == path)
 }
 
 /// A thread placed onto a version: (thread id, generation, the new side's commit).
@@ -492,6 +501,7 @@ impl App {
             help_top: 0,
             hold_left: None,
             switch: None,
+            all: all::AllFiles::new(config.editor.all_files),
         };
         app.load(0);
         app.reload();
@@ -816,6 +826,16 @@ impl App {
             Cur::Context(p) => p.clone(),
         };
         let cur_path = path_of(self, &self.state.cur);
+        let was_change = match self.state.cur {
+            Cur::Change(i) => Some(i),
+            Cur::Context(_) => None,
+        };
+        let top_path = self
+            .state
+            .source
+            .changes
+            .get(self.all.top.0)
+            .map(|c| c.path.clone());
         let jumps: Vec<(String, Selection)> = self
             .jumps
             .iter()
@@ -873,6 +893,21 @@ impl App {
                 None => Cur::Context(p.to_string()),
             };
         self.state.cur = cur_for(self, &cur_path);
+        if let Some(i) = top_path.and_then(|p| changes_index(self, &p)) {
+            self.all.top.0 = i;
+        }
+        // With every file on screen, a file that's no longer changed leaves the scroll, and the
+        // cursor goes to the file that took its place.
+        let n = self.state.source.changes.len();
+        let mut gone = false;
+        if let (true, Some(i), Cur::Context(_), 1..) = (self.all.on, was_change, &self.state.cur, n)
+        {
+            let i = i.min(n - 1);
+            self.state.context.remove(&cur_path);
+            self.state.cur = Cur::Change(i);
+            self.status = Some((format!("{} has no changes now", clean(&cur_path)), false));
+            gone = true;
+        }
         match &self.state.cur {
             Cur::Change(i) => self.load(*i),
             Cur::Context(p) => {
@@ -892,6 +927,12 @@ impl App {
         }
         self.reanchor(false);
         self.ensure_alt();
+        if gone {
+            self.cursor_to_line(0);
+            if let Cur::Change(i) = self.state.cur {
+                self.all.top = (i, 0);
+            }
+        }
         if let Some(t) = &self.tree {
             self.tree = Some(t.rebuilt(self.tree_entries()));
         }
@@ -1198,16 +1239,22 @@ impl App {
     /// by its code, and isn't shown if that code isn't here. Threads in other files keep their
     /// own lines (they're placed when their file is shown).
     fn shown_anchor(&self, t: &Thread) -> Option<Anchor> {
+        self.shown_anchor_in(t, self.state.main_path(), self.base_file())
+    }
+
+    /// Where a thread is in file `path`, whose text is `base`'s, as [`shown_anchor`] works it
+    /// out for the file on screen.
+    fn shown_anchor_in(&self, t: &Thread, path: &str, base: &File) -> Option<Anchor> {
         let a = t.anchor.as_ref()?;
         let here = self.here_rev();
-        if t.on.new_rev == here || a.path != self.state.main_path() {
+        if t.on.new_rev == here || a.path != path {
             return Some(a.clone());
         }
         let key = (t.id.clone(), self.generation, here);
         if let Some(v) = self.placed.borrow().get(&key) {
             return v.clone();
         }
-        let text = self.base_file().text.to_string();
+        let text = base.text.to_string();
         let v = review::place(&self.conn, &t.id, &text)
             .ok()
             .flatten()
@@ -1222,11 +1269,16 @@ impl App {
 
     /// The threads with their anchors as shown (see [`shown_anchor`]), in the same order.
     fn shown_threads(&self) -> Vec<Thread> {
+        self.shown_threads_in(self.state.main_path(), self.base_file())
+    }
+
+    /// The threads with their anchors as shown in file `path`, whose text is `base`'s.
+    fn shown_threads_in(&self, path: &str, base: &File) -> Vec<Thread> {
         self.state
             .threads
             .iter()
             .map(|t| Thread {
-                anchor: self.shown_anchor(t),
+                anchor: self.shown_anchor_in(t, path, base),
                 ..t.clone()
             })
             .collect()
@@ -1279,13 +1331,17 @@ impl App {
 
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
+        self.threads_in(self.state.main_path(), self.base_file(), self.main_file())
+    }
+
+    /// The threads of file `path` as drawn on `f`, its file `base` or a view of it.
+    fn threads_in(&self, path: &str, base: &File, f: &File) -> Threads {
         let here = self.here_rev();
         // Thread rows wrap to the text area, as they're drawn from its left edge.
-        let f = self.main_file();
         let width = self.view.width.saturating_sub(f.gutter_width() as u16) as usize;
         let t = comments::layout(
-            &self.shown_threads(),
-            self.state.main_path(),
+            &self.shown_threads_in(path, base),
+            path,
             &self.expanded,
             &self.theme,
             here.as_deref(),
@@ -1378,6 +1434,11 @@ impl App {
                 self.state.cur = Cur::Change(i);
                 self.ensure_alt();
                 self.open_fold_on_change();
+                // With every file on screen, a file opens at its header.
+                if self.all_shown() {
+                    self.cursor_to_line(0);
+                    self.all.top = (i, 0);
+                }
             }
             Target::Path(p) => {
                 // A changed file opens as its change, with its diff.
@@ -2118,6 +2179,13 @@ impl App {
                 {
                     let _ = self.push_jump();
                 }
+                if self.comment_box.is_none()
+                    && self.all_shown()
+                    && self.all_files_motion(command.name)
+                {
+                    self.count = None;
+                    return None;
+                }
                 if matches!(
                     command.name,
                     "goto_next_change"
@@ -2373,6 +2441,7 @@ impl App {
                 }
                 None => self.status = Some(("No thread here".into(), true)),
             },
+            A::AllFiles(on) => self.set_all_files(on.unwrap_or(!self.all.on)),
             A::View(kind) => {
                 self.view_kind = kind;
                 self.ensure_alt();
@@ -2504,9 +2573,13 @@ impl App {
                     self.toggle_thread(i);
                     return None;
                 }
+                // With every file on screen, ret collapses or expands the cursor's file.
+                if self.all_shown() {
+                    self.toggle_file(self.cur_index());
+                    return None;
+                }
                 let file = self.base_file_mut();
-                let marker = "generated file, collapsed; enter expands";
-                if file.notices.iter().any(|n| n == marker) || file.collapsed {
+                if file.notices.iter().any(|n| n == view::GENERATED) || file.collapsed {
                     file.collapsed = !file.collapsed;
                 }
                 self.refold(None);
@@ -2727,6 +2800,21 @@ impl App {
             self.scroll_sideways(right);
             return;
         }
+        if self.all_shown() && !boxed {
+            match m.kind {
+                K::ScrollDown | K::ScrollUp => {
+                    self.all_wheel(3, m.kind == K::ScrollDown);
+                    return;
+                }
+                K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
+                    let drag = matches!(m.kind, K::Drag(_));
+                    if !self.all_focus_at(m.column, m.row, drag) {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         match m.kind {
             K::ScrollDown | K::ScrollUp => {
                 // Scroll 3 lines, like Helix's default `editor.scroll-lines`. The cursor moves
@@ -2811,7 +2899,13 @@ impl App {
                 self.annotations(),
             ),
         };
-        let header = file.notices.len() as u16;
+        // With every file on screen, the file's text starts where it was drawn, below its
+        // header and notices, from the line at the top of that part of the screen.
+        let (area, header, top) = match self.all_region_at(y) {
+            Some((r, line)) if self.comment_box.is_none() && self.all_shown() => (r, 0, line),
+            _ if self.comment_box.is_none() && self.all_shown() => return None,
+            _ => (area, file.notices.len() as u16, file.top),
+        };
         let gutter = file.gutter_width() as u16;
         if y < area.y + header
             || y >= area.bottom()
@@ -2827,7 +2921,7 @@ impl App {
         let left = if fmt.soft_wrap { 0 } else { file.left };
         let row = (y - area.y - header) as isize;
         let col = left + (x - area.x - gutter) as usize;
-        let anchor = text.line_to_char(file.top.min(text.len_lines() - 1));
+        let anchor = text.line_to_char(top.min(text.len_lines() - 1));
         let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &annotations);
         Some(pos)
     }
@@ -2932,6 +3026,8 @@ impl App {
                     ))
                 }
             },
+            "all" => _ = self.app_command(AppAction::AllFiles(Some(true))),
+            "one" => _ = self.app_command(AppAction::AllFiles(Some(false))),
             "view" => match args.trim() {
                 "file" => _ = self.app_command(AppAction::View(ViewKind::File)),
                 "unified" => _ = self.app_command(AppAction::View(ViewKind::Unified)),
@@ -3123,6 +3219,36 @@ impl App {
         if let Some(t) = &mut self.tree {
             t.render(buf, self.tree_area, &cx);
         }
+        // Under the comment box, the commented lines keep normal mode's colours.
+        let styles = if self.comment_box.is_some() {
+            view::selection_styles(&self.theme, "normal")
+        } else {
+            self.selection_styles()
+        };
+        if self.all_shown() {
+            self.thread_hits = self.draw_all(buf, self.view, styles);
+        } else {
+            self.draw_one(buf, styles);
+        }
+        // The layers over the file, back to front, as Helix's compositor draws them.
+        let cx = cx!(self);
+        if let Some(b) = &mut self.comment_box {
+            b.render(buf, self.box_area, &cx);
+        }
+        self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
+        self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
+        if let Some(p) = &mut self.prompt {
+            p.render(buf, area, &cx);
+        }
+        if let Some(p) = self.pickers.last_mut() {
+            p.render(buf, area, &cx);
+        }
+        self.help_area = Rect::default();
+        self.render_help(f, area);
+    }
+
+    /// The file on screen alone, and its old side beside it in the side-by-side view.
+    fn draw_one(&mut self, buf: &mut Buffer, styles: view::SelectionStyles) {
         let threads = self.main_threads();
         if let Some(left) = self.split_left() {
             // The old side follows the new side's scroll; its thread rows are blank so the
@@ -3155,12 +3281,6 @@ impl App {
             );
         }
         let file = self.main_file();
-        // Under the comment box, the commented lines keep normal mode's colours.
-        let styles = if self.comment_box.is_some() {
-            view::selection_styles(&self.theme, "normal")
-        } else {
-            self.selection_styles()
-        };
         self.thread_hits = view::draw(
             buf,
             self.view,
@@ -3173,21 +3293,6 @@ impl App {
             Some(styles),
             &threads,
         );
-        // The layers over the file, back to front, as Helix's compositor draws them.
-        let cx = cx!(self);
-        if let Some(b) = &mut self.comment_box {
-            b.render(buf, self.box_area, &cx);
-        }
-        self.render_statusline(buf, Rect::new(0, area.height - 2, area.width, 1));
-        self.render_command_line(buf, Rect::new(0, area.height - 1, area.width, 1));
-        if let Some(p) = &mut self.prompt {
-            p.render(buf, area, &cx);
-        }
-        if let Some(p) = self.pickers.last_mut() {
-            p.render(buf, area, &cx);
-        }
-        self.help_area = Rect::default();
-        self.render_help(f, area);
     }
 
     /// (selection, primary selection, cursor, primary cursor), as Helix picks them per mode.

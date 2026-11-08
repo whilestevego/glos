@@ -1,6 +1,7 @@
 # All files on one screen
 
-**Status:** Draft (2026-11-06).
+**Status:** In progress on branch `all-files`. Steps 1 and 2 are built, and the mode is off by
+default until step 6. Steps 3 to 5 come next, in a second pull request.
 
 Today glos shows one file at a time. You move between files with `gn` and `gp`, the tree, or
 `space g`. Search and the change keys (`]g`) stay inside the file on screen.
@@ -32,7 +33,7 @@ multibuffer do. You scroll through the whole review, and search finds matches in
   and wrap around at the end of the review. `]g` and `[g` move through every change.
 - **Files outside the review stay alone.** A file opened for context with `space f` isn't part
   of the review, so it shows in one-file mode. `' v a` goes back to all files.
-- **Filters and scopes apply.** `:filter` and `space o` decide which files are in the scroll.
+- **Filters and scopes apply.** `:filter` and `' o` decide which files are in the scroll.
 
 ## How it works
 
@@ -125,12 +126,56 @@ they carry over to all-files mode as they are. `zR` and `zM` act on the file und
 - **A mode rather than a fourth view.** Each of the three views is useful across all files, so
   the mode and the view are chosen separately.
 
-## Open
+## Decided
 
-- Should `space d` and `space D` in all-files mode both list every thread in the review, since
-  the whole review is on screen?
-- When the agent adds or removes a changed file, where should the cursor go if it was in that
-  file?
+- **The thread pickers keep their meanings (2026-11-06).** `' d` lists the threads in the file
+  under the cursor, and `' D` lists the whole review's, as in one-file mode. The keys stay
+  different, and they match Helix's diagnostic pickers.
+- **A file that drops out of the review (2026-11-06).** If the agent's change means the file
+  under the cursor is no longer changed, it leaves the scroll, and the cursor goes to the header
+  of the file that took its place, or the last file. The status line says which file went. A new
+  file appears in its place in the order, and the cursor stays where it was.
+
+## As built so far
+
+Steps 1 and 2, in the first pull request:
+
+- **Step 1 wasn't needed.** The scroll is kept as a place, a file and a line of its document
+  (`src/ui/all.rs` `Pos`). Only the files between the top of the screen and the cursor are
+  measured, so nothing needs every file's row count. glos has no scrollbar, and `G` goes to the
+  last file directly. Opening 150 files of 2,000 lines in all-files mode takes about 0.3 seconds.
+- **The cursor's file is drawn as in one-file mode.** `App::draw_all` draws the file under the
+  cursor from its own view, so folds, threads and every key work on it unchanged. The other
+  files are drawn from views built by `built_for`, which `built` now calls for the file on
+  screen. Moving past a file's first or last line moves the cursor into the next file
+  (`all_files_motion`).
+- **The header has the path, `+added -removed` and the open threads.** The kind of change
+  stays in the notices under the header, as in one-file mode, rather than repeating there.
+- **Headers are rules, with a blank row above them.** The first build drew each header as a
+  bar in `ui.statusline.inactive`, which the reviewer found too faint to tell where one file
+  ended. Now a blank row comes before each file after the first, and the header is a rule
+  across the screen in bold `ui.linenr.selected`, such as `── ▼ b.rs  +1 -0 ─────`
+  (`draw_header`). While a file's header has scrolled off the top, a copy of it stays pinned
+  on the top row, as GitHub's file headers do (`pinned`).
+- **The empty line after a file's last newline isn't shown** in all-files mode, so files follow
+  one another without a blank numbered line between them.
+- **Collapsed files.** A collapsed file is its header, its notices and a summary line such as
+  `↕ 42 lines` (`summary`), and its header shows `▶` rather than `▼`. The summary
+  doesn't say how to open the file, because the reviewer found that repetitive on every
+  collapsed file, and a generated file's "enter expands" notice gives way to it. A binary file
+  is its header and notices. The cursor stops on either as one line. A click on any header,
+  pinned or not, or on a summary, collapses or expands its file, and `enter` does the same for the cursor's
+  file when it isn't on a fold or a thread (`toggle_file`). The file's folds are kept by path,
+  so they're as they were when it opens again, and so is the cursor. A file the reviewer
+  collapsed or expanded stays loaded, so it doesn't go back to its default when it's dropped.
+- **At most 50 documents** are kept (`MAX_LOADED`). Files far from the screen are dropped, and
+  read again when they come back.
+- **The mouse came forward from step 5.** In one-file mode the wheel moves the cursor within its
+  file, which stopped scrolling at the end of a file. `all_wheel` scrolls the review and moves
+  the cursor only to keep it on screen. A click moves the cursor into the file under it
+  (`all_focus_at`), and a drag stays in the file it started in.
+- **Not yet.** Search, `]g` and the thread keys still work within the file under the cursor.
+  They're step 4.
 
 ## Relevant code
 

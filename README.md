@@ -104,6 +104,28 @@ Review commands live under `'` so that Helix keeps its own keys. Until glos has 
 servers and editing, `space c`, `space C`, `space r`, `space s`, `space d`, `space D` and `]d`
 still work as before.
 
+### All files in one scroll
+
+`' v a` switches between showing one file at a time and showing every changed file in one
+scroll. Each file starts with a rule across the screen that names its path, its added and
+removed lines, and its open threads. While you scroll through a file, its header stays pinned
+to the top of the screen. `:all` and `:one` also switch, and `all-files = true` in the settings
+starts glos in one scroll.
+
+Click a file's header to collapse the file, and click it again to expand it. A collapsed file
+shows a line such as `↕ 42 lines` under its header in place of its code, and a click
+on that line expands it too.
+`enter` does the same for the file the cursor is in, unless the cursor is on a fold or a thread.
+A collapsed file keeps its folds, so it opens again as you left it.
+
+In one scroll, `j` and `k` carry on into the next and previous file, `gg` and `G` go to the
+start of the first file and the end of the last, and the page keys scroll through the whole
+review. `gn`, `gp`, the tree and `space g` go to a file's header. The other files are read only
+when they come near the screen, so a big review opens as fast as one file. For now this works in
+the whole-file view, and the unified and side-by-side views show one file. The mouse wheel
+scrolls through every file, and a click in a file's code moves the cursor there. Search, `]g`
+and the thread keys still stay within the file the cursor is in.
+
 ### Folding
 
 Lines far from any change are folded into a band across the screen that says which lines it
@@ -164,6 +186,7 @@ open-command = "tmux split-window -h"
 mouse = true          # set to false to turn the mouse off
 file-tree = true      # show the file tree when glos starts
 diff-context = 3      # unchanged lines shown around each change; the rest are folded
+all-files = false     # show every changed file in one scroll, rather than one at a time
 
 [editor.soft-wrap]
 enable = false        # wrap long lines

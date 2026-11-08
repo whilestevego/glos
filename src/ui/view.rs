@@ -20,6 +20,9 @@ use crate::{
 
 use super::comments::Threads;
 
+/// The notice on a generated file, which starts collapsed.
+pub const GENERATED: &str = "generated file, collapsed; enter expands";
+
 /// A file loaded for viewing: a changed file of the review, or any file opened for context.
 pub struct File {
     pub text: Rope,
@@ -146,7 +149,7 @@ impl File {
         }
         let collapsed = source.collapsed(change);
         if collapsed {
-            notices.push("generated file, collapsed; enter expands".to_string());
+            notices.push(GENERATED.to_string());
         }
         let (hunks, words) = if binary || change.new == Content::None {
             (vec![], HashMap::new())
@@ -444,7 +447,7 @@ pub fn draw(
     main: Option<SelectionStyles>,
     threads: &Threads,
 ) -> Vec<(u16, usize)> {
-    let mut hits = vec![];
+    let hits = vec![];
     let mut y = area.y;
     for notice in &file.notices {
         if y >= area.bottom() {
@@ -462,6 +465,30 @@ pub fn draw(
     if file.collapsed || file.binary {
         return hits;
     }
+    let rest = Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y));
+    draw_text(
+        buf, rest, file, top, left, wrap, loader, theme, main, threads,
+    )
+    .0
+}
+
+/// Draws `file`'s text into `area` from line `top`, without its notices. Returns the screen row
+/// of each thread row drawn, with its thread, and the first row below what was drawn.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_text(
+    buf: &mut Buffer,
+    area: Rect,
+    file: &File,
+    top: usize,
+    left: usize,
+    wrap: bool,
+    loader: &Loader,
+    theme: &Theme,
+    main: Option<SelectionStyles>,
+    threads: &Threads,
+) -> (Vec<(u16, usize)>, u16) {
+    let mut hits = vec![];
+    let mut y = area.y;
     let text = file.text.slice(..);
     let height = area.bottom().saturating_sub(y) as usize;
     let top = top.min(text.len_lines().saturating_sub(1));
@@ -489,11 +516,23 @@ pub fn draw(
     };
     let digits = file.number_width();
     let band = super::diffview::fold_styles(theme).0;
-    let cursor_lines: Vec<usize> = file
-        .sel
-        .iter()
-        .map(|r| text.char_to_line(r.cursor(text)))
-        .collect();
+    // Without selection styles, as for a file the cursor isn't in, no line number stands out.
+    let cursor_lines: Vec<usize> = match main {
+        Some(m)
+            if m != (
+                Style::default(),
+                Style::default(),
+                Style::default(),
+                Style::default(),
+            ) =>
+        {
+            file.sel
+                .iter()
+                .map(|r| text.char_to_line(r.cursor(text)))
+                .collect()
+        }
+        _ => vec![],
+    };
     let primary = file.sel.primary_index();
     let ranges: Vec<_> = match main {
         Some(_) => file
@@ -709,7 +748,30 @@ pub fn draw(
         }
         line += 1;
     }
-    hits
+    (hits, y)
+}
+
+/// The screen rows line `line` of `file` takes, as `draw_text` draws it: its wrapped rows and
+/// the thread rows under it.
+pub fn line_rows(file: &File, line: usize, fmt: &TextFormat, threads: &Threads) -> usize {
+    let below = threads.rows.get(&line).map_or(0, Vec::len);
+    if !fmt.soft_wrap {
+        return 1 + below;
+    }
+    let text = file.text.slice(..);
+    let annotations = TextAnnotations::default();
+    let start = text.line_to_char(line);
+    let mut rows = 1;
+    for g in DocumentFormatter::new_at_prev_checkpoint(text, fmt, &annotations, start) {
+        if g.line_idx != line {
+            break;
+        }
+        rows = rows.max(g.visual_pos.row + 1);
+        if matches!(g.raw, Grapheme::Newline) {
+            break;
+        }
+    }
+    rows + below
 }
 
 /// The display column of char `pos` on its line, with tabs expanded.

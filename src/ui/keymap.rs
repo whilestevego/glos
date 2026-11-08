@@ -85,6 +85,8 @@ pub enum AppAction {
     GotoSuggestion,
     /// `' v` then `f`, `u` or `s`.
     View(super::ViewKind),
+    /// `' v a` switches between all files and one (`None`); `:all` and `:one` choose.
+    AllFiles(Option<bool>),
     /// `' o` then `b`, `r` or `c`.
     Scope(ScopeKey),
     /// `]C` / `[C`: the next or previous commit, in the per-commit scope.
@@ -248,6 +250,7 @@ commands! {
     view_file, "The whole file, changes in the gutter", App(AppAction::View(super::ViewKind::File));
     view_unified, "Unified: changes with lines around them", App(AppAction::View(super::ViewKind::Unified));
     view_split, "Side by side: old and new", App(AppAction::View(super::ViewKind::Split));
+    toggle_all_files, "All files in one scroll, or one file", App(AppAction::AllFiles(None));
     scope_base, "Branch vs base (or old vs new)", App(AppAction::Scope(ScopeKey::Base));
     scope_since_review, "Since your last review", App(AppAction::Scope(ScopeKey::SinceReview));
     scope_commits, "One commit at a time", App(AppAction::Scope(ScopeKey::Commits));
@@ -694,6 +697,7 @@ fn normal_defs() -> Vec<Def> {
                         cmd("f", "view_file"),
                         cmd("u", "view_unified"),
                         cmd("s", "view_split"),
+                        cmd("a", "toggle_all_files"),
                     ],
                 ),
                 menu(
@@ -1167,6 +1171,7 @@ mod tests {
             ("' v f", "view_file"),
             ("' v u", "view_unified"),
             ("' v s", "view_split"),
+            ("' v a", "toggle_all_files"),
             ("' o b", "scope_base"),
             ("' o r", "scope_since_review"),
             ("' o c", "scope_commits"),

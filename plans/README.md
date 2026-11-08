@@ -31,7 +31,7 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 
 | Plan | Status |
 |---|---|
-| [plan-all-files.md](plan-all-files.md) | Draft. Every changed file in one scroll, searchable, in each view, and the default. |
+| [plan-all-files.md](plan-all-files.md) | In progress. Every changed file in one scroll, searchable, in each view, and the default. Steps 1 and 2 are built. |
 | [plan-review-menu.md](plan-review-menu.md) | In progress. Review commands move under `'` so Helix gets its keys back. Step 1 builds the menu. Steps 2 and 3 remove the old keys when Helix needs them. |
 | [plan-language-servers.md](plan-language-servers.md) | Draft. Diagnostics, going to definitions and references, hover and symbol pickers. Needs step 2 of `plan-review-menu.md`. |
 | [plan-in-place-editing.md](plan-in-place-editing.md) | Draft. Edit any file on disk with Helix's keys, and merge an agent's changes into unsaved edits. Needs step 3 of `plan-review-menu.md`. |
