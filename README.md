@@ -123,9 +123,10 @@ start of the first file and the end of the last, and the page keys scroll throug
 review. `gn`, `gp`, the tree and `space g` go to a file's header. The other files are read only
 when they come near the screen, so a big review opens as fast as one file. It works in every
 view, so side by side shows every file's old and new sides under its header. The mouse wheel
-scrolls through every file, and a click in a file's code moves the cursor there. Search, `]g`
-and the thread keys carry on into the next file when there's nothing more in this one, and `n`
-goes round from the last file to the first.
+scrolls through every file, and a click in a file's code moves the cursor there. Search, `]g`,
+`]p`, `]f` and the other jumps carry on into the next file when there's nothing more in this
+one, and `n` goes round from the last file to the first. A count such as `5j`, scrolling with
+`z j` and `z k`, `zz`, `zt` and `zb`, and `gt`, `gc` and `gb` all work on the whole review.
 
 ### Folding
 

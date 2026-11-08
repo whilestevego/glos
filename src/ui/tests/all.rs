@@ -553,3 +553,93 @@ fn switching_views_keeps_every_file_on_screen() {
         );
     }
 }
+
+/// Two new Rust files, each with two functions in two paragraphs.
+fn two_rust(o: &Path, n: &Path) {
+    let _ = o;
+    std::fs::write(n.join("a.rs"), "fn a1() {}\n\nfn a2() {}\n").unwrap();
+    std::fs::write(n.join("b.rs"), "fn b1() {}\n\nfn b2() {}\n").unwrap();
+}
+
+/// The cursor's file and the line its selection starts on, 0-based.
+fn sel_start(t: &T) -> (String, usize) {
+    let f = t.app.file();
+    let text = f.text.slice(..);
+    (t.path(), text.char_to_line(f.sel.primary().from()))
+}
+
+#[test]
+fn paragraphs_go_on_into_the_next_file() {
+    let mut t = all_files(72, 30, two_rust);
+    // ]p goes through a.rs's two paragraphs, then to the start of b.rs.
+    t.keys("g g ] p ] p");
+    assert_eq!(t.path(), "a.rs");
+    t.keys("] p");
+    assert_eq!(at(&t), ("b.rs".into(), 1));
+    t.keys(&"] p ".repeat(5));
+    assert_eq!(t.path(), "b.rs");
+    assert_eq!(t.status(), Some("No more paragraphs"));
+    t.keys("g g g n [ p");
+    assert_eq!(t.path(), "a.rs");
+    // A-. repeats the motion across files too.
+    t.keys("g g ] p ] p A-.");
+    assert_eq!(t.path(), "b.rs");
+}
+
+#[test]
+fn syntax_jumps_go_on_into_the_next_file() {
+    let mut t = all_files(72, 30, two_rust);
+    t.keys("g g ] f");
+    assert_eq!(sel_start(&t), ("a.rs".into(), 2));
+    // b1 is at the very start of b.rs, and isn't skipped.
+    t.keys("] f");
+    assert_eq!(sel_start(&t), ("b.rs".into(), 0));
+    t.keys("] f");
+    assert_eq!(sel_start(&t), ("b.rs".into(), 2));
+    t.keys("[ f");
+    assert_eq!(sel_start(&t), ("b.rs".into(), 0));
+    t.keys("[ f");
+    assert_eq!(sel_start(&t), ("a.rs".into(), 2));
+}
+
+#[test]
+fn a_count_on_j_and_k_carries_on_into_the_next_file() {
+    let mut t = four(40);
+    t.keys("g g 1 0 j");
+    assert_eq!(at(&t), ("b.rs".into(), 3));
+    t.keys("5 k");
+    assert_eq!(at(&t), ("a.rs".into(), 6));
+}
+
+#[test]
+fn scrolling_and_window_keys_use_the_whole_review() {
+    let mut t = four(14);
+    t.keys("g g");
+    // z j scrolls the review a line, and the cursor comes along to stay clear of the top.
+    t.keys("z j");
+    assert_ne!(t.app.all.top, (0, 0));
+    assert_eq!(t.path(), "a.rs");
+    // zt puts the cursor's line near the top, wherever it is.
+    t.keys("g n j j j z t");
+    assert_eq!(t.app.all.top.0, 1, "{:?}", t.app.all.top);
+    // On a taller screen, gb goes to the bottom of the screen, in a later file, and gt and gc
+    // come back up.
+    let mut t = four(34);
+    t.keys("g n j j j z t g b");
+    assert!(
+        ["c.rs", "d.rs"].contains(&t.path().as_str()),
+        "{}",
+        t.screen()
+    );
+    t.keys("g t");
+    assert!(
+        ["a.rs", "b.rs"].contains(&t.path().as_str()),
+        "{}",
+        t.screen()
+    );
+    // zz centres the cursor's line, so gc stays in its file.
+    t.keys("g n j j j");
+    let here = t.path();
+    t.keys("z z g c");
+    assert_eq!(t.path(), here, "{}", t.screen());
+}

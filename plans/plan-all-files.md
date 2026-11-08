@@ -188,6 +188,15 @@ Step 4, in the second pull request:
   to search it took 9 seconds. `may_match` runs the regex over the file's text first, so a
   search that matches nothing takes about 30 ms. A search as it's typed starts again from the
   file it began in, and `esc` goes back there (`PromptKind::Search` `all`).
+- **Every motion that looks for the next thing crosses files.** The reviewer found that `]p`
+  stopped at the end of a file, and an audit of the keymap found more. `]p` and `[p`, the
+  syntax jumps such as `]f` (`object_across`), and `A-.` repeating them now cross files too. A
+  count on `j` or `k` carries on into the next file (`move_lines`). `z j` and `z k` scroll the
+  review, `zz`, `zt` and `zb` place the cursor's line in it (`back_rows`), and `gt`, `gc` and
+  `gb` go to lines on the screen in any file (`on_screen`). The syntax jumps start from a
+  file's very start or end when they enter it, so an object on its first or last line isn't
+  skipped. Word motions, `x` and `f` stay in their file, because a selection can't span two
+  files.
 - **The tree already followed the cursor.** It marks the file on screen when it draws, so it
   needed no change, only a test.
 - **`gn` and `gp`** already went to a file's header in step 2.

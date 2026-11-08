@@ -217,6 +217,9 @@ pub struct App {
     jump: usize,
     /// The last `f`/`t`, text object or `]g`-style motion, for `A-.`.
     last_motion: Option<Motion>,
+    /// The command `last_motion` runs, if it's one, so all-files mode can repeat it across
+    /// files.
+    last_motion_name: Option<&'static str>,
     /// Keys being recorded into the `@` register (`Q`), and the last recording.
     recording: Option<Vec<Key>>,
     macro_keys: Vec<Key>,
@@ -463,6 +466,7 @@ impl App {
             jumps: vec![],
             jump: 0,
             last_motion: None,
+            last_motion_name: None,
             recording: None,
             macro_keys: vec![],
             replaying: false,
@@ -1932,6 +1936,7 @@ impl App {
                 };
                 self.doc_command(|cx| motion(cx));
                 self.last_motion = Some(motion);
+                self.last_motion_name = None;
             }
             self.count = None;
             return None;
@@ -2207,18 +2212,17 @@ impl App {
                         | "goto_prev_paragraph"
                 ) {
                     let count = self.count;
+                    self.last_motion_name = Some(command.name);
                     self.last_motion = Some(std::rc::Rc::new(move |cx: &mut Ctx| {
                         cx.count = count;
                         f(cx)
                     }));
                 }
-                match command.name {
-                    "goto_next_change" | "goto_prev_change"
-                        if self.all_shown() && self.comment_box.is_none() =>
-                    {
-                        self.change_across(command.name == "goto_next_change", f)
-                    }
-                    _ => self.doc_command(f),
+                if !(self.all_shown()
+                    && self.comment_box.is_none()
+                    && self.jump_across_files(command.name, f))
+                {
+                    self.doc_command(f);
                 }
                 if command.name.ends_with("_change") {
                     self.open_fold_on_change();
@@ -2450,7 +2454,11 @@ impl App {
             A::Fold(k) => self.fold_command(k),
             A::GotoObject(ch, forward) => {
                 let _ = self.push_jump();
-                self.ts_object(forward, ch, true);
+                if self.all_shown() && self.comment_box.is_none() {
+                    self.object_across(forward, ch);
+                } else {
+                    self.ts_object(forward, ch, true);
+                }
             }
             A::Dashboard => match dashboard::picker(&self.conn, &self.theme) {
                 Ok(p) => self.pickers = vec![p],
@@ -2692,7 +2700,23 @@ impl App {
                 // A count repeats the motion that many times, each with its own count.
                 if let Some(m) = self.last_motion.clone() {
                     for _ in 0..self.count.take().map_or(1, NonZeroUsize::get) {
-                        self.doc_command(|cx| m(cx));
+                        // In all-files mode the motion goes on into the next file, as it did.
+                        let across = self.all_shown() && self.comment_box.is_none();
+                        match self.last_motion_name {
+                            Some(name) if across => {
+                                let f = keymap::command(name).and_then(|c| match c.action {
+                                    Action::Doc(f) => Some(f),
+                                    _ => None,
+                                });
+                                if let Some(f) = f
+                                    && self.jump_across_files(name, f)
+                                {
+                                    continue;
+                                }
+                                self.doc_command(|cx| m(cx));
+                            }
+                            _ => self.doc_command(|cx| m(cx)),
+                        }
                     }
                 }
             }
