@@ -27,7 +27,7 @@ pub mod text {
         graphemes::{Grapheme, next_grapheme_boundary, prev_grapheme_boundary},
         line_ending::line_end_char_index,
     };
-    pub use helix_stdx::rope::RopeSliceExt;
+    pub use helix_stdx::rope::{Regex, RopeSliceExt};
 }
 
 /// Laying text out on screen: soft wrap, tabs, wide characters and virtual lines.

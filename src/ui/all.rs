@@ -8,7 +8,10 @@
 
 use std::collections::HashMap;
 
-use glos_helix::{commands::SCROLLOFF, text::Selection};
+use glos_helix::{
+    commands::{self, SCROLLOFF},
+    text::Selection,
+};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -35,12 +38,13 @@ pub(super) struct AllFiles {
     pub on: bool,
     /// The place at the top of the screen.
     pub top: Pos,
-    /// The whole-file view of each file drawn that the cursor isn't in. It's `None` when
-    /// nothing in the file is folded, so the file itself is drawn.
-    docs: HashMap<usize, Option<File>>,
-    /// What `docs` were built with: the generation of the threads and files, and the lines of
-    /// context. Either changing builds them again.
-    built: (u64, usize),
+    /// The view of each file drawn that the cursor isn't in, with its old side in the
+    /// side-by-side view. It's `None` when the file itself is drawn: in the whole-file view
+    /// with nothing folded, or for a binary or collapsed file.
+    docs: HashMap<usize, Option<(File, Option<File>)>>,
+    /// What `docs` were built with: the generation of the threads and files, the lines of
+    /// context and the view. Any of them changing builds them again.
+    built: (u64, usize, Option<ViewKind>),
     /// From the last draw, for the mouse: each file's text on screen, with the file and the
     /// line at its top, and each header's row, with its file.
     regions: Vec<(Rect, usize, usize)>,
@@ -57,10 +61,10 @@ impl AllFiles {
 }
 
 impl App {
-    /// The screen shows every file: the mode is on, the cursor is in one of the review's
-    /// changes, and the view is the whole-file one.
+    /// The screen shows every file: the mode is on, and the cursor is in one of the review's
+    /// changes.
     pub(super) fn all_shown(&self) -> bool {
-        self.all.on && matches!(self.state.cur, Cur::Change(_)) && self.view_kind == ViewKind::File
+        self.all.on && matches!(self.state.cur, Cur::Change(_))
     }
 
     pub(super) fn cur_index(&self) -> usize {
@@ -72,9 +76,10 @@ impl App {
 
     /// Reads file `i` if it isn't loaded, and builds its view unless the cursor is in it.
     fn prepare(&mut self, i: usize) {
-        if (self.generation, self.diff_context) != self.all.built {
+        let built = (self.generation, self.diff_context, Some(self.view_kind));
+        if built != self.all.built {
             self.all.docs.clear();
-            self.all.built = (self.generation, self.diff_context);
+            self.all.built = built;
         }
         self.load(i);
         if i == self.cur_index() {
@@ -88,10 +93,11 @@ impl App {
         }
         let path = self.state.source.changes[i].path.clone();
         let base = self.state.files[i].as_ref().expect("loaded above");
+        let whole = self.view_kind == ViewKind::File;
         let doc = self
-            .built_for(&path, base)
-            .filter(|b| b.folded)
-            .map(|b| b.doc);
+            .built_for(&Cur::Change(i), &path, base)
+            .filter(|b| b.folded || !whole)
+            .map(|b| (b.doc, b.left));
         self.all.docs.insert(i, doc);
     }
 
@@ -101,9 +107,25 @@ impl App {
             return self.main_file();
         }
         match self.all.docs.get(&i) {
-            Some(Some(doc)) => doc,
+            Some(Some((doc, _))) => doc,
             _ => self.state.files[i].as_ref().expect("prepared"),
         }
+    }
+
+    /// File `i`'s old side, in the side-by-side view. It must be prepared.
+    fn section_left(&self, i: usize) -> Option<&File> {
+        if i == self.cur_index() {
+            return self.split_left();
+        }
+        match self.all.docs.get(&i) {
+            Some(Some((_, left))) => left.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Whether lines wrap: as set, except side by side.
+    fn all_wrap(&self) -> bool {
+        self.state.wrap && self.left_view.width == 0
     }
 
     fn section_threads(&self, i: usize) -> Threads {
@@ -141,7 +163,8 @@ impl App {
     /// File `i`'s notices. The one a generated file has says how to expand it, which its
     /// summary says instead.
     fn notices(&self, i: usize) -> impl Iterator<Item = &String> {
-        let f = self.section_file(i);
+        // From the file itself, as the unified and side-by-side views have none of their own.
+        let f = self.state.files[i].as_ref().expect("prepared");
         f.notices.iter().filter(|n| *n != view::GENERATED)
     }
 
@@ -182,7 +205,7 @@ impl App {
         if !(f.collapsed || f.binary) {
             let t = threads.entry(i).or_insert_with(|| self.section_threads(i));
             let width = self.view.width.saturating_sub(f.gutter_width() as u16);
-            let fmt = view::text_format(f, width, self.state.wrap);
+            let fmt = view::text_format(f, width, self.all_wrap());
             rows += view::line_rows(f, line, &fmt, t);
         }
         rows
@@ -290,6 +313,14 @@ impl App {
 
         let cur = self.cur_index();
         let none = Style::default();
+        // Headers go across both columns in the side-by-side view.
+        let left_col = self.left_view;
+        let area = if left_col.width > 0 {
+            Rect::new(left_col.x, area.y, area.right() - left_col.x, area.height)
+        } else {
+            area
+        };
+        let right_x = self.view.x;
         let (mut hits, mut drawn) = (vec![], vec![]);
         let (mut regions, mut headers) = (vec![], vec![]);
         let (mut y, (mut i, mut line)) = (area.y, self.all.top);
@@ -350,15 +381,32 @@ impl App {
                 } else {
                     ((none, none, none, none), 0)
                 };
-                let rest = Rect::new(area.x, y, area.width, height);
+                let rest = Rect::new(right_x, y, area.right() - right_x, height);
                 regions.push((rest, i, line));
+                if let Some(old) = self.section_left(i) {
+                    let col = Rect::new(left_col.x, y, left_col.width, height);
+                    regions.push((col, i, line));
+                    let blank = super::blank_threads(t);
+                    view::draw_text(
+                        buf,
+                        col,
+                        old,
+                        line,
+                        left,
+                        false,
+                        &self.state.loader,
+                        &self.theme,
+                        Some((none, none, none, none)),
+                        &blank,
+                    );
+                }
                 let (h, end) = view::draw_text(
                     buf,
                     rest,
                     f,
                     line,
                     left,
-                    self.state.wrap,
+                    self.all_wrap(),
                     &self.state.loader,
                     &self.theme,
                     Some(main),
@@ -472,12 +520,37 @@ impl App {
         let (i, line) = self.cursor_pos();
         self.prepare(i);
         let last = self.section_lines(i) - 1;
+        let count = self.count.map_or(1, |c| c.get());
+        let height = self.view.height as usize;
+        let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
         match name {
-            "move_visual_line_down" | "move_line_down" if line >= last && i + 1 < n => {
-                self.enter_file(i + 1, false)
+            // A count that goes past the file carries on into the next one.
+            "move_visual_line_down" | "move_line_down" if line + count > last && i + 1 < n => {
+                self.move_lines(count, true)
             }
-            "move_visual_line_up" | "move_line_up" if line == 0 && i > 0 => {
-                self.enter_file(i - 1, true)
+            "move_visual_line_up" | "move_line_up" if count > line && i > 0 => {
+                self.move_lines(count, false)
+            }
+            "scroll_down" | "scroll_up" => self.all_wheel(count, name == "scroll_down"),
+            "align_view_center" => {
+                self.all.top = self.back_rows(self.cursor_pos(), height / 2);
+            }
+            "align_view_top" => self.all.top = self.back_rows(self.cursor_pos(), so),
+            "align_view_bottom" => {
+                let rows = height.saturating_sub(so + 1);
+                self.all.top = self.back_rows(self.cursor_pos(), rows);
+            }
+            "goto_window_top" | "goto_window_center" | "goto_window_bottom" => {
+                let (first, middle, last) = self.on_screen();
+                let to = match name {
+                    "goto_window_top" => first,
+                    "goto_window_center" => middle,
+                    _ => last,
+                };
+                if to.0 != self.cur_index() {
+                    self.enter_file(to.0, false);
+                }
+                self.cursor_to_line(to.1);
             }
             "goto_file_start" if self.count.is_none() => {
                 self.enter_file(0, false);
@@ -524,22 +597,52 @@ impl App {
         self.all.top = top;
     }
 
-    /// The mouse wheel: scrolls the review `n` lines, and moves the cursor only if it would
-    /// leave the screen, into another file if need be.
-    pub(super) fn all_wheel(&mut self, n: usize, down: bool) {
+    /// Moves the cursor `n` lines through the review, into other files if need be.
+    fn move_lines(&mut self, n: usize, down: bool) {
+        let mut p = self.cursor_pos();
         for _ in 0..n {
-            let top = self.all.top;
             let next = if down {
-                self.next_pos(top)
+                self.next_pos(p)
             } else {
-                self.prev_pos(top)
+                self.prev_pos(p)
             };
             match next {
-                Some(p) => self.all.top = p,
+                Some(q) => p = q,
                 None => break,
             }
         }
-        // Where the cursor may be with the screen where it is now: as `follow_cursor` keeps it.
+        if p.0 != self.cur_index() {
+            self.enter_file(p.0, false);
+        }
+        self.cursor_to_line(p.1);
+    }
+
+    /// The place to put at the top of the screen so that `rows` screen rows are above `pos`.
+    fn back_rows(&mut self, pos: Pos, rows: usize) -> Pos {
+        let mut threads = HashMap::new();
+        self.prepare(pos.0);
+        let (mut p, mut above) = (
+            pos,
+            if pos.1 == 0 {
+                self.header_rows(pos.0)
+            } else {
+                0
+            },
+        );
+        while let Some(q) = self.prev_pos(p) {
+            let r = self.rows_at(q, &mut threads);
+            if above + r > rows {
+                break;
+            }
+            above += r;
+            p = q;
+        }
+        p
+    }
+
+    /// The first, middle and last places the cursor may be with the screen where it is, as
+    /// `follow_cursor` keeps it.
+    fn on_screen(&mut self) -> (Pos, Pos, Pos) {
         let height = self.view.height as usize;
         let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
         let mut threads = HashMap::new();
@@ -556,7 +659,7 @@ impl App {
             }
             p
         };
-        let (mut rows, mut p, mut last) = (Self::pinned(top), top, top);
+        let (mut rows, mut p, mut last, mut middle) = (Self::pinned(top), top, top, top);
         loop {
             self.prepare(p.0);
             let header = if p.1 == 0 { self.header_rows(p.0) } else { 0 };
@@ -564,12 +667,34 @@ impl App {
                 break;
             }
             last = p;
+            if rows + header <= height / 2 {
+                middle = p;
+            }
             rows += self.rows_at(p, &mut threads);
             match self.next_pos(p) {
                 Some(q) => p = q,
                 None => break,
             }
         }
+        (first, middle.max(first).min(last), last)
+    }
+
+    /// The mouse wheel: scrolls the review `n` lines, and moves the cursor only if it would
+    /// leave the screen, into another file if need be.
+    pub(super) fn all_wheel(&mut self, n: usize, down: bool) {
+        for _ in 0..n {
+            let top = self.all.top;
+            let next = if down {
+                self.next_pos(top)
+            } else {
+                self.prev_pos(top)
+            };
+            match next {
+                Some(p) => self.all.top = p,
+                None => break,
+            }
+        }
+        let (first, _, last) = self.on_screen();
         let cur = self.cursor_pos();
         let to = if cur < first {
             first
@@ -647,16 +772,329 @@ impl App {
             self.main_file_mut().top = top;
             self.scroll_to_cursor(false);
         }
-        self.status = Some((
-            match (on, self.view_kind) {
-                (false, _) => "One file at a time".into(),
-                (true, ViewKind::File) => "All files".into(),
-                (true, kind) => format!(
-                    "All files shows in the whole-file view; the {} view shows one file",
-                    kind.name()
-                ),
-            },
+        let status = if on {
+            "All files"
+        } else {
+            "One file at a time"
+        };
+        self.status = Some((status.into(), false));
+    }
+
+    /// Puts the cursor back in file `i`, where it was in that file, with `top` at the top of
+    /// the screen.
+    pub(super) fn back_to_file(&mut self, i: usize, top: Pos) {
+        if i != self.cur_index() {
+            self.load(i);
+            self.state.cur = Cur::Change(i);
+            self.ensure_alt();
+        }
+        self.all.top = top;
+    }
+
+    /// A jump that goes on past the cursor's file. `jump` runs in the cursor's file from the
+    /// cursor, and says whether it found something there. If it didn't, `jump` runs in each
+    /// file after the cursor's (or before it, going back) for which `want` holds, told that
+    /// it starts from the file's start (or end). With `wrap`, it goes round past the last
+    /// file to the first. Returns whether it wrapped, or `None`, with the cursor back where it
+    /// was, when no file had anything.
+    fn jump_across(
+        &mut self,
+        forward: bool,
+        wrap: bool,
+        want: impl Fn(&App, usize) -> bool,
+        mut jump: impl FnMut(&mut App, bool) -> bool,
+    ) -> Option<bool> {
+        let (i, sel, top) = (self.cur_index(), self.main_file().sel.clone(), self.all.top);
+        if jump(self, false) {
+            return Some(false);
+        }
+        let n = self.state.files.len();
+        for k in 1..=n {
+            let wrapped = if forward { i + k >= n } else { k > i };
+            if wrapped && !wrap {
+                break;
+            }
+            let j = if forward {
+                (i + k) % n
+            } else {
+                (i + n - k) % n
+            };
+            if !want(self, j) {
+                continue;
+            }
+            self.enter_file(j, !forward);
+            if jump(self, true) {
+                return Some(wrapped);
+            }
+        }
+        self.back_to_file(i, top);
+        self.main_file_mut().sel = sel;
+        None
+    }
+
+    /// `n`, `N` and a search as it's typed: the next match of `query`, in a later file if
+    /// there are no more in this one, and round to the first file after the last. With
+    /// `warn`, the status line says when the search wraps or finds nothing.
+    pub(super) fn search_across(&mut self, query: &str, forward: bool, warn: bool) {
+        let Some(regex) = commands::search_regex(query) else {
+            return;
+        };
+        for _ in 0..self.count.map_or(1, |c| c.get()) {
+            let found = self.jump_across(
+                forward,
+                true,
+                |app, j| app.may_match(j, &regex),
+                |app, entered| app.search_in_file(&regex, forward, entered),
+            );
+            if warn {
+                self.status = match found {
+                    Some(false) => None,
+                    Some(true) => Some(("Wrapped around the review".into(), false)),
+                    None => Some(("No more matches".into(), true)),
+                };
+            }
+            if found.is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Whether file `j`'s text has a match for `regex`, checked before the file is opened,
+    /// because opening every file of a big review to search it takes seconds. A collapsed or
+    /// binary file can't show a match.
+    fn may_match(&self, j: usize, regex: &glos_helix::text::Regex) -> bool {
+        use glos_helix::text::{Rope, RopeSliceExt};
+        if let Some(f) = &self.state.files[j] {
+            return !(f.collapsed || f.binary)
+                && regex.find(f.text.slice(..).regex_input()).is_some();
+        }
+        use crate::source::Content;
+        let (source, change) = (&self.state.source, &self.state.source.changes[j]);
+        if source.collapsed(change) {
+            return false;
+        }
+        let shown = if change.new == Content::None {
+            &change.old
+        } else {
+            &change.new
+        };
+        let Some(bytes) = source.read(shown).ok().flatten() else {
+            return false;
+        };
+        let text = Rope::from(String::from_utf8_lossy(&bytes).as_ref());
+        regex.find(text.slice(..).regex_input()).is_some()
+    }
+
+    /// Selects the next match of `regex` in the file on screen without wrapping round it, or
+    /// with `entered` its first match (its last, going back). Returns whether there was one.
+    fn search_in_file(
+        &mut self,
+        regex: &glos_helix::text::Regex,
+        forward: bool,
+        entered: bool,
+    ) -> bool {
+        let f = self.main_file_mut();
+        let before = f.sel.clone();
+        if entered {
+            // From the end of the file a search forward wraps round to its first match, and
+            // from the start a search back wraps round to its last.
+            let t = f.text.slice(..);
+            let at = if forward {
+                t.len_chars().saturating_sub(1)
+            } else {
+                0
+            };
+            f.sel = Selection::point(at).ensure_invariants(t);
+        }
+        let from = self.main_file().sel.clone();
+        self.doc_command(|cx| commands::search(cx, regex, forward, false));
+        let (old, new) = (from.primary().from(), self.main_file().sel.primary().from());
+        let found = if entered {
+            self.main_file().sel != from
+        } else if forward {
+            new > old
+        } else {
+            new < old
+        };
+        if !found {
+            self.main_file_mut().sel = before;
+        }
+        found
+    }
+
+    /// The motions that look for the next thing of a kind, `]g` and `]p` and the rest, carry on
+    /// into the next file when there's nothing more in this one. Returns whether `name` was
+    /// one of them.
+    pub(super) fn jump_across_files(&mut self, name: &str, f: fn(&mut commands::Ctx)) -> bool {
+        match name {
+            "goto_next_change" | "goto_prev_change" => {
+                self.change_across(name == "goto_next_change", f)
+            }
+            "goto_next_paragraph" | "goto_prev_paragraph" => {
+                self.paragraph_across(name == "goto_next_paragraph", f)
+            }
+            "goto_last_change" | "goto_first_change" => {
+                self.edge_change(name == "goto_last_change", f)
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The cursor's place in the file on screen, to tell which way a motion moved it.
+    fn cursor_char(&self) -> usize {
+        let f = self.main_file();
+        f.sel.primary().cursor(f.text.slice(..))
+    }
+
+    /// `]p` and `[p`: the next paragraph, in the next file if this one has no more. A file's
+    /// first line starts its first paragraph.
+    fn paragraph_across(&mut self, forward: bool, next: fn(&mut commands::Ctx)) {
+        let found = self.jump_across(
+            forward,
             false,
-        ));
+            |_, _| true,
+            |app, entered| {
+                if entered && forward {
+                    return true;
+                }
+                let before = app.cursor_char();
+                app.doc_command(next);
+                let after = app.cursor_char();
+                entered
+                    || if forward {
+                        after > before
+                    } else {
+                        after < before
+                    }
+            },
+        );
+        if found.is_none() {
+            self.status = Some(("No more paragraphs".into(), false));
+        }
+    }
+
+    /// `]f`, `[f` and the other syntax objects: the next one, in the next file if this one has
+    /// no more.
+    pub(super) fn object_across(&mut self, forward: bool, ch: char) {
+        let found = self.jump_across(
+            forward,
+            false,
+            |_, _| true,
+            |app, entered| {
+                let before = app.main_file().sel.clone();
+                app.status = None;
+                // The search for the next object starts after the cursor, so an object at the
+                // very start of a file is found by selecting the one around the cursor.
+                if entered && forward {
+                    app.ts_object(true, ch, false);
+                    if app.main_file().sel != before && app.main_file().sel.primary().from() == 0 {
+                        return true;
+                    }
+                    app.main_file_mut().sel = before.clone();
+                }
+                // Going back, the search starts from the file's very end, so an object on its
+                // last line is found.
+                if entered && !forward {
+                    let f = app.main_file_mut();
+                    let t = f.text.slice(..);
+                    f.sel = Selection::point(t.len_chars());
+                }
+                app.ts_object(forward, ch, true);
+                app.main_file().sel != before
+            },
+        );
+        if found.is_none() {
+            self.status = Some(("No more to go to".into(), false));
+        }
+    }
+
+    /// `]G` and `[G`: the last or first change of the review, as `]R` and `[R` go to its last
+    /// or first thread.
+    fn edge_change(&mut self, last: bool, f: fn(&mut commands::Ctx)) {
+        let n = self.state.files.len();
+        let order: Vec<usize> = if last {
+            (0..n).rev().collect()
+        } else {
+            (0..n).collect()
+        };
+        let (i, sel, top) = (self.cur_index(), self.main_file().sel.clone(), self.all.top);
+        for j in order {
+            self.enter_file(j, last);
+            let before = self.main_file().sel.clone();
+            self.status = None;
+            self.doc_command(f);
+            if self.main_file().sel != before {
+                return;
+            }
+        }
+        self.back_to_file(i, top);
+        self.main_file_mut().sel = sel;
+        self.status = Some(("No changes in this review".into(), false));
+    }
+
+    /// `]g` and `[g`: the next change, in the next file if this one has no more.
+    fn change_across(&mut self, forward: bool, next: fn(&mut commands::Ctx)) {
+        let found = self.jump_across(
+            forward,
+            false,
+            |_, _| true,
+            |app, entered| {
+                let before = app.main_file().sel.clone();
+                app.status = None;
+                match (entered, forward) {
+                    (false, _) => app.doc_command(next),
+                    (true, true) => app.doc_command(commands::goto_first_change),
+                    (true, false) => app.doc_command(commands::goto_last_change),
+                }
+                app.main_file().sel != before
+            },
+        );
+        if found.is_none() {
+            self.status = Some(("No more changes".into(), false));
+        }
+    }
+
+    /// `]r`, `[r`, `]R` and `[R`: the next thread, in the next file if this one has no more;
+    /// or the last or first thread of the review.
+    pub(super) fn thread_across(&mut self, forward: bool, edge: bool) {
+        let has_threads = |app: &App, j: usize| {
+            let path = &app.state.source.changes[j].path;
+            app.state
+                .threads
+                .iter()
+                .any(|t| t.anchor.as_ref().is_some_and(|a| &a.path == path))
+        };
+        if edge {
+            // The last thread is the last one in the last file that has any.
+            let n = self.state.files.len();
+            let order: Vec<usize> = if forward {
+                (0..n).rev().collect()
+            } else {
+                (0..n).collect()
+            };
+            for j in order {
+                if has_threads(self, j) {
+                    self.enter_file(j, forward);
+                    if self.goto_thread_in(forward, true) {
+                        return;
+                    }
+                }
+            }
+            self.status = Some(("No threads in this review".into(), false));
+            return;
+        }
+        let found = self.jump_across(forward, false, has_threads, |app, entered| {
+            // Entering a file going forward, its first thread is next, and going back its
+            // last.
+            if entered {
+                app.goto_thread_in(!forward, true)
+            } else {
+                app.goto_thread_in(forward, false)
+            }
+        });
+        if found.is_none() {
+            self.status = Some(("No more threads".into(), false));
+        }
     }
 }

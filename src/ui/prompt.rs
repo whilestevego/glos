@@ -133,6 +133,9 @@ pub enum PromptKind {
         forward: bool,
         origin: Selection,
         top: usize,
+        /// In all-files mode, the file the search started in and the place at the top of the
+        /// screen, as the search can move to another file.
+        all: Option<(usize, super::all::Pos)>,
     },
     /// `/` or `?` in the file tree: the tree's cursor jumps to a match as you type, and `esc`
     /// puts it back.
@@ -380,6 +383,7 @@ mod tests {
             forward: true,
             origin: Selection::point(0),
             top: 0,
+            all: None,
         });
         assert_eq!(press(&mut s, "tab"), Outcome::Consumed);
         assert_eq!(s.line, "");

@@ -1,7 +1,8 @@
 # All files on one screen
 
-**Status:** In progress on branch `all-files`. Steps 1 and 2 are built, and the mode is off by
-default until step 6. Steps 3 to 5 come next, in a second pull request.
+**Status:** In progress on branch `all-files-2`. Steps 1 and 2 were merged on 2026-11-08 in
+PR #12. Steps 3 to 5 are built on this branch. The mode is off by default until step 6, the
+last pull request.
 
 Today glos shows one file at a time. You move between files with `gn` and `gp`, the tree, or
 `space g`. Search and the change keys (`]g`) stay inside the file on screen.
@@ -176,6 +177,49 @@ Steps 1 and 2, in the first pull request:
   (`all_focus_at`), and a drag stays in the file it started in.
 - **Not yet.** Search, `]g` and the thread keys still work within the file under the cursor.
   They're step 4.
+
+Step 4, in the second pull request:
+
+- **One helper crosses files for every jump.** `App::jump_across` runs a jump in the cursor's
+  file, and when it finds nothing more there it tries each later file (earlier, going back)
+  from its start (end). Search uses it with wrapping round the review, and `]g`, `[g`, `]r` and
+  `[r` without. `]R` and `[R` go to the last and first thread of the review.
+- **Search checks a file's text before opening it.** Opening every file of the 150-file review
+  to search it took 9 seconds. `may_match` runs the regex over the file's text first, so a
+  search that matches nothing takes about 30 ms. A search as it's typed starts again from the
+  file it began in, and `esc` goes back there (`PromptKind::Search` `all`).
+- **Every motion that looks for the next thing crosses files.** The reviewer found that `]p`
+  stopped at the end of a file, and an audit of the keymap found more. `]p` and `[p`, the
+  syntax jumps such as `]f` (`object_across`), and `A-.` repeating them now cross files too. A
+  count on `j` or `k` carries on into the next file (`move_lines`). `z j` and `z k` scroll the
+  review, `zz`, `zt` and `zb` place the cursor's line in it (`back_rows`), and `gt`, `gc` and
+  `gb` go to lines on the screen in any file (`on_screen`). The syntax jumps start from a
+  file's very start or end when they enter it, so an object on its first or last line isn't
+  skipped. Word motions, `x` and `f` stay in their file, because a selection can't span two
+  files.
+- **`]G` and `[G` go to the last and first change of the review** (`edge_change`), as `]R` and
+  `[R` go to its last and first thread. Helix's go to the last and first change of the file,
+  but in one scroll the review is the document.
+- **The tree already followed the cursor.** It marks the file on screen when it draws, so it
+  needed no change, only a test.
+- **`gn` and `gp`** already went to a file's header in step 2.
+
+Steps 3 and 5, in the same pull request:
+
+- **Every view builds each file's view.** `built_for` now takes the file to build, so
+  `AllFiles::prepare` builds the unified or side-by-side view of each file near the screen, as
+  it builds the folded whole-file view. The cached views are built again when the view
+  changes. Switching views moves the top of the screen to the start of its file, because line
+  numbers differ between views, and the screen then follows the cursor.
+- **Side by side keeps two columns for every file.** `layout` splits the screen whenever
+  all-files mode is in the side-by-side view, even when the cursor's file is binary or
+  collapsed. Headers go across both columns, and each file's old side is drawn in the left
+  column with blank thread rows, as in one-file mode (`blank_threads`).
+- **Notices come from the file itself.** The built views have no notices, so "new file" and the
+  rest would have gone missing from the headers in the unified and side-by-side views.
+- **Step 5 was mostly done in step 2.** Clicks on the left column of side by side move the
+  cursor into that file. They don't place the cursor on a line of the old side, as one-file mode
+  doesn't either.
 
 ## Relevant code
 

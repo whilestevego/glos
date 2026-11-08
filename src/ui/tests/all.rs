@@ -207,12 +207,19 @@ fn all_files_is_off_unless_set() {
 }
 
 #[test]
-fn other_views_show_one_file() {
+fn all_files_unified() {
     let mut t = all_files(72, 30, three);
-    t.keys("' v u");
-    assert!(!t.app.all_shown());
-    t.keys("' v f");
+    t.keys("g g ' v u");
     assert!(t.app.all_shown());
+    insta::assert_snapshot!(t.screen());
+}
+
+#[test]
+fn all_files_side_by_side() {
+    let mut t = all_files(100, 30, three);
+    t.keys("g g ' v s");
+    assert!(t.app.all_shown());
+    insta::assert_snapshot!(t.screen());
 }
 
 #[test]
@@ -410,4 +417,239 @@ fn a_headers_counts_are_coloured_as_added_and_removed() {
     assert_eq!(t.cell(col("+1"), 0).fg, plus.fg.unwrap());
     assert_eq!(t.cell(col("-1"), 0).fg, minus.fg.unwrap());
     assert_ne!(t.cell(col("a."), 0).fg, plus.fg.unwrap());
+}
+
+#[test]
+fn search_goes_on_into_later_files_and_wraps_round_the_review() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g / n e w ret");
+    // a.rs and b.rs have no "new", so the search goes on to c.rs.
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 0));
+    t.keys("n");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 1));
+    // Past the last match in the last file, n goes round to the first.
+    t.keys("n");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 0));
+    assert_eq!(t.status(), Some("Wrapped around the review"));
+    t.keys("N");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 1));
+    // A search back from a.rs goes to the end of b.rs.
+    t.keys("g g ? f n ret");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
+}
+
+#[test]
+fn a_search_as_it_is_typed_comes_back_on_esc() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g j j");
+    let (here, sel, top) = (at(&t), t.sel(), t.app.all.top);
+    t.keys("/ n e w");
+    assert_eq!(t.path(), "c.rs");
+    // Typing on, the search starts again from where it began.
+    t.keys("backspace backspace backspace l i n e");
+    assert_eq!(t.path(), "a.rs");
+    t.keys("esc");
+    assert_eq!((at(&t), t.sel(), t.app.all.top), (here, sel, top));
+}
+
+#[test]
+fn a_search_with_no_match_stays_put() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g j j");
+    let (here, sel) = (at(&t), t.sel());
+    t.keys("/ z z z ret n");
+    assert_eq!((at(&t), t.sel()), (here, sel));
+    assert_eq!(t.status(), Some("No more matches"));
+}
+
+#[test]
+fn next_change_goes_on_into_the_next_file() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g ] g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
+    t.keys("] g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
+    t.keys("] g");
+    assert_eq!(t.path(), "c.rs");
+    assert!(t.sel().starts_with("#[new\nnewer"), "{}", t.sel());
+    // There's nothing after the last file's last change, and the cursor stays.
+    t.keys("] g");
+    assert_eq!(t.path(), "c.rs");
+    assert_eq!(t.status(), Some("No more changes"));
+    t.keys("[ g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
+    t.keys("[ g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
+}
+
+#[test]
+fn the_thread_keys_go_through_every_file() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g ] g x ' c").typed("on a").keys("esc ret");
+    t.keys("g n x ' c").typed("on b").keys("esc ret");
+    t.keys("G x ' c").typed("on c").keys("esc ret");
+    t.keys("g g ] r");
+    assert_eq!(t.path(), "a.rs");
+    assert!(t.sel().contains("#[line twenty"), "{}", t.sel());
+    t.keys("] r");
+    assert_eq!(t.path(), "b.rs");
+    t.keys("] r");
+    assert_eq!(t.path(), "c.rs");
+    t.keys("] r");
+    assert_eq!(t.path(), "c.rs");
+    assert_eq!(t.status(), Some("No more threads"));
+    t.keys("[ r");
+    assert_eq!(t.path(), "b.rs");
+    t.keys("[ R");
+    assert_eq!(t.path(), "a.rs");
+    assert!(t.sel().contains("#[line twenty"), "{}", t.sel());
+    t.keys("] R");
+    assert_eq!(t.path(), "c.rs");
+}
+
+#[test]
+fn the_tree_marks_the_file_under_the_cursor() {
+    let mut t = all_files(72, 30, three);
+    t.keys("space e esc g g g e j");
+    assert_eq!(t.path(), "b.rs");
+    assert_eq!(t.app.tree.as_ref().unwrap().selected(), Some("b.rs"));
+    t.keys("] g");
+    assert_eq!(t.app.tree.as_ref().unwrap().selected(), Some("c.rs"));
+}
+
+#[test]
+fn keys_and_the_mouse_cross_files_in_the_other_views() {
+    for view in ["u", "s"] {
+        let mut t = all_files(100, 30, three);
+        t.keys(&format!("g g ' v {view}"));
+        t.keys("g e j");
+        assert_eq!(t.path(), "b.rs", "{view}");
+        t.keys("] g");
+        assert_eq!(t.path(), "c.rs", "{view}");
+        t.keys("g g / n e w ret");
+        assert_eq!(t.path(), "c.rs", "{view}");
+        // A click in b.rs moves the cursor there, and the wheel scrolls the whole review.
+        let y = row_of(&t, "fn b() {}");
+        t.mouse(MouseEventKind::Down(MouseButton::Left), 80, y);
+        assert_eq!(t.path(), "b.rs", "{view}");
+        for _ in 0..10 {
+            t.mouse(MouseEventKind::ScrollDown, 80, 5);
+        }
+        assert_ne!(t.app.all.top, (0, 0), "{view}");
+    }
+}
+
+#[test]
+fn switching_views_keeps_every_file_on_screen() {
+    let mut t = all_files(100, 30, three);
+    t.keys("g g g n");
+    for view in ["u", "s", "f"] {
+        t.keys(&format!("' v {view}"));
+        assert_eq!(t.path(), "b.rs", "{view}");
+        let s = t.screen();
+        assert!(
+            s.contains("── ▼ b.rs") && s.contains("── ▼ c.rs"),
+            "{view}\n{s}"
+        );
+    }
+}
+
+/// Two new Rust files, each with two functions in two paragraphs.
+fn two_rust(o: &Path, n: &Path) {
+    let _ = o;
+    std::fs::write(n.join("a.rs"), "fn a1() {}\n\nfn a2() {}\n").unwrap();
+    std::fs::write(n.join("b.rs"), "fn b1() {}\n\nfn b2() {}\n").unwrap();
+}
+
+/// The cursor's file and the line its selection starts on, 0-based.
+fn sel_start(t: &T) -> (String, usize) {
+    let f = t.app.file();
+    let text = f.text.slice(..);
+    (t.path(), text.char_to_line(f.sel.primary().from()))
+}
+
+#[test]
+fn paragraphs_go_on_into_the_next_file() {
+    let mut t = all_files(72, 30, two_rust);
+    // ]p goes through a.rs's two paragraphs, then to the start of b.rs.
+    t.keys("g g ] p ] p");
+    assert_eq!(t.path(), "a.rs");
+    t.keys("] p");
+    assert_eq!(at(&t), ("b.rs".into(), 1));
+    t.keys(&"] p ".repeat(5));
+    assert_eq!(t.path(), "b.rs");
+    assert_eq!(t.status(), Some("No more paragraphs"));
+    t.keys("g g g n [ p");
+    assert_eq!(t.path(), "a.rs");
+    // A-. repeats the motion across files too.
+    t.keys("g g ] p ] p A-.");
+    assert_eq!(t.path(), "b.rs");
+}
+
+#[test]
+fn syntax_jumps_go_on_into_the_next_file() {
+    let mut t = all_files(72, 30, two_rust);
+    t.keys("g g ] f");
+    assert_eq!(sel_start(&t), ("a.rs".into(), 2));
+    // b1 is at the very start of b.rs, and isn't skipped.
+    t.keys("] f");
+    assert_eq!(sel_start(&t), ("b.rs".into(), 0));
+    t.keys("] f");
+    assert_eq!(sel_start(&t), ("b.rs".into(), 2));
+    t.keys("[ f");
+    assert_eq!(sel_start(&t), ("b.rs".into(), 0));
+    t.keys("[ f");
+    assert_eq!(sel_start(&t), ("a.rs".into(), 2));
+}
+
+#[test]
+fn a_count_on_j_and_k_carries_on_into_the_next_file() {
+    let mut t = four(40);
+    t.keys("g g 1 0 j");
+    assert_eq!(at(&t), ("b.rs".into(), 3));
+    t.keys("5 k");
+    assert_eq!(at(&t), ("a.rs".into(), 6));
+}
+
+#[test]
+fn scrolling_and_window_keys_use_the_whole_review() {
+    let mut t = four(14);
+    t.keys("g g");
+    // z j scrolls the review a line, and the cursor comes along to stay clear of the top.
+    t.keys("z j");
+    assert_ne!(t.app.all.top, (0, 0));
+    assert_eq!(t.path(), "a.rs");
+    // zt puts the cursor's line near the top, wherever it is.
+    t.keys("g n j j j z t");
+    assert_eq!(t.app.all.top.0, 1, "{:?}", t.app.all.top);
+    // On a taller screen, gb goes to the bottom of the screen, in a later file, and gt and gc
+    // come back up.
+    let mut t = four(34);
+    t.keys("g n j j j z t g b");
+    assert!(
+        ["c.rs", "d.rs"].contains(&t.path().as_str()),
+        "{}",
+        t.screen()
+    );
+    t.keys("g t");
+    assert!(
+        ["a.rs", "b.rs"].contains(&t.path().as_str()),
+        "{}",
+        t.screen()
+    );
+    // zz centres the cursor's line, so gc stays in its file.
+    t.keys("g n j j j");
+    let here = t.path();
+    t.keys("z z g c");
+    assert_eq!(t.path(), here, "{}", t.screen());
+}
+
+#[test]
+fn the_last_and_first_change_are_the_reviews() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g ] G");
+    assert_eq!(t.path(), "c.rs");
+    assert!(t.sel().starts_with("#[new\nnewer"), "{}", t.sel());
+    t.keys("[ G");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
 }

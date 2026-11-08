@@ -217,6 +217,9 @@ pub struct App {
     jump: usize,
     /// The last `f`/`t`, text object or `]g`-style motion, for `A-.`.
     last_motion: Option<Motion>,
+    /// The command `last_motion` runs, if it's one, so all-files mode can repeat it across
+    /// files.
+    last_motion_name: Option<&'static str>,
     /// Keys being recorded into the `@` register (`Q`), and the last recording.
     recording: Option<Vec<Key>>,
     macro_keys: Vec<Key>,
@@ -463,6 +466,7 @@ impl App {
             jumps: vec![],
             jump: 0,
             last_motion: None,
+            last_motion_name: None,
             recording: None,
             macro_keys: vec![],
             replaying: false,
@@ -1061,7 +1065,10 @@ impl App {
         let (x, rest) = (tree_w, w - tree_w);
         self.view = Rect::new(x, 0, rest, h - box_h);
         self.left_view = Rect::default();
-        if self.split_left().is_some() {
+        // With every file on screen, side by side keeps its two columns whatever the cursor's
+        // file is.
+        let all_split = self.all_shown() && self.view_kind == ViewKind::Split;
+        if self.split_left().is_some() || all_split {
             let half = rest / 2;
             self.left_view = Rect::new(x, 0, half, h - box_h);
             self.view = Rect::new(x + half, 0, rest - half, h - box_h);
@@ -1750,6 +1757,17 @@ impl App {
 
     /// `]d`, `[d`, `]D`, `[D`: to a thread in the file on screen, selecting its lines.
     fn goto_thread(&mut self, forward: bool, edge: bool) {
+        if self.all_shown() && self.comment_box.is_none() {
+            return self.thread_across(forward, edge);
+        }
+        if !self.goto_thread_in(forward, edge) {
+            self.status = Some(("No more threads in this file".into(), false));
+        }
+    }
+
+    /// Selects the next or previous thread in the file on screen, or with `edge` the last or
+    /// first. Returns whether there was one.
+    pub(super) fn goto_thread_in(&mut self, forward: bool, edge: bool) -> bool {
         let path = self.state.main_path();
         let mut spans: Vec<(usize, usize)> = self
             .shown_threads()
@@ -1767,13 +1785,12 @@ impl App {
             (false, true) => spans.iter().find(|s| s.0 > line),
             (false, false) => spans.iter().rev().find(|s| s.0 < line),
         };
-        match target.copied() {
-            Some((s, e)) => {
-                self.select_lines(s, e);
-                self.scroll_to_cursor(false);
-            }
-            None => self.status = Some(("No more threads in this file".into(), false)),
-        }
+        let Some((s, e)) = target.copied() else {
+            return false;
+        };
+        self.select_lines(s, e);
+        self.scroll_to_cursor(false);
+        true
     }
 
     /// `' d` / `' D`: Helix's diagnostic pickers, over threads.
@@ -1919,6 +1936,7 @@ impl App {
                 };
                 self.doc_command(|cx| motion(cx));
                 self.last_motion = Some(motion);
+                self.last_motion_name = None;
             }
             self.count = None;
             return None;
@@ -2194,12 +2212,18 @@ impl App {
                         | "goto_prev_paragraph"
                 ) {
                     let count = self.count;
+                    self.last_motion_name = Some(command.name);
                     self.last_motion = Some(std::rc::Rc::new(move |cx: &mut Ctx| {
                         cx.count = count;
                         f(cx)
                     }));
                 }
-                self.doc_command(f);
+                if !(self.all_shown()
+                    && self.comment_box.is_none()
+                    && self.jump_across_files(command.name, f))
+                {
+                    self.doc_command(f);
+                }
                 if command.name.ends_with("_change") {
                     self.open_fold_on_change();
                 }
@@ -2251,9 +2275,15 @@ impl App {
     fn cancel_prompt(&mut self) {
         match self.prompt.take() {
             Some(Prompt {
-                kind: PromptKind::Search { origin, top, .. },
+                kind:
+                    PromptKind::Search {
+                        origin, top, all, ..
+                    },
                 ..
             }) => {
+                if let Some((i, top)) = all {
+                    self.back_to_file(i, top);
+                }
                 let file = self.file_mut();
                 file.sel = origin;
                 file.top = top;
@@ -2363,6 +2393,7 @@ impl App {
                     forward,
                     origin,
                     top,
+                    all,
                 },
             line,
             ..
@@ -2370,13 +2401,21 @@ impl App {
         else {
             return;
         };
-        let (forward, origin, top) = (*forward, origin.clone(), *top);
-        let Some(regex) = commands::search_regex(line) else {
+        let (forward, origin, top, all, line) =
+            (*forward, origin.clone(), *top, *all, line.clone());
+        if commands::search_regex(&line).is_none() {
             return;
-        };
+        }
+        if let Some((i, top)) = all {
+            self.back_to_file(i, top);
+        }
         let file = self.file_mut();
         file.sel = origin;
         file.top = top;
+        if all.is_some() {
+            return self.search_across(&line, forward, false);
+        }
+        let regex = commands::search_regex(&line).expect("checked above");
         self.doc_command(|cx| commands::search(cx, &regex, forward, false));
     }
 
@@ -2415,7 +2454,11 @@ impl App {
             A::Fold(k) => self.fold_command(k),
             A::GotoObject(ch, forward) => {
                 let _ = self.push_jump();
-                self.ts_object(forward, ch, true);
+                if self.all_shown() && self.comment_box.is_none() {
+                    self.object_across(forward, ch);
+                } else {
+                    self.ts_object(forward, ch, true);
+                }
             }
             A::Dashboard => match dashboard::picker(&self.conn, &self.theme) {
                 Ok(p) => self.pickers = vec![p],
@@ -2443,8 +2486,14 @@ impl App {
             },
             A::AllFiles(on) => self.set_all_files(on.unwrap_or(!self.all.on)),
             A::View(kind) => {
+                let was = self.view_kind;
                 self.view_kind = kind;
                 self.ensure_alt();
+                // Lines differ between views, so the top of the screen goes to the start of
+                // its file, and the screen then follows the cursor.
+                if was != kind {
+                    self.all.top.1 = 0;
+                }
                 if kind != ViewKind::File && self.split_left().is_none() && self.alt.is_none() {
                     self.status = Some((
                         format!(
@@ -2527,14 +2576,20 @@ impl App {
             AppAction::CommandMode => self.prompt = Some(Prompt::new(PromptKind::Command)),
             AppAction::Search(forward) => {
                 let file = self.file();
+                let all = (self.all_shown() && self.comment_box.is_none())
+                    .then(|| (self.cur_index(), self.all.top));
                 let kind = PromptKind::Search {
                     forward,
                     origin: file.sel.clone(),
                     top: file.top,
+                    all,
                 };
                 self.prompt = Some(Prompt::new(kind));
             }
             AppAction::SearchNext(forward) => match self.last_search.clone() {
+                Some(q) if self.all_shown() && self.comment_box.is_none() => {
+                    self.search_across(&q, forward, true)
+                }
                 Some(q) => self.doc_command(|cx| commands::search_next(cx, &q, forward)),
                 None => self.status = Some(("No previous search".into(), true)),
             },
@@ -2645,7 +2700,23 @@ impl App {
                 // A count repeats the motion that many times, each with its own count.
                 if let Some(m) = self.last_motion.clone() {
                     for _ in 0..self.count.take().map_or(1, NonZeroUsize::get) {
-                        self.doc_command(|cx| m(cx));
+                        // In all-files mode the motion goes on into the next file, as it did.
+                        let across = self.all_shown() && self.comment_box.is_none();
+                        match self.last_motion_name {
+                            Some(name) if across => {
+                                let f = keymap::command(name).and_then(|c| match c.action {
+                                    Action::Doc(f) => Some(f),
+                                    _ => None,
+                                });
+                                if let Some(f) = f
+                                    && self.jump_across_files(name, f)
+                                {
+                                    continue;
+                                }
+                                self.doc_command(|cx| m(cx));
+                            }
+                            _ => self.doc_command(|cx| m(cx)),
+                        }
                     }
                 }
             }
@@ -3251,21 +3322,9 @@ impl App {
     fn draw_one(&mut self, buf: &mut Buffer, styles: view::SelectionStyles) {
         let threads = self.main_threads();
         if let Some(left) = self.split_left() {
-            // The old side follows the new side's scroll; its thread rows are blank so the
-            // sides stay level.
+            // The old side follows the new side's scroll.
             let right = self.main_file();
-            let mut blank = Threads::default();
-            for (line, rows) in &threads.rows {
-                let pad = rows
-                    .iter()
-                    .map(|r| comments::ThreadRow {
-                        text: String::new(),
-                        style: Style::default(),
-                        thread: r.thread,
-                    })
-                    .collect();
-                blank.rows.insert(*line, pad);
-            }
+            let blank = blank_threads(&threads);
             let none = Style::default();
             view::draw(
                 buf,
@@ -3487,6 +3546,23 @@ fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
+}
+
+/// The old side's thread rows in the side-by-side view: blank, so the two sides stay level.
+fn blank_threads(threads: &Threads) -> Threads {
+    let mut blank = Threads::default();
+    for (line, rows) in &threads.rows {
+        let pad = rows
+            .iter()
+            .map(|r| comments::ThreadRow {
+                text: String::new(),
+                style: Style::default(),
+                thread: r.thread,
+            })
+            .collect();
+        blank.rows.insert(*line, pad);
+    }
+    blank
 }
 
 #[cfg(test)]
