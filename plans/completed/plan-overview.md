@@ -141,8 +141,12 @@ files in the review.
 **Re-anchoring.** When the code changes, each thread is placed again: the old position is mapped
 through the diff between the file's content when the thread was anchored and now (with imara-diff).
 If the anchored text is gone, glos searches the file for the same text near the old spot, using the
-context lines as a tie-break. If that fails, the thread becomes **outdated** and is shown against
-the code as it was. This is the riskiest logic in the project and gets the most tests. The same
+context lines as a tie-break. A copy more than 200 lines away counts only if its context came
+with it, and a copy of a short or common line needs a context line, so a thread on `}` doesn't
+jump to another `}`. If no copy counts but the lines the diff maps the thread to share 70% of its
+words, the thread stays on them, so a small edit keeps it. If that fails, the thread becomes
+**outdated** and is shown against the code as it was. `completed/plan-reanchoring.md` has the
+rules. This is the riskiest logic in the project and gets the most tests. The same
 mapping keeps your cursor and scroll position on the same code when a file changes under you.
 
 While the agent is editing, a thread isn't marked outdated straight away. glos waits until the
@@ -594,7 +598,7 @@ largest piece of Helix to imitate. Move it earlier if quick fixes turn out to be
 Each of these was answered on 2026-11-06 and has a plan in `plans/`.
 
 - **Re-anchoring rules:** how far to search for moved text, and whether a small edit keeps the
-  thread. See `plan-reanchoring.md`.
+  thread. See `completed/plan-reanchoring.md`.
 - **Branch renames and detached HEAD:** see `plan-review-identity.md`.
 - **The default theme:** catppuccin_mocha. See `completed/plan-default-theme.md`.
 - **A folder with no second copy:** snapshot it when the review starts. See

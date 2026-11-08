@@ -762,7 +762,8 @@ pub struct Reanchored {
 }
 
 /// Places the threads on `path` again now that its content is `new`, and records where they
-/// went (with `new` as their content from now on). Threads whose text is gone become outdated
+/// went (with `new` as their content from now on). The anchored text becomes the lines' text
+/// now, which differs when a small edit kept the thread. Threads whose text is gone become outdated
 /// only when `settled`, so they don't flicker while an agent is mid-edit. Outdated threads stay
 /// where they were until reopened.
 pub fn reanchor(
@@ -840,7 +841,7 @@ pub fn reanchor(
                 let ctx = |r: std::ops::Range<usize>| lines.get(r).unwrap_or_default().concat();
                 tx.execute(
                     "UPDATE threads SET line_start = ?2, line_end = ?3, file_hash = ?4,
-                            context_above = ?5, context_below = ?6
+                            context_above = ?5, context_below = ?6, anchor_text = ?7
                      WHERE id = ?1",
                     params![
                         id,
@@ -848,7 +849,8 @@ pub fn reanchor(
                         e as u32 + 1,
                         hash,
                         ctx(s.saturating_sub(3)..s),
-                        ctx(e + 1..(e + 4).min(lines.len()))
+                        ctx(e + 1..(e + 4).min(lines.len())),
+                        ctx(s..e + 1)
                     ],
                 )?;
                 if (s as u32 + 1, e as u32 + 1) != (start, end) {
@@ -1780,6 +1782,25 @@ mod tests {
             reanchor(&f.conn, id, "other.rs", "", true).unwrap(),
             Reanchored::default()
         );
+    }
+
+    #[test]
+    fn a_small_edit_keeps_a_thread_and_updates_its_text() {
+        let f = fx();
+        let id = &f.review.id;
+        let old = "fn total(items: &[Item]) -> u32 {\n    items.iter().map(|i| i.prise).sum()\n}\n";
+        let t = comment(&f.conn, id, Some((&at("new.rs", 1, 3), old)), YOU, "typo").unwrap();
+        let new = old.replace("prise", "price");
+        let r = reanchor(&f.conn, id, "new.rs", &new, true).unwrap();
+        assert_eq!(r, Reanchored::default());
+        let th = threads(&f.conn, id)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == t)
+            .unwrap();
+        assert_eq!(th.status, "open");
+        assert_eq!(th.anchor.unwrap(), at("new.rs", 1, 3));
+        assert_eq!(th.anchor_text.as_deref(), Some(new.as_str()));
     }
 
     #[test]
