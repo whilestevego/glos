@@ -247,7 +247,6 @@ commands! {
     goto_prev_unread, "Goto previous unread reply", App(AppAction::NextUnread(false));
     toggle_resolved, "Resolve or reopen the thread under the cursor", App(AppAction::ToggleResolved);
     goto_suggestion, "Goto the line the agent suggested", App(AppAction::GotoSuggestion);
-    view_file, "The whole file, changes in the gutter", App(AppAction::View(super::ViewKind::File));
     view_unified, "Unified: changes with lines around them", App(AppAction::View(super::ViewKind::Unified));
     view_split, "Side by side: old and new", App(AppAction::View(super::ViewKind::Split));
     toggle_all_files, "All files in one scroll, or one file", App(AppAction::AllFiles(None));
@@ -694,7 +693,6 @@ fn normal_defs() -> Vec<Def> {
                     "v",
                     "View",
                     vec![
-                        cmd("f", "view_file"),
                         cmd("u", "view_unified"),
                         cmd("s", "view_split"),
                         cmd("a", "toggle_all_files"),
@@ -1168,7 +1166,6 @@ mod tests {
             ("' s a", "submit_approve"),
             ("' s r", "submit_changes"),
             ("' s c", "submit_comment"),
-            ("' v f", "view_file"),
             ("' v u", "view_unified"),
             ("' v s", "view_split"),
             ("' v a", "toggle_all_files"),

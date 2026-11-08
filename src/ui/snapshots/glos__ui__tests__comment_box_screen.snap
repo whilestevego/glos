@@ -1,12 +1,11 @@
 ---
 source: src/ui/tests.rs
-assertion_line: 747
 expression: t.screen()
 ---
     1  fn main() {
+    2 ▍    println!("hi");
     2 ▍    println!("hello");
     3 ▍    let x = 1;
-    4  }
 ┌ Comment on main.rs:2 ────────────────────────────────────────────────┐
 │rename `x`                                                            │
 │                                                                      │

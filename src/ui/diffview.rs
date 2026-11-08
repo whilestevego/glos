@@ -72,7 +72,7 @@ impl Doc<'_> {
     fn push(&mut self, row: Row) {
         let start = self.text.len();
         let words = match row {
-            Row::Added(n) | Row::Line(n) => self.words.1.get(&n),
+            Row::Added(n) => self.words.1.get(&n),
             Row::Removed(o) => self.words.0.get(&o),
             _ => None,
         };
@@ -80,7 +80,7 @@ impl Doc<'_> {
             self.view_words.insert(self.rows.len(), w.clone());
         }
         let from = match row {
-            Row::Same { new, .. } | Row::Added(new) | Row::Line(new) => Some((&self.new, new)),
+            Row::Same { new, .. } | Row::Added(new) => Some((&self.new, new)),
             Row::Removed(old) => Some((&self.old, old)),
             Row::Fold { .. } | Row::Filler => None,
         };
@@ -339,24 +339,6 @@ pub struct Rows {
 pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
     let (old_n, new_n) = (line_count(&old.text), line_count(&new.text));
     match kind {
-        ViewKind::File => {
-            let mut changed = vec![false; new_n];
-            for h in hunks {
-                let (s, e) = (h.after.start as usize, h.after.end as usize);
-                // A removal marks the line after it, as the gutter does.
-                for c in changed.iter_mut().take(e.max(s + 1)).skip(s) {
-                    *c = true;
-                }
-                if s >= new_n && new_n > 0 {
-                    changed[new_n - 1] = true;
-                }
-            }
-            Rows {
-                rows: (0..new_n).map(Row::Line).collect(),
-                left: None,
-                changed,
-            }
-        }
         ViewKind::Unified => {
             let mut rows = vec![];
             let (mut o, mut n) = (0, 0);
@@ -444,8 +426,6 @@ pub struct Built {
     /// The whole view's changed rows, and each row's new-side line.
     pub changed: Vec<bool>,
     pub lines: Vec<Option<usize>>,
-    /// Whether anything is folded.
-    pub folded: bool,
 }
 
 /// Builds a view of `new` (and `old`), folded by `context`, `folds`, and the threads (as
@@ -490,20 +470,7 @@ pub fn build(
             }
         }
     }
-    let folded = hidden.contains(&true);
-    if kind == ViewKind::File && !folded {
-        // Not shown: the whole-file view with nothing folded is the file itself.
-        return Built {
-            doc: File::synthetic(String::new(), new.tab_width, vec![], vec![], 0),
-            left: None,
-            full: vec![],
-            len: n,
-            auto,
-            lines: r.rows.iter().map(|r| r.new_line()).collect(),
-            changed: r.changed,
-            folded,
-        };
-    }
+
     // The whole-file view has its words already. The other views work them out from the two
     // sides, as they do the hunks.
     let computed;
@@ -563,28 +530,6 @@ pub fn build(
     }
     let (old_n, new_n) = (line_count(&old.text), line_count(&new.text));
     let (mut doc, left) = match kind {
-        ViewKind::File => {
-            let mut f = d.file(new.numbers);
-            // The file's own changes, onto the view's lines, so the gutter and `]g` see them.
-            let view_of = |row: usize| full.partition_point(|&s| s <= row).saturating_sub(1);
-            f.hunks = hunks
-                .iter()
-                .map(|h| {
-                    let s = h.after.start as usize;
-                    let start = if s >= n { full.len() } else { view_of(s) } as u32;
-                    let end = if h.after.is_empty() {
-                        start
-                    } else {
-                        view_of(h.after.end as usize - 1) as u32 + 1
-                    };
-                    Hunk {
-                        before: h.before.clone(),
-                        after: start..end,
-                    }
-                })
-                .collect();
-            (f, None)
-        }
         ViewKind::Unified => (d.file(old_n.max(new_n)), None),
         ViewKind::Split => {
             let mut left = ld.unwrap().file(old_n);
@@ -601,7 +546,6 @@ pub fn build(
         auto,
         lines: r.rows.iter().map(|r| r.new_line()).collect(),
         changed: r.changed,
-        folded,
     }
 }
 
@@ -784,43 +728,6 @@ mod tests {
             b(0, &[(24, 24)]),
             "↕ lines 1–9 (9)  ret opens\n10\nten\n↕ lines 11–24 (14)  ret opens\n25\n↕ lines 26–30 (5)  ret opens\n"
         );
-    }
-
-    #[test]
-    fn the_file_view_folds_with_the_gutter_on_its_lines() {
-        let old = numbered(30);
-        let new = old.replace("10\n", "ten\n").replace("20\n", "");
-        let (_, n, _, l, t) = files(&old, &new);
-        let mut n = n;
-        n.hunks = diff::hunks(&old, &new);
-        let b = build(
-            ViewKind::File,
-            &n,
-            &n,
-            &n.hunks,
-            1,
-            &Folds::default(),
-            &[],
-            &l,
-            &t,
-        );
-        assert!(b.folded);
-        assert_eq!(
-            text(&b.doc),
-            "↕ lines 1–8 (8)  ret opens\n9\nten\n11\n↕ lines 12–18 (7)  ret opens\n19\n21\n22\n↕ lines 22–29 (8)  ret opens\n"
-        );
-        let rows = b.doc.rows.as_ref().unwrap();
-        assert_eq!(rows[2], Row::Line(9));
-        assert_eq!(b.doc.numbers, n.numbers);
-        // The changes, on the view's lines: `ten` replaced, and line 20 removed before `21`.
-        let after: Vec<_> = b.doc.hunks.iter().map(|h| h.after.clone()).collect();
-        assert_eq!(after, [2..3, 6..6]);
-        assert_eq!(b.full, [0, 8, 9, 10, 11, 18, 19, 20, 21]);
-        // Everything opened: the file isn't built at all.
-        let mut f = Folds::default();
-        f.open(0..b.len, b.len);
-        let b = build(ViewKind::File, &n, &n, &n.hunks, 1, &f, &[], &l, &t);
-        assert!(!b.folded);
     }
 
     #[test]

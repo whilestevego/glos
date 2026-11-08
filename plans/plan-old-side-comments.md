@@ -11,8 +11,7 @@ have to comment on a nearby new line. This plan lets you comment on removed line
 - In the unified and side-by-side views, `space c` (`' c` after `plan-review-menu.md`) on
   removed lines starts a thread on them. A selection that covers both removed and added lines
   goes on the new side, as today.
-- The thread shows under its removed lines in the unified and side-by-side views. In the
-  whole-file view it shows under the removed lines that `plan-removed-lines.md` draws there.
+- The thread shows under its removed lines in the unified and side-by-side views.
 - `glos show`, the MCP tools and the pickers write an old-side anchor as `path:-12` or
   `path:-12-14`, and say "removed lines" in words where there's room.
 
@@ -39,7 +38,6 @@ have to comment on a nearby new line. This plan lets you comment on removed line
 2. Commenting on removed lines in the unified and side-by-side views, and drawing the thread.
 3. Placing and outdating old-side threads.
 4. The MCP tools, the CLI and the pickers.
-5. Drawing them in the whole-file view, once `plan-removed-lines.md` is built.
 
 ## Tests
 

@@ -112,7 +112,7 @@ const PHASES: &[Phase] = &[
         t.keys("x x x % ; m i f ; w w b e");
     }),
     ("unified and split views", |t| {
-        t.keys("' v u C-d C-d ] g ] g ' v s C-d ] g ' v f");
+        t.keys("' v u C-d C-d ] g ] g ' v s C-d ] g ' v u");
     }),
     ("changed-file picker", |t| {
         t.keys("space g").typed("file_02").keys("ret");
@@ -166,7 +166,7 @@ fn perf_all_files() {
     within("scroll all files side by side", 7_000, || {
         t.keys("g g ' v s");
         t.keys(&"C-d ".repeat(100));
-        t.keys("' v f");
+        t.keys("' v u");
     });
     let loaded = t.app.state.files.iter().filter(|f| f.is_some()).count();
     assert!(

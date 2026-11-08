@@ -35,7 +35,6 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 | [plan-language-servers.md](plan-language-servers.md) | Draft. Diagnostics, going to definitions and references, hover and symbol pickers. Needs step 2 of `plan-review-menu.md`. |
 | [plan-in-place-editing.md](plan-in-place-editing.md) | Draft. Edit any file on disk with Helix's keys, and merge an agent's changes into unsaved edits. Needs step 3 of `plan-review-menu.md`. |
 | [plan-channels.md](plan-channels.md) | Blocked until Claude Code releases channels. Pushes your review into the agent's session. |
-| [plan-removed-lines.md](plan-removed-lines.md) | Draft. The whole-file view always shows removed lines at their change, as virtual lines. |
 | [plan-old-side-comments.md](plan-old-side-comments.md) | Draft. Comment on removed lines in the unified and side-by-side views. |
 | [plan-review-identity.md](plan-review-identity.md) | Draft. Reviews follow renamed branches, and detached HEAD is keyed by its start commit. |
 | [plan-folder-snapshot.md](plan-folder-snapshot.md) | Draft. Review a folder outside git against a snapshot taken when the review starts. |
@@ -45,7 +44,9 @@ Remappable keys, from the overview's "After the MVP" list in
 
 ## Abandoned
 
-None.
+| Plan | Why |
+|---|---|
+| [abandoned/plan-removed-lines.md](abandoned/plan-removed-lines.md) | 2026-11-08. The whole-file view was removed, and the unified view already shows removed lines. |
 
 ## Completed
 

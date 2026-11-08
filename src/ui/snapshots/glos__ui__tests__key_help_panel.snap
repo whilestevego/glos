@@ -1,14 +1,14 @@
 ---
-source: src/ui/mod.rs
-expression: "screen(&mut app(d.path()), \"g\")"
+source: src/ui/tests.rs
+expression: "T::files(OLD, NEW).keys(\"g\").screen()"
 ---
     1  fn main() {           ┌Goto─────────────────────────────────────┐
-    2 ▍    println!("hello");│ g  Goto line number <n> else file start │
-    3 ▍    let x = 1;        │ e  Goto last line                       │
-    4  }                     │ h  Goto line start                      │
-    5 ▔                      │ l  Goto line end                        │
-                             │ s  Goto first non-blank in line         │
-                             │ t  Goto window top                      │
+    2 ▍    println!("hi");   │ g  Goto line number <n> else file start │
+    2 ▍    println!("hello");│ e  Goto last line                       │
+    3 ▍    let x = 1;        │ h  Goto line start                      │
+    4  }                     │ l  Goto line end                        │
+    4 ▍                      │ s  Goto first non-blank in line         │
+    5 ▍fn gone() {}          │ t  Goto window top                      │
                              │ c  Goto window center                   │
                              │ b  Goto window bottom                   │
                              │ n  Goto next changed file               │

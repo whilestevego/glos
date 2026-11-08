@@ -92,7 +92,6 @@ pub fn completions(line: &str) -> (usize, Vec<(String, &'static str)>) {
                 ],
                 "toggle" | "toggle-option" => &[("soft-wrap", "Soft-wrap long lines")],
                 "view" => &[
-                    ("file", "The whole file, changes in the gutter"),
                     ("unified", "Changes with three lines around them"),
                     ("split", "Old and new side by side"),
                 ],

@@ -79,7 +79,6 @@ enum Cur {
 /// How the file on screen is shown: whole with the gutter, as hunks, or old beside new.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ViewKind {
-    File,
     Unified,
     Split,
 }
@@ -87,7 +86,6 @@ pub enum ViewKind {
 impl ViewKind {
     fn name(self) -> &'static str {
         match self {
-            ViewKind::File => "file",
             ViewKind::Unified => "unified",
             ViewKind::Split => "split",
         }
@@ -490,7 +488,7 @@ impl App {
             generation: 0,
             watch: None,
             changed_at: None,
-            view_kind: ViewKind::File,
+            view_kind: ViewKind::Unified,
             alt: None,
             diff_context: config.editor.diff_context,
             folds: HashMap::new(),
@@ -815,6 +813,11 @@ impl App {
         self.changed_at = Some(std::time::Instant::now());
         self.generation += 1;
         self.placed.borrow_mut().clear();
+        // The cursor and scroll in the view, to put back if its file didn't change. Going
+        // through the file would move a cursor on a removed line to the next new line.
+        let kept = self
+            .shown_alt()
+            .map(|a| (a.doc.sel.clone(), a.doc.top, a.doc.text.clone()));
         if let Some(a) = self.alt.take() {
             self.sync_base(a);
         }
@@ -931,6 +934,13 @@ impl App {
         }
         self.reanchor(false);
         self.ensure_alt();
+        if let Some((sel, top, text)) = kept
+            && !gone
+            && self.main_file().text == text
+        {
+            let f = self.main_file_mut();
+            (f.sel, f.top) = (sel, top);
+        }
         if gone {
             self.cursor_to_line(0);
             if let Cur::Change(i) = self.state.cur {
@@ -1183,6 +1193,32 @@ impl App {
         }
     }
 
+    /// `:N`, `Ng` and `NG` in a view: line N as the gutter numbers it, opening the fold that
+    /// hides it. A view's rows aren't the file's lines, so Helix's command would go to the wrong
+    /// one. Returns whether there was a count and a view to do this in.
+    fn goto_line_number(&mut self) -> bool {
+        let Some(n) = self.count else {
+            return false;
+        };
+        if self.main_file().rows.is_none() {
+            return false;
+        }
+        let line = n.get() - 1;
+        self.reveal(line, line);
+        let at = self.main_file().line_of(line);
+        let extend = self.state.mode == Mode::Select;
+        let f = self.main_file_mut();
+        let t = f.text.slice(..);
+        let pos = t.line_to_char(at.min(t.len_lines() - 1));
+        f.sel = f
+            .sel
+            .clone()
+            .transform(|r| r.put_cursor(t, pos, extend))
+            .ensure_invariants(t);
+        self.scroll_to_cursor(true);
+        true
+    }
+
     /// The cursor's line on the new side: for a removed or folded line in a view, the next
     /// new line.
     fn cursor_new_line(&self) -> usize {
@@ -1202,10 +1238,6 @@ impl App {
         }
         if let Some(a) = self.alt.take() {
             self.sync_base(a);
-            if self.view_kind == ViewKind::File {
-                self.layout();
-                self.scroll_to_cursor(true);
-            }
         }
         self.build_alt();
     }
@@ -1852,7 +1884,6 @@ impl App {
             "goto_next_diag" | "goto_prev_diag" | "goto_first_diag" | "goto_last_diag"
             | "diagnostics_picker" => here(),
             "workspace_diagnostics_picker" => !self.state.threads.is_empty(),
-            "view_file" => self.view_kind != ViewKind::File,
             "view_unified" => self.view_kind != ViewKind::Unified,
             "view_split" => self.view_kind != ViewKind::Split,
             "scope_base" => self.scope != Scope::Base,
@@ -2198,6 +2229,13 @@ impl App {
                     let _ = self.push_jump();
                 }
                 if self.comment_box.is_none()
+                    && matches!(command.name, "goto_file_start" | "goto_line")
+                    && self.goto_line_number()
+                {
+                    self.count = None;
+                    return None;
+                }
+                if self.comment_box.is_none()
                     && self.all_shown()
                     && self.all_files_motion(command.name)
                 {
@@ -2494,7 +2532,7 @@ impl App {
                 if was != kind {
                     self.all.top.1 = 0;
                 }
-                if kind != ViewKind::File && self.split_left().is_none() && self.alt.is_none() {
+                if self.split_left().is_none() && self.alt.is_none() {
                     self.status = Some((
                         format!(
                             "This file has no diff to show {}; showing it whole",
@@ -3100,10 +3138,9 @@ impl App {
             "all" => _ = self.app_command(AppAction::AllFiles(Some(true))),
             "one" => _ = self.app_command(AppAction::AllFiles(Some(false))),
             "view" => match args.trim() {
-                "file" => _ = self.app_command(AppAction::View(ViewKind::File)),
                 "unified" => _ = self.app_command(AppAction::View(ViewKind::Unified)),
                 "split" => _ = self.app_command(AppAction::View(ViewKind::Split)),
-                _ => self.status = Some(("View how? :view file, unified or split".into(), true)),
+                _ => self.status = Some(("View how? :view unified or :view split".into(), true)),
             },
             "scope" => {
                 let key = match args.trim() {
@@ -3154,7 +3191,9 @@ impl App {
             },
             n if n.parse::<usize>().is_ok() => {
                 self.count = NonZeroUsize::new(n.parse().unwrap());
-                self.doc_command(commands::goto_line);
+                if !self.goto_line_number() {
+                    self.doc_command(commands::goto_line);
+                }
                 self.count = None;
             }
             other => self.status = Some((format!("no such command: '{other}'"), true)),
@@ -3384,7 +3423,7 @@ impl App {
         if self.scope != Scope::Base || self.filter.is_some() || self.state.source.revs.is_some() {
             left += &format!(" · {}", clean(&self.scope_label()));
         }
-        if self.view_kind != ViewKind::File {
+        if self.view_kind == ViewKind::Split {
             left += &format!(" · {}", self.view_kind.name());
         }
         if let Some(b) = &self.comment_box {

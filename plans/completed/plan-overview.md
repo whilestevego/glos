@@ -185,13 +185,17 @@ click on a header collapses its file. `' v a`, `:one` and `:all` switch to one f
 and back, and `[editor] all-files = false` starts glos that way. `completed/plan-all-files.md`
 has the details.
 
-Three views, all on the same review. `' v` (or `:view <name>`) switches between them and keeps
+Two views, both on the same review. `' v` (or `:view <name>`) switches between them and keeps
 your place, in one scroll or one file at a time:
 
-- **Full file + gutter (default):** the whole new file, changed lines marked in the gutter as Helix
-  does. Removed lines can be shown inline under a change on demand.
-- **Unified:** classic hunks with context, best in narrow panes.
+- **Unified (default):** each change with three lines of context around it, and each removed
+  line right above the lines that replaced it. `zR` opens every fold, which shows the whole file
+  with its removed lines.
 - **Side by side:** old and new in two columns.
+
+A third view, the whole new file with changes marked only in the gutter, was the first default.
+It was removed on 2026-11-08, because once it folded unchanged code it differed from unified only
+by hiding the removed lines.
 
 Scopes, switched with `' o` or `:scope`, which you can combine with a files filter:
 
@@ -204,8 +208,7 @@ Scopes, switched with `' o` or `:scope`, which you can combine with a files filt
 
 In every view, a changed line has a background tinted toward the theme's addition or removal
 colour, and the words that changed within it get a stronger tint, as on GitHub and in `delta`.
-In the whole-file view, added and modified lines take the addition tint, since they're the new
-text. `plan-diff-highlight.md` has the details.
+`completed/plan-diff-highlight.md` has the details.
 
 Navigation: the changed-file picker (`space g`) is primary; `gn` / `gp` step through changed files,
 going to a file's header in one scroll;
