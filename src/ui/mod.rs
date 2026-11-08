@@ -1750,6 +1750,17 @@ impl App {
 
     /// `]d`, `[d`, `]D`, `[D`: to a thread in the file on screen, selecting its lines.
     fn goto_thread(&mut self, forward: bool, edge: bool) {
+        if self.all_shown() && self.comment_box.is_none() {
+            return self.thread_across(forward, edge);
+        }
+        if !self.goto_thread_in(forward, edge) {
+            self.status = Some(("No more threads in this file".into(), false));
+        }
+    }
+
+    /// Selects the next or previous thread in the file on screen, or with `edge` the last or
+    /// first. Returns whether there was one.
+    pub(super) fn goto_thread_in(&mut self, forward: bool, edge: bool) -> bool {
         let path = self.state.main_path();
         let mut spans: Vec<(usize, usize)> = self
             .shown_threads()
@@ -1767,13 +1778,12 @@ impl App {
             (false, true) => spans.iter().find(|s| s.0 > line),
             (false, false) => spans.iter().rev().find(|s| s.0 < line),
         };
-        match target.copied() {
-            Some((s, e)) => {
-                self.select_lines(s, e);
-                self.scroll_to_cursor(false);
-            }
-            None => self.status = Some(("No more threads in this file".into(), false)),
-        }
+        let Some((s, e)) = target.copied() else {
+            return false;
+        };
+        self.select_lines(s, e);
+        self.scroll_to_cursor(false);
+        true
     }
 
     /// `' d` / `' D`: Helix's diagnostic pickers, over threads.
@@ -2199,7 +2209,14 @@ impl App {
                         f(cx)
                     }));
                 }
-                self.doc_command(f);
+                match command.name {
+                    "goto_next_change" | "goto_prev_change"
+                        if self.all_shown() && self.comment_box.is_none() =>
+                    {
+                        self.change_across(command.name == "goto_next_change", f)
+                    }
+                    _ => self.doc_command(f),
+                }
                 if command.name.ends_with("_change") {
                     self.open_fold_on_change();
                 }
@@ -2251,9 +2268,15 @@ impl App {
     fn cancel_prompt(&mut self) {
         match self.prompt.take() {
             Some(Prompt {
-                kind: PromptKind::Search { origin, top, .. },
+                kind:
+                    PromptKind::Search {
+                        origin, top, all, ..
+                    },
                 ..
             }) => {
+                if let Some((i, top)) = all {
+                    self.back_to_file(i, top);
+                }
                 let file = self.file_mut();
                 file.sel = origin;
                 file.top = top;
@@ -2363,6 +2386,7 @@ impl App {
                     forward,
                     origin,
                     top,
+                    all,
                 },
             line,
             ..
@@ -2370,13 +2394,21 @@ impl App {
         else {
             return;
         };
-        let (forward, origin, top) = (*forward, origin.clone(), *top);
-        let Some(regex) = commands::search_regex(line) else {
+        let (forward, origin, top, all, line) =
+            (*forward, origin.clone(), *top, *all, line.clone());
+        if commands::search_regex(&line).is_none() {
             return;
-        };
+        }
+        if let Some((i, top)) = all {
+            self.back_to_file(i, top);
+        }
         let file = self.file_mut();
         file.sel = origin;
         file.top = top;
+        if all.is_some() {
+            return self.search_across(&line, forward, false);
+        }
+        let regex = commands::search_regex(&line).expect("checked above");
         self.doc_command(|cx| commands::search(cx, &regex, forward, false));
     }
 
@@ -2527,14 +2559,20 @@ impl App {
             AppAction::CommandMode => self.prompt = Some(Prompt::new(PromptKind::Command)),
             AppAction::Search(forward) => {
                 let file = self.file();
+                let all = (self.all_shown() && self.comment_box.is_none())
+                    .then(|| (self.cur_index(), self.all.top));
                 let kind = PromptKind::Search {
                     forward,
                     origin: file.sel.clone(),
                     top: file.top,
+                    all,
                 };
                 self.prompt = Some(Prompt::new(kind));
             }
             AppAction::SearchNext(forward) => match self.last_search.clone() {
+                Some(q) if self.all_shown() && self.comment_box.is_none() => {
+                    self.search_across(&q, forward, true)
+                }
                 Some(q) => self.doc_command(|cx| commands::search_next(cx, &q, forward)),
                 None => self.status = Some(("No previous search".into(), true)),
             },

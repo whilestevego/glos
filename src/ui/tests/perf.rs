@@ -153,6 +153,15 @@ fn perf_all_files() {
         t.keys(&"g n ".repeat(20));
         t.keys("G g g");
     });
+    // A search with no match reads every file once, and then the cursor stays put.
+    within("search all files for nothing", 7_000, || {
+        t.keys("/ z q x ret");
+    });
+    within("]g and n through all files", 7_000, || {
+        t.keys(&"] g ".repeat(200));
+        t.keys("/ f n ret");
+        t.keys(&"n ".repeat(200));
+    });
     let loaded = t.app.state.files.iter().filter(|f| f.is_some()).count();
     assert!(
         loaded <= super::super::all::MAX_LOADED,

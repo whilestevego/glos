@@ -177,6 +177,20 @@ Steps 1 and 2, in the first pull request:
 - **Not yet.** Search, `]g` and the thread keys still work within the file under the cursor.
   They're step 4.
 
+Step 4, in the second pull request:
+
+- **One helper crosses files for every jump.** `App::jump_across` runs a jump in the cursor's
+  file, and when it finds nothing more there it tries each later file (earlier, going back)
+  from its start (end). Search uses it with wrapping round the review, and `]g`, `[g`, `]r` and
+  `[r` without. `]R` and `[R` go to the last and first thread of the review.
+- **Search checks a file's text before opening it.** Opening every file of the 150-file review
+  to search it took 9 seconds. `may_match` runs the regex over the file's text first, so a
+  search that matches nothing takes about 30 ms. A search as it's typed starts again from the
+  file it began in, and `esc` goes back there (`PromptKind::Search` `all`).
+- **The tree already followed the cursor.** It marks the file on screen when it draws, so it
+  needed no change, only a test.
+- **`gn` and `gp`** already went to a file's header in step 2.
+
 ## Relevant code
 
 - `src/ui/mod.rs`: `State`, `App` (`alt`, `folds`, `view_kind`), `Alt`, `load`, `ensure_alt`,

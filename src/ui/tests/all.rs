@@ -411,3 +411,101 @@ fn a_headers_counts_are_coloured_as_added_and_removed() {
     assert_eq!(t.cell(col("-1"), 0).fg, minus.fg.unwrap());
     assert_ne!(t.cell(col("a."), 0).fg, plus.fg.unwrap());
 }
+
+#[test]
+fn search_goes_on_into_later_files_and_wraps_round_the_review() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g / n e w ret");
+    // a.rs and b.rs have no "new", so the search goes on to c.rs.
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 0));
+    t.keys("n");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 1));
+    // Past the last match in the last file, n goes round to the first.
+    t.keys("n");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 0));
+    assert_eq!(t.status(), Some("Wrapped around the review"));
+    t.keys("N");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("c.rs".into(), 1));
+    // A search back from a.rs goes to the end of b.rs.
+    t.keys("g g ? f n ret");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
+}
+
+#[test]
+fn a_search_as_it_is_typed_comes_back_on_esc() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g j j");
+    let (here, sel, top) = (at(&t), t.sel(), t.app.all.top);
+    t.keys("/ n e w");
+    assert_eq!(t.path(), "c.rs");
+    // Typing on, the search starts again from where it began.
+    t.keys("backspace backspace backspace l i n e");
+    assert_eq!(t.path(), "a.rs");
+    t.keys("esc");
+    assert_eq!((at(&t), t.sel(), t.app.all.top), (here, sel, top));
+}
+
+#[test]
+fn a_search_with_no_match_stays_put() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g j j");
+    let (here, sel) = (at(&t), t.sel());
+    t.keys("/ z z z ret n");
+    assert_eq!((at(&t), t.sel()), (here, sel));
+    assert_eq!(t.status(), Some("No more matches"));
+}
+
+#[test]
+fn next_change_goes_on_into_the_next_file() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g ] g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
+    t.keys("] g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
+    t.keys("] g");
+    assert_eq!(t.path(), "c.rs");
+    assert!(t.sel().starts_with("#[new\nnewer"), "{}", t.sel());
+    // There's nothing after the last file's last change, and the cursor stays.
+    t.keys("] g");
+    assert_eq!(t.path(), "c.rs");
+    assert_eq!(t.status(), Some("No more changes"));
+    t.keys("[ g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("b.rs".into(), 0));
+    t.keys("[ g");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
+}
+
+#[test]
+fn the_thread_keys_go_through_every_file() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g ] g x ' c").typed("on a").keys("esc ret");
+    t.keys("g n x ' c").typed("on b").keys("esc ret");
+    t.keys("G x ' c").typed("on c").keys("esc ret");
+    t.keys("g g ] r");
+    assert_eq!(t.path(), "a.rs");
+    assert!(t.sel().contains("#[line twenty"), "{}", t.sel());
+    t.keys("] r");
+    assert_eq!(t.path(), "b.rs");
+    t.keys("] r");
+    assert_eq!(t.path(), "c.rs");
+    t.keys("] r");
+    assert_eq!(t.path(), "c.rs");
+    assert_eq!(t.status(), Some("No more threads"));
+    t.keys("[ r");
+    assert_eq!(t.path(), "b.rs");
+    t.keys("[ R");
+    assert_eq!(t.path(), "a.rs");
+    assert!(t.sel().contains("#[line twenty"), "{}", t.sel());
+    t.keys("] R");
+    assert_eq!(t.path(), "c.rs");
+}
+
+#[test]
+fn the_tree_marks_the_file_under_the_cursor() {
+    let mut t = all_files(72, 30, three);
+    t.keys("space e esc g g g e j");
+    assert_eq!(t.path(), "b.rs");
+    assert_eq!(t.app.tree.as_ref().unwrap().selected(), Some("b.rs"));
+    t.keys("] g");
+    assert_eq!(t.app.tree.as_ref().unwrap().selected(), Some("c.rs"));
+}

@@ -8,7 +8,10 @@
 
 use std::collections::HashMap;
 
-use glos_helix::{commands::SCROLLOFF, text::Selection};
+use glos_helix::{
+    commands::{self, SCROLLOFF},
+    text::Selection,
+};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -658,5 +661,216 @@ impl App {
             },
             false,
         ));
+    }
+
+    /// Puts the cursor back in file `i`, where it was in that file, with `top` at the top of
+    /// the screen.
+    pub(super) fn back_to_file(&mut self, i: usize, top: Pos) {
+        if i != self.cur_index() {
+            self.load(i);
+            self.state.cur = Cur::Change(i);
+            self.ensure_alt();
+        }
+        self.all.top = top;
+    }
+
+    /// A jump that goes on past the cursor's file. `jump` runs in the cursor's file from the
+    /// cursor, and says whether it found something there. If it didn't, `jump` runs in each
+    /// file after the cursor's (or before it, going back) for which `want` holds, told that
+    /// it starts from the file's start (or end). With `wrap`, it goes round past the last
+    /// file to the first. Returns whether it wrapped, or `None`, with the cursor back where it
+    /// was, when no file had anything.
+    fn jump_across(
+        &mut self,
+        forward: bool,
+        wrap: bool,
+        want: impl Fn(&App, usize) -> bool,
+        mut jump: impl FnMut(&mut App, bool) -> bool,
+    ) -> Option<bool> {
+        let (i, sel, top) = (self.cur_index(), self.main_file().sel.clone(), self.all.top);
+        if jump(self, false) {
+            return Some(false);
+        }
+        let n = self.state.files.len();
+        for k in 1..=n {
+            let wrapped = if forward { i + k >= n } else { k > i };
+            if wrapped && !wrap {
+                break;
+            }
+            let j = if forward {
+                (i + k) % n
+            } else {
+                (i + n - k) % n
+            };
+            if !want(self, j) {
+                continue;
+            }
+            self.enter_file(j, !forward);
+            if jump(self, true) {
+                return Some(wrapped);
+            }
+        }
+        self.back_to_file(i, top);
+        self.main_file_mut().sel = sel;
+        None
+    }
+
+    /// `n`, `N` and a search as it's typed: the next match of `query`, in a later file if
+    /// there are no more in this one, and round to the first file after the last. With
+    /// `warn`, the status line says when the search wraps or finds nothing.
+    pub(super) fn search_across(&mut self, query: &str, forward: bool, warn: bool) {
+        let Some(regex) = commands::search_regex(query) else {
+            return;
+        };
+        for _ in 0..self.count.map_or(1, |c| c.get()) {
+            let found = self.jump_across(
+                forward,
+                true,
+                |app, j| app.may_match(j, &regex),
+                |app, entered| app.search_in_file(&regex, forward, entered),
+            );
+            if warn {
+                self.status = match found {
+                    Some(false) => None,
+                    Some(true) => Some(("Wrapped around the review".into(), false)),
+                    None => Some(("No more matches".into(), true)),
+                };
+            }
+            if found.is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Whether file `j`'s text has a match for `regex`, checked before the file is opened,
+    /// because opening every file of a big review to search it takes seconds. A collapsed or
+    /// binary file can't show a match.
+    fn may_match(&self, j: usize, regex: &glos_helix::text::Regex) -> bool {
+        use glos_helix::text::{Rope, RopeSliceExt};
+        if let Some(f) = &self.state.files[j] {
+            return !(f.collapsed || f.binary)
+                && regex.find(f.text.slice(..).regex_input()).is_some();
+        }
+        use crate::source::Content;
+        let (source, change) = (&self.state.source, &self.state.source.changes[j]);
+        if source.collapsed(change) {
+            return false;
+        }
+        let shown = if change.new == Content::None {
+            &change.old
+        } else {
+            &change.new
+        };
+        let Some(bytes) = source.read(shown).ok().flatten() else {
+            return false;
+        };
+        let text = Rope::from(String::from_utf8_lossy(&bytes).as_ref());
+        regex.find(text.slice(..).regex_input()).is_some()
+    }
+
+    /// Selects the next match of `regex` in the file on screen without wrapping round it, or
+    /// with `entered` its first match (its last, going back). Returns whether there was one.
+    fn search_in_file(
+        &mut self,
+        regex: &glos_helix::text::Regex,
+        forward: bool,
+        entered: bool,
+    ) -> bool {
+        let f = self.main_file_mut();
+        let before = f.sel.clone();
+        if entered {
+            // From the end of the file a search forward wraps round to its first match, and
+            // from the start a search back wraps round to its last.
+            let t = f.text.slice(..);
+            let at = if forward {
+                t.len_chars().saturating_sub(1)
+            } else {
+                0
+            };
+            f.sel = Selection::point(at).ensure_invariants(t);
+        }
+        let from = self.main_file().sel.clone();
+        self.doc_command(|cx| commands::search(cx, regex, forward, false));
+        let (old, new) = (from.primary().from(), self.main_file().sel.primary().from());
+        let found = if entered {
+            self.main_file().sel != from
+        } else if forward {
+            new > old
+        } else {
+            new < old
+        };
+        if !found {
+            self.main_file_mut().sel = before;
+        }
+        found
+    }
+
+    /// `]g` and `[g`: the next change, in the next file if this one has no more.
+    pub(super) fn change_across(
+        &mut self,
+        forward: bool,
+        next: fn(&mut glos_helix::commands::Ctx),
+    ) {
+        let found = self.jump_across(
+            forward,
+            false,
+            |_, _| true,
+            |app, entered| {
+                let before = app.main_file().sel.clone();
+                app.status = None;
+                match (entered, forward) {
+                    (false, _) => app.doc_command(next),
+                    (true, true) => app.doc_command(commands::goto_first_change),
+                    (true, false) => app.doc_command(commands::goto_last_change),
+                }
+                app.main_file().sel != before
+            },
+        );
+        if found.is_none() {
+            self.status = Some(("No more changes".into(), false));
+        }
+    }
+
+    /// `]r`, `[r`, `]R` and `[R`: the next thread, in the next file if this one has no more;
+    /// or the last or first thread of the review.
+    pub(super) fn thread_across(&mut self, forward: bool, edge: bool) {
+        let has_threads = |app: &App, j: usize| {
+            let path = &app.state.source.changes[j].path;
+            app.state
+                .threads
+                .iter()
+                .any(|t| t.anchor.as_ref().is_some_and(|a| &a.path == path))
+        };
+        if edge {
+            // The last thread is the last one in the last file that has any.
+            let n = self.state.files.len();
+            let order: Vec<usize> = if forward {
+                (0..n).rev().collect()
+            } else {
+                (0..n).collect()
+            };
+            for j in order {
+                if has_threads(self, j) {
+                    self.enter_file(j, forward);
+                    if self.goto_thread_in(forward, true) {
+                        return;
+                    }
+                }
+            }
+            self.status = Some(("No threads in this review".into(), false));
+            return;
+        }
+        let found = self.jump_across(forward, false, has_threads, |app, entered| {
+            // Entering a file going forward, its first thread is next, and going back its
+            // last.
+            if entered {
+                app.goto_thread_in(!forward, true)
+            } else {
+                app.goto_thread_in(forward, false)
+            }
+        });
+        if found.is_none() {
+            self.status = Some(("No more threads".into(), false));
+        }
     }
 }
