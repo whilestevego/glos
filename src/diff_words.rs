@@ -98,6 +98,11 @@ fn counts(line: &str) -> HashMap<&str, usize> {
     m
 }
 
+/// How alike two texts are, from 0 to 1, as [`similarity`] measures lines.
+pub fn text_similarity(a: &str, b: &str) -> f32 {
+    similarity(&counts(a), &counts(b))
+}
+
 /// How alike two lines are, from 0 to 1: the share of their words they have in common.
 fn similarity(a: &HashMap<&str, usize>, b: &HashMap<&str, usize>) -> f32 {
     let total: usize = a.values().sum::<usize>() + b.values().sum::<usize>();

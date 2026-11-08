@@ -495,3 +495,16 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
   find every match in the review. GitHub's "Files changed" page and Zed's multibuffer work this
   way.
 - **Rejected:** a fourth view beside the other three, since each view is useful across all files.
+
+## Re-anchoring limits (2026-11-08)
+
+- **Chosen:** a copy of a thread's text counts only within 200 lines of where the diff maps the
+  thread, unless all of its context lines came with it. A short line, under 8 characters of
+  non-whitespace, or a common one, appearing more than 3 times, needs a context line to match.
+  When no copy counts, the thread stays on the lines the diff maps it to if they share 70% of its
+  words, and its anchor text becomes theirs. `completed/plan-reanchoring.md` has the rules and
+  the tests at each limit.
+- **Why:** an unlimited search for exact text moved threads on lines like `}` to copies far away,
+  and outdated a thread when the agent fixed a typo in it.
+- **Rejected:** fuzzy search across the whole file, which finds look-alike code anywhere, and no
+  search at all, which outdates every thread whose code moved.

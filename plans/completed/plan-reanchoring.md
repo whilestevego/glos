@@ -1,7 +1,7 @@
 # Re-anchoring that doesn't jump and survives small edits
 
-**Status:** Draft (2026-11-06). This answers the overview's open question on re-anchoring rules,
-in `completed/plan-overview.md`.
+**Status:** Implemented (2026-11-08) in PR #15. This answers the overview's open question on
+re-anchoring rules, in `completed/plan-overview.md`.
 
 When the code under a thread changes, `src/reanchor.rs` `place` searches the whole file for the
 exact text the thread was on, and picks the match nearest where it was. That has two problems.
@@ -49,6 +49,27 @@ The overview says re-anchoring gets the most tests of anything in glos. Each rul
 - A typo fix inside a three-line thread keeps the thread, and updates its anchor text.
 - A rewrite of the lines, with a similarity under 0.7, outdates the thread.
 - The existing tests in `src/reanchor.rs` and `src/ui/tests.rs` still pass unchanged.
+
+## As built
+
+- **The rules are as planned,** with the numbers as constants at the top of `src/reanchor.rs`:
+  `WINDOW`, `SHORT`, `COMMON` and `SIMILAR`. `src/diff_words.rs` `text_similarity` measures a
+  block of lines the way `similarity` measures one line. `edited` finds the lines the diff maps
+  the thread to with `map_line`, which sends a line inside a change to the line at the same place
+  in what replaced it.
+- **The anchor text is updated in `src/review.rs` `reanchor`,** not in `src/ui/mod.rs`. It now
+  stores the placed lines' text every time it stores their position. For a thread found by its
+  exact text that's the same text. For one kept by a small edit it's the edited text, so the next
+  edit is measured against the code as it is now.
+- **Three existing tests changed, against the plan's last test.** Their files used one-letter
+  lines such as `c` and `d`, which rule 2 counts as short, so a copy of them now needs a context
+  line. `moved_text_is_found_again` and `the_nearest_copy_wins_then_the_best_context` use longer
+  lines and test what they did before. In `rewritten_text_is_outdated`, a line inserted inside a
+  thread's lines is now a small edit, and the thread covers it, rather than being outdated.
+- **Tests at each limit.** A copy 200 lines away counts and one 201 away doesn't. A block moved
+  1,000 lines keeps its thread with all its context, and loses it without one context line. A
+  line of 7 characters needs context and one of 8 doesn't. Three copies of a line need no
+  context and four do. Seven of ten words kept is similar enough and six isn't.
 
 ## Relevant code
 
