@@ -933,6 +933,9 @@ impl App {
             "goto_next_paragraph" | "goto_prev_paragraph" => {
                 self.paragraph_across(name == "goto_next_paragraph", f)
             }
+            "goto_last_change" | "goto_first_change" => {
+                self.edge_change(name == "goto_last_change", f)
+            }
             _ => return false,
         }
         true
@@ -1004,6 +1007,30 @@ impl App {
         if found.is_none() {
             self.status = Some(("No more to go to".into(), false));
         }
+    }
+
+    /// `]G` and `[G`: the last or first change of the review, as `]R` and `[R` go to its last
+    /// or first thread.
+    fn edge_change(&mut self, last: bool, f: fn(&mut commands::Ctx)) {
+        let n = self.state.files.len();
+        let order: Vec<usize> = if last {
+            (0..n).rev().collect()
+        } else {
+            (0..n).collect()
+        };
+        let (i, sel, top) = (self.cur_index(), self.main_file().sel.clone(), self.all.top);
+        for j in order {
+            self.enter_file(j, last);
+            let before = self.main_file().sel.clone();
+            self.status = None;
+            self.doc_command(f);
+            if self.main_file().sel != before {
+                return;
+            }
+        }
+        self.back_to_file(i, top);
+        self.main_file_mut().sel = sel;
+        self.status = Some(("No changes in this review".into(), false));
     }
 
     /// `]g` and `[g`: the next change, in the next file if this one has no more.

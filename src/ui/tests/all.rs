@@ -643,3 +643,13 @@ fn scrolling_and_window_keys_use_the_whole_review() {
     t.keys("z z g c");
     assert_eq!(t.path(), here, "{}", t.screen());
 }
+
+#[test]
+fn the_last_and_first_change_are_the_reviews() {
+    let mut t = all_files(72, 30, three);
+    t.keys("g g ] G");
+    assert_eq!(t.path(), "c.rs");
+    assert!(t.sel().starts_with("#[new\nnewer"), "{}", t.sel());
+    t.keys("[ G");
+    assert_eq!((t.path(), t.app.cursor_new_line()), ("a.rs".into(), 19));
+}

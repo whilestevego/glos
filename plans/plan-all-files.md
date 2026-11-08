@@ -197,6 +197,9 @@ Step 4, in the second pull request:
   file's very start or end when they enter it, so an object on its first or last line isn't
   skipped. Word motions, `x` and `f` stay in their file, because a selection can't span two
   files.
+- **`]G` and `[G` go to the last and first change of the review** (`edge_change`), as `]R` and
+  `[R` go to its last and first thread. Helix's go to the last and first change of the file,
+  but in one scroll the review is the document.
 - **The tree already followed the cursor.** It marks the file on screen when it draws, so it
   needed no change, only a test.
 - **`gn` and `gp`** already went to a file's header in step 2.
