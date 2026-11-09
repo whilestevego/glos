@@ -22,6 +22,7 @@ use ratatui::{
 use super::{
     App, Cur, ViewKind,
     comments::Threads,
+    diffview::Built,
     view::{self, File, clean},
 };
 
@@ -40,8 +41,8 @@ pub(super) struct AllFiles {
     pub top: Pos,
     /// The view of each file drawn that the cursor isn't in, with its old side in the
     /// side-by-side view. It's `None` when the file itself is drawn, for a binary or collapsed
-    /// file.
-    docs: HashMap<usize, Option<(File, Option<File>)>>,
+    /// file. When the cursor goes into a file, its view is taken from here, not built again.
+    docs: HashMap<usize, Option<Built>>,
     /// What `docs` were built with: the generation of the threads and files, the lines of
     /// context and the view. Any of them changing builds them again.
     built: (u64, usize, Option<ViewKind>),
@@ -93,10 +94,18 @@ impl App {
         }
         let path = self.state.source.changes[i].path.clone();
         let base = self.state.files[i].as_ref().expect("loaded above");
-        let doc = self
-            .built_for(&Cur::Change(i), &path, base)
-            .map(|b| (b.doc, b.left));
+        let doc = self.built_for(&Cur::Change(i), &path, base);
         self.all.docs.insert(i, doc);
+    }
+
+    /// The view of the file the cursor just went into, if it was built to draw that file and
+    /// nothing it was built from has changed since.
+    pub(super) fn take_built(&mut self) -> Option<Option<Built>> {
+        let built = (self.generation, self.diff_context, Some(self.view_kind));
+        if !self.all_shown() || built != self.all.built {
+            return None;
+        }
+        self.all.docs.remove(&self.cur_index())
     }
 
     /// File `i` as it's drawn. It must be prepared.
@@ -105,7 +114,7 @@ impl App {
             return self.main_file();
         }
         match self.all.docs.get(&i) {
-            Some(Some((doc, _))) => doc,
+            Some(Some(b)) => &b.doc,
             _ => self.state.files[i].as_ref().expect("prepared"),
         }
     }
@@ -116,7 +125,7 @@ impl App {
             return self.split_left();
         }
         match self.all.docs.get(&i) {
-            Some(Some((_, left))) => left.as_ref(),
+            Some(Some(b)) => b.left.as_ref(),
             _ => None,
         }
     }

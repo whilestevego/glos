@@ -36,17 +36,29 @@ fn line_text(f: &File, n: usize) -> String {
     line.trim_end_matches(['\n', '\r']).to_string()
 }
 
-/// The whole file's highlighting, as (start byte, style) spans.
-fn spans_of(f: &File, loader: &Loader, theme: &Theme) -> Vec<(usize, Style)> {
-    match &f.syntax {
-        Some(s) => {
-            let text = f.text.slice(..);
-            loader.highlights(s, text, 0..text.len_bytes(), |st: Style, i| {
-                st.patch(theme.highlight(i))
-            })
+/// The highlighting of `lines` of `f` (sorted), as (start byte, style) spans. A view shows a
+/// small part of a big file once it's folded, and highlighting the whole file was most of the
+/// cost of building it. Lines a few apart are highlighted in one run, since each run has a
+/// cost of its own.
+fn spans_of(f: &File, lines: &[usize], loader: &Loader, theme: &Theme) -> Vec<(usize, Style)> {
+    const GAP: usize = 8;
+    let Some(syntax) = &f.syntax else {
+        return vec![];
+    };
+    let text = f.text.slice(..);
+    let mut out = vec![];
+    let mut rest = lines.iter().copied().peekable();
+    while let Some(start) = rest.next() {
+        let mut end = start;
+        while let Some(l) = rest.next_if(|l| *l <= end + GAP) {
+            end = l;
         }
-        None => vec![],
+        let bytes = text.line_to_byte(start)..text.line_to_byte(end + 1);
+        out.extend(loader.highlights(syntax, text, bytes, |st: Style, i| {
+            st.patch(theme.highlight(i))
+        }));
     }
+    out
 }
 
 /// Builds a view's text and spans row by row.
@@ -54,8 +66,8 @@ struct Doc<'a> {
     text: String,
     spans: Vec<(usize, Style)>,
     rows: Vec<Row>,
-    old: (&'a File, Vec<(usize, Style)>),
-    new: (&'a File, Vec<(usize, Style)>),
+    old: (&'a File, &'a [(usize, Style)]),
+    new: (&'a File, &'a [(usize, Style)]),
     /// The fold band, and its key hint.
     fold: (Style, Style),
     /// The old side of side by side: its fold lines give old line numbers.
@@ -132,10 +144,9 @@ impl Doc<'_> {
 }
 
 fn doc<'a>(
-    old: &'a File,
-    new: &'a File,
+    old: (&'a File, &'a [(usize, Style)]),
+    new: (&'a File, &'a [(usize, Style)]),
     words: (&'a Words, &'a Words),
-    loader: &Loader,
     theme: &Theme,
 ) -> Doc<'a> {
     Doc {
@@ -144,16 +155,8 @@ fn doc<'a>(
         text: String::new(),
         spans: vec![],
         rows: vec![],
-        // The whole-file view has one side.
-        old: (
-            old,
-            if std::ptr::eq(old, new) {
-                vec![]
-            } else {
-                spans_of(old, loader, theme)
-            },
-        ),
-        new: (new, spans_of(new, loader, theme)),
+        old,
+        new,
         fold: fold_styles(theme),
         old_side: false,
     }
@@ -473,10 +476,28 @@ pub fn build(
 
     let w = crate::diff_words::changed(&old.text.to_string(), &new.text.to_string(), hunks);
     let words = (&w.old, &w.new);
-    let mut d = doc(old, new, words, loader, theme);
+    // Only the lines left unfolded are highlighted, each from the side its row shows.
+    let (mut old_lines, mut new_lines) = (vec![], vec![]);
+    for i in (0..n).filter(|i| !hidden[*i]) {
+        for row in std::iter::once(r.rows[i]).chain(r.left.as_ref().map(|l| l[i])) {
+            match row {
+                Row::Same { new, .. } | Row::Added(new) => new_lines.push(new),
+                Row::Removed(old) => old_lines.push(old),
+                Row::Fold { .. } | Row::Filler => {}
+            }
+        }
+    }
+    for lines in [&mut old_lines, &mut new_lines] {
+        lines.sort_unstable();
+        lines.dedup();
+    }
+    let old_spans = spans_of(old, &old_lines, loader, theme);
+    let new_spans = spans_of(new, &new_lines, loader, theme);
+    let (old_side, new_side) = ((old, &old_spans[..]), (new, &new_spans[..]));
+    let mut d = doc(old_side, new_side, words, theme);
     let mut ld = r.left.as_ref().map(|_| Doc {
         old_side: true,
-        ..doc(old, new, words, loader, theme)
+        ..doc(old_side, new_side, words, theme)
     });
     let mut full = vec![];
     let mut i = 0;
@@ -796,9 +817,31 @@ mod tests {
         let fn_at = u.text.to_string().find("fn").unwrap();
         assert_ne!(style_at(fn_at), Style::default(), "highlighted");
         // The same keyword in the source file has the same style.
-        let src = spans_of(&n, &l, &t);
+        let all: Vec<usize> = (0..n.text.len_lines()).collect();
+        let src = spans_of(&n, &all, &l, &t);
         let src_fn = n.text.to_string().find("fn").unwrap();
         let src_style = src.iter().rev().find(|(s, _)| *s <= src_fn).unwrap().1;
         assert_eq!(style_at(fn_at), src_style);
+    }
+
+    #[test]
+    fn some_lines_highlight_as_they_do_in_the_whole_file() {
+        // Line 30 is inside a comment that starts far above it, past any run of nearby lines.
+        let text = format!(
+            "fn a() {{}}\n/*\n{}*/\nfn b() {{}}\n",
+            "comment\n".repeat(40)
+        );
+        let (_, n, _, l, t) = files(&text, &text);
+        let style = |spans: &[(usize, Style)], b: usize| {
+            spans.iter().rev().find(|(s, _)| *s <= b).unwrap().1
+        };
+        let all: Vec<usize> = (0..n.text.len_lines()).collect();
+        let whole = spans_of(&n, &all, &l, &t);
+        let some = spans_of(&n, &[0, 30, 42, 43], &l, &t);
+        for line in [0, 30, 42, 43] {
+            let b = n.text.line_to_byte(line);
+            assert_eq!(style(&some, b), style(&whole, b), "line {line}");
+        }
+        assert_ne!(style(&whole, n.text.line_to_byte(30)), style(&whole, 0));
     }
 }

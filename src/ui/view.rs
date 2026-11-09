@@ -49,6 +49,9 @@ pub struct File {
     pub old_numbers: bool,
     /// The biggest line number shown, for the gutter's width.
     pub numbers: usize,
+    /// The widest fold range, numbered by the new side and by the old. The gutter's width is
+    /// asked for every line drawn, so it's worked out once, when the view is built.
+    fold_widths: (usize, usize),
     /// The words that changed on each changed line that has a pair on the other side, as byte
     /// ranges within the line. They're worked out once, when the file or view is built.
     pub words: HashMap<usize, Vec<Range<usize>>>,
@@ -225,6 +228,7 @@ impl File {
             spans: None,
             old_numbers: false,
             numbers: 0,
+            fold_widths: (0, 0),
             words: HashMap::new(),
         }
         .numbered()
@@ -267,6 +271,13 @@ impl File {
                 }),
             }
         }
+        let fold_width = |old: bool| {
+            rows.iter()
+                .filter_map(|r| r.fold_range(old))
+                .map(|r| r.chars().count())
+                .max()
+                .unwrap_or(0)
+        };
         File {
             text,
             hunks,
@@ -279,6 +290,7 @@ impl File {
             collapsed: false,
             binary: false,
             gutter: true,
+            fold_widths: (fold_width(false), fold_width(true)),
             rows: Some(rows),
             spans: Some(spans),
             old_numbers: false,
@@ -362,16 +374,12 @@ impl File {
 
     /// The line-number column: the biggest number (at least 3 wide), or a fold's range.
     pub fn number_width(&self) -> usize {
-        let ranges = self
-            .rows
-            .iter()
-            .flatten()
-            .filter_map(|r| r.fold_range(self.old_numbers));
-        ranges
-            .map(|r| r.chars().count())
-            .chain([self.numbers.to_string().len(), 3])
-            .max()
-            .unwrap_or(3)
+        let folds = if self.old_numbers {
+            self.fold_widths.1
+        } else {
+            self.fold_widths.0
+        };
+        folds.max(self.numbers.to_string().len()).max(3)
     }
 }
 
@@ -661,6 +669,17 @@ pub fn draw_text(
         gutter_row(buf, 0, y);
         let mut rows = 1;
         let start = text.line_to_char(line);
+        // Each character's byte in the line, worked out once: the rope's `char_to_byte` counts
+        // from the start of its chunk, which cost most of a draw when called per character.
+        let line_bytes: Vec<usize> = text
+            .line(line)
+            .chars()
+            .scan(line_byte, |b, c| {
+                let at = *b;
+                *b += c.len_utf8();
+                Some(at)
+            })
+            .collect();
         for g in DocumentFormatter::new_at_prev_checkpoint(text, &fmt, &annotations, start) {
             if g.line_idx != line {
                 break;
@@ -689,7 +708,10 @@ pub fn draw_text(
                 continue;
             }
             let ch = g.char_idx;
-            let byte = text.char_to_byte(ch);
+            let byte = match ch.checked_sub(start).and_then(|i| line_bytes.get(i)) {
+                Some(b) => *b,
+                None => text.char_to_byte(ch),
+            };
             while span + 1 < spans.len() && spans[span + 1].0 <= byte {
                 span += 1;
             }

@@ -108,7 +108,11 @@ impl App {
     /// Builds the view for the file on screen, with the cursor on the base file's line and
     /// column. The whole-file view with nothing folded is the file itself: no view is built.
     pub(super) fn build_alt(&mut self) {
-        let Some(b) = self.built() else {
+        let built = match self.take_built() {
+            Some(b) => b,
+            None => self.built(),
+        };
+        let Some(b) = built else {
             return;
         };
         let threads = self.fold_threads();
