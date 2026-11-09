@@ -135,7 +135,7 @@ mod tests {
             "Clipboard:",
             "Terminal:",
             "Folding: 3 lines of context",
-            "Languages (20):",
+            "Languages (23):",
             "rust",
             "MCP: 0 agent sessions attached",
             "Launching:",
@@ -153,7 +153,7 @@ mod tests {
         let out = super::report(&file.join("glos.db"), None);
         assert!(out.contains("Database:") && out.contains("error"), "{out}");
         assert!(
-            out.contains("Languages (20)"),
+            out.contains("Languages (23)"),
             "the rest still runs:\n{out}"
         );
     }
