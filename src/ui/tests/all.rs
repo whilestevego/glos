@@ -162,6 +162,29 @@ fn a_comment_lands_on_the_file_under_the_cursor() {
 }
 
 #[test]
+fn threads_on_removed_lines_show_in_other_files_and_side_by_side() {
+    let mut t = all_files(100, 30, three);
+    // Up from c.rs's first new line is its removed line.
+    t.keys("g g g n j j k x ' c").typed("gone?").keys("esc ret");
+    let a = t.app.state.threads[0].anchor.clone().unwrap();
+    assert_eq!(
+        (a.path.as_str(), a.side, a.start),
+        ("c.rs", review::Side::Old, 1)
+    );
+    // From a.rs, c.rs is another file in the scroll, and its thread is under `old`.
+    t.keys("g g");
+    assert_eq!(t.path(), "a.rs");
+    let row = |t: &T, s: &str| t.screen().lines().position(|l| l.contains(s));
+    assert_eq!(row(&t, "▸ you: gone?"), row(&t, "▍old").map(|r| r + 1));
+    // Side by side, it's in the old side's column.
+    t.keys("' v s");
+    assert_eq!(row(&t, "▸ you: gone?"), row(&t, "▍old").map(|r| r + 1));
+    let screen = t.screen();
+    let l = screen.lines().find(|l| l.contains("▸ you: gone?")).unwrap();
+    assert!(l.chars().position(|c| c == '▸').unwrap() < 50, "{l}");
+}
+
+#[test]
 fn the_other_files_show_their_threads() {
     let mut t = all_files(72, 30, three);
     t.keys("G x ' c").typed("last").keys("esc ret g g");

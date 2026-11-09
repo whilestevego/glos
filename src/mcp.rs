@@ -403,6 +403,7 @@ impl Agent {
             path: path.trim_start_matches("./").to_string(),
             start,
             end: end.unwrap_or(start),
+            side: review::Side::New,
         };
         if body.trim().is_empty() {
             return Ok(Err("A note needs a body.".into()));
@@ -470,6 +471,15 @@ impl Agent {
         let Some(a) = &t.anchor else {
             return String::new();
         };
+        // Removed lines aren't in your files, so there's nothing to find there.
+        if a.side == review::Side::Old {
+            return match (&t.on.new_rev, t.status.as_str()) {
+                (None, "outdated") => "Now: your files don't remove those lines any more (the \
+                                       thread is outdated).\n"
+                    .into(),
+                _ => String::new(),
+            };
+        }
         if t.on.new_rev.is_none() && t.status == "outdated" {
             return format!(
                 "Now: that code has changed in your files since (the thread is outdated); the \
@@ -490,6 +500,7 @@ impl Agent {
                     path: a.path.clone(),
                     start: s,
                     end: e,
+                    side: a.side,
                 };
                 format!("Now: the same code is at {at} in your files.\n")
             }
@@ -529,7 +540,9 @@ fn plural(n: usize) -> &'static str {
 fn place(t: &Thread) -> String {
     t.anchor
         .as_ref()
-        .map_or("(on the whole review)".into(), |a| format!("on {a}"))
+        .map_or("(on the whole review)".into(), |a| {
+            format!("on {}", a.described())
+        })
 }
 
 /// The anchored lines, quoted, at most three.
@@ -970,6 +983,7 @@ mod tests {
             path: "a.rs".into(),
             start,
             end,
+            side: review::Side::New,
         }
     }
 
@@ -1258,6 +1272,23 @@ mod tests {
         assert!(th.unread());
         assert!(said(a.set_status("claude", &r.id, &t, true, "").unwrap()).ends_with("is open."));
         assert!(said(a.reply("claude", &r.id, "nope", "x").unwrap()).starts_with("No thread nope"));
+    }
+
+    #[test]
+    fn agents_see_threads_on_removed_lines_as_such() {
+        let (_d, mut a, r) = setup();
+        let at = Anchor {
+            side: review::Side::Old,
+            ..at(2, 2)
+        };
+        let t = review::comment(&a.conn, &r.id, Some((&at, "x\ngone\ny\n")), YOU, "why?").unwrap();
+        review::submit(&a.conn, &r.id, Verdict::Comment, &[], None).unwrap();
+        let out = a.get_review(&r.id, None).unwrap();
+        assert!(out.contains("on a.rs:-2 (removed line) you: why?"), "{out}");
+        let out = a.get_review(&r.id, Some(&t)).unwrap();
+        assert!(out.contains("on a.rs:-2 (removed line) (open)"), "{out}");
+        // Removed lines aren't in the agent's files, so there's no note on where they are now.
+        assert!(!out.contains("Now:"), "{out}");
     }
 
     #[test]

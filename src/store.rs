@@ -150,6 +150,11 @@ const MIGRATIONS: &[&str] = &[
         started_at TEXT NOT NULL
     );
     "#,
+    // v6: threads on removed lines. Their lines count lines of the old side.
+    r#"
+    -- 'new' | 'old'
+    ALTER TABLE threads ADD COLUMN side TEXT NOT NULL DEFAULT 'new';
+    "#,
 ];
 
 /// Opens (creating if needed) the database at `path` and brings its schema up to date.
@@ -213,6 +218,25 @@ mod tests {
         assert_eq!(version(&conn), MIGRATIONS.len());
         // A fresh database needs no backup.
         assert!(!dir.path().join("sub/glos.db.bak-v0").exists());
+    }
+
+    #[test]
+    fn threads_made_before_v6_are_on_the_new_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glos.db");
+        let mut conn = Connection::open(&path).unwrap();
+        migrate(&mut conn, &path, &MIGRATIONS[..5]).unwrap();
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        conn.execute(
+            "INSERT INTO threads (id, review_id, created_round) VALUES ('t', 'r', 1)",
+            [],
+        )
+        .unwrap();
+        migrate(&mut conn, &path, MIGRATIONS).unwrap();
+        let side: String = conn
+            .query_row("SELECT side FROM threads", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(side, "new");
     }
 
     #[test]

@@ -1082,7 +1082,7 @@ fn replies_and_review_level_comments() {
 }
 
 #[test]
-fn no_comments_on_deleted_or_binary_files() {
+fn no_comments_on_binary_files_and_removed_ones_on_deleted_files() {
     let mut t = T::folders(|o, n| {
         std::fs::write(o.join("gone.rs"), "bye\n").unwrap();
         std::fs::write(n.join("bin.dat"), b"\x00\x01").unwrap();
@@ -1091,9 +1091,10 @@ fn no_comments_on_deleted_or_binary_files() {
     t.keys("space c");
     assert!(t.app.comment_box.is_none());
     assert!(t.said().contains("binary"));
+    // A deleted file's lines are all removed lines, so a comment goes on the old side.
     t.keys("g n space c");
     assert_eq!(t.path(), "gone.rs");
-    assert!(t.said().contains("deleted"), "{}", t.said());
+    assert!(t.shows("Comment on gone.rs:-1 "), "{}", t.screen());
 }
 
 #[test]
@@ -1324,6 +1325,7 @@ fn next_unread_goes_across_files() {
         path: p.into(),
         start: l,
         end: l,
+        side: review::Side::New,
     };
     review::annotate(
         &agent,
@@ -1740,12 +1742,10 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     assert!(t.shows("↕ lines 1–6 (6)"), "{}", t.screen());
     // The cursor opens on the change; the line above it is the removed one.
     assert_eq!(t.app.cursor_new_line(), 9);
+    // The removed line alone takes a comment on the old side.
     t.keys("k space c");
-    assert!(
-        t.said().starts_with("Comments go on the new side"),
-        "{}",
-        t.said()
-    );
+    assert!(t.shows("Comment on main.rs:-10 "), "{}", t.screen());
+    t.keys("esc q");
     // Selecting the removed and added lines comments on the added one.
     t.keys("x x space c");
     assert!(t.shows("Comment on main.rs:10 "), "{}", t.screen());
@@ -1757,6 +1757,63 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
     t.keys("' v s");
     assert_eq!(row(&t, "▸ you"), row(&t, "line ten") + 1);
+}
+
+#[test]
+fn a_comment_on_removed_lines_goes_on_the_old_side() {
+    let old = lines(20);
+    let new = old
+        .replace("line 10\n", "")
+        .replace("line 15\n", "line fifteen\n");
+    let mut t = T::files(&old, &new);
+    // The cursor opens on the line after the removed one.
+    t.keys("k space c");
+    assert!(t.shows("Comment on main.rs:-10 "), "{}", t.screen());
+    t.typed("why?").keys("esc ret");
+    let a = t.app.state.threads[0].anchor.clone().unwrap();
+    assert_eq!((a.side, a.start, a.end), (review::Side::Old, 10, 10));
+    assert_eq!(
+        t.app.state.threads[0].anchor_text.as_deref(),
+        Some("line 10\n")
+    );
+    // It shows under its removed line.
+    let row = |t: &T, s: &str| t.screen().lines().position(|l| l.contains(s)).unwrap();
+    assert_eq!(row(&t, "▸ you: why?"), row(&t, "line 10") + 1);
+    // Thread keys find it among the others, and reply to it.
+    t.keys("g g").keys("] d");
+    assert!(t.sel().contains("line 10"), "{}", t.sel());
+    t.keys("' r");
+    assert!(t.shows("Reply"), "{}", t.screen());
+    t.keys("esc q");
+    // Side by side, it's in the old side's column, level with its line.
+    t.keys("' v s");
+    assert_eq!(row(&t, "▸ you: why?"), row(&t, "line 10") + 1);
+    let screen = t.screen();
+    let l = screen.lines().find(|l| l.contains("▸ you: why?")).unwrap();
+    let at = l.chars().position(|c| c == '▸').unwrap();
+    assert!(at < l.chars().count() / 2, "{l}");
+    // A new comment there, on the filler row beside the removed line, goes on the old side too.
+    t.keys("g g").keys("] d");
+    t.keys("space c");
+    assert!(t.shows("Comment on main.rs:-10 "), "{}", t.screen());
+}
+
+#[test]
+fn a_thread_on_removed_lines_goes_outdated_when_they_come_back() {
+    let old = lines(10);
+    let new = old.replace("line 5\n", "");
+    let mut t = T::files(&old, &new);
+    t.keys("k space c").typed("why?").keys("esc ret");
+    assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
+    // The agent changes something else: the line is still removed, and the thread stays.
+    t.edit(&new.replace("line 1\n", "line one\n"));
+    t.app.reanchor(true);
+    assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
+    // The agent puts the line back: outdated once the files settle.
+    t.edit(&old);
+    assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
+    t.app.reanchor(true);
+    assert_eq!(t.thread_lines(), [(5, 5, "outdated".into())]);
 }
 
 #[test]

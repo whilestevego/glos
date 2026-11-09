@@ -42,7 +42,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     clipboard,
     config::Config,
-    review::{self, Anchor, Review, Thread, Verdict, YOU},
+    review::{self, Anchor, Review, Side, Thread, Verdict, YOU},
     source::{Content, Kind, Source},
     theme::{ColorSupport, Theme},
 };
@@ -955,17 +955,43 @@ impl App {
     /// Places every thread again against the files on disk. Threads whose code is gone are
     /// marked outdated only once `settled`: the files have been quiet for a while.
     fn reanchor(&mut self, settled: bool) {
-        let paths: std::collections::BTreeSet<String> = self
+        let paths: std::collections::BTreeSet<(Side, String)> = self
             .state
             .threads
             .iter()
-            .filter_map(|t| t.anchor.as_ref().map(|a| a.path.clone()))
+            .filter_map(|t| t.anchor.as_ref().map(|a| (a.side, a.path.clone())))
             .collect();
-        for p in paths {
-            let text = std::fs::read(self.state.source.root.join(&p))
+        let read = |p: &str| {
+            std::fs::read(self.state.source.root.join(p))
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .unwrap_or_default();
-            if let Err(e) = review::reanchor(&self.conn, &self.review.id, &p, &text, settled) {
+                .unwrap_or_default()
+        };
+        for (side, p) in paths {
+            let text = read(&p);
+            let done = match side {
+                Side::New => review::reanchor(&self.conn, &self.review.id, &p, &text, settled),
+                // Threads on removed lines follow the base. Other scopes have another old side,
+                // so they're placed only against the base.
+                Side::Old if self.scope != Scope::Base => continue,
+                Side::Old => {
+                    // A file that isn't changed now has no removed lines.
+                    let old = self.old_text(&p).unwrap_or_else(|| text.clone());
+                    let hunks = crate::diff::hunks(&old, &text);
+                    let removed = |s: usize, e: usize| {
+                        (s..=e).all(|l| hunks.iter().any(|h| h.before.contains(&(l as u32))))
+                    };
+                    review::reanchor_side(
+                        &self.conn,
+                        &self.review.id,
+                        &p,
+                        side,
+                        &old,
+                        &removed,
+                        settled,
+                    )
+                }
+            };
+            if let Err(e) = done {
                 self.status = Some((format!("{e:#}"), true));
             }
         }
@@ -1293,7 +1319,10 @@ impl App {
         if let Some(v) = self.placed.borrow().get(&key) {
             return v.clone();
         }
-        let text = base.text.to_string();
+        let text = match a.side {
+            Side::New => base.text.to_string(),
+            Side::Old => self.old_text(path).unwrap_or_default(),
+        };
         let v = review::place(&self.conn, &t.id, &text)
             .ok()
             .flatten()
@@ -1301,6 +1330,7 @@ impl App {
                 path: a.path.clone(),
                 start,
                 end,
+                side: a.side,
             });
         self.placed.borrow_mut().insert(key, v.clone());
         v
@@ -1370,22 +1400,33 @@ impl App {
 
     /// The threads of the file on screen, as drawn.
     fn main_threads(&self) -> Threads {
-        self.threads_in(self.state.main_path(), self.base_file(), self.main_file())
+        self.threads_in(
+            self.state.main_path(),
+            self.base_file(),
+            self.main_file(),
+            self.split_left(),
+        )
     }
 
-    /// The threads of file `path` as drawn on `f`, its file `base` or a view of it.
-    fn threads_in(&self, path: &str, base: &File, f: &File) -> Threads {
+    /// The threads of file `path` as drawn on `f`, its file `base` or a view of it. `left` is
+    /// the old side's column of a side-by-side view.
+    fn threads_in(&self, path: &str, base: &File, f: &File, left: Option<&File>) -> Threads {
         let here = self.here_rev();
         // Thread rows wrap to the text area, as they're drawn from its left edge.
         let width = self.view.width.saturating_sub(f.gutter_width() as u16) as usize;
-        let t = comments::layout(
-            &self.shown_threads_in(path, base),
-            path,
-            &self.expanded,
-            &self.theme,
-            here.as_deref(),
-            width,
-        );
+        let shown = self.shown_threads_in(path, base);
+        let layout = |side| {
+            comments::layout(
+                &shown,
+                path,
+                side,
+                &self.expanded,
+                &self.theme,
+                here.as_deref(),
+                width,
+            )
+        };
+        let t = layout(Side::New);
         if f.rows.is_none() {
             return t;
         }
@@ -1399,13 +1440,33 @@ impl App {
                 rows.entry(at).or_default().extend(r);
             }
         }
+        let mut marks: Vec<_> = t
+            .marks
+            .into_iter()
+            .map(|(s, e, st)| (f.line_of(s), f.line_of(e), st))
+            .collect();
+        // Threads on removed lines go under the view's line for their last old-side line.
+        let old_rows = left.unwrap_or(f).rows.as_deref().unwrap_or_default();
+        let row_of = |l: usize| old_rows.iter().position(|r| r.old_line() == Some(l));
+        let old = layout(Side::Old);
+        for (line, r) in old.rows {
+            if let Some(at) = row_of(line) {
+                rows.entry(at).or_default().extend(r);
+            }
+        }
+        let mut old_marks = vec![];
+        for (s, e, st) in old.marks {
+            if let (Some(s), Some(e)) = (row_of(s), row_of(e)) {
+                old_marks.push((s, e, st));
+            }
+        }
+        if left.is_none() {
+            marks.append(&mut old_marks);
+        }
         Threads {
             rows,
-            marks: t
-                .marks
-                .into_iter()
-                .map(|(s, e, st)| (f.line_of(s), f.line_of(e), st))
-                .collect(),
+            marks,
+            old_marks,
         }
     }
 
@@ -1500,7 +1561,7 @@ impl App {
                         // On what's shown now: it may have been made on another version.
                         match self.shown_anchor(&t) {
                             Some(a) => {
-                                self.select_lines(a.start as usize - 1, a.end as usize - 1);
+                                self.select_anchor(&a);
                                 self.scroll_to_cursor(true);
                             }
                             None => {
@@ -1530,8 +1591,40 @@ impl App {
     /// Selects whole lines `start..=end` (0-based) of the file on screen, as `x` does.
     fn select_lines(&mut self, start: usize, end: usize) {
         self.reveal(start, end);
+        let file = self.main_file();
+        self.select_rows(file.line_of(start), file.line_of(end));
+    }
+
+    /// Selects a thread's lines in the file on screen.
+    fn select_anchor(&mut self, a: &Anchor) {
+        match a.side {
+            Side::New => self.select_lines(a.start as usize - 1, a.end as usize - 1),
+            Side::Old => {
+                if let Some((s, e)) = self.anchor_rows(a) {
+                    self.select_rows(s, e);
+                }
+            }
+        }
+    }
+
+    /// The rows of the file on screen that show a thread's lines. A thread on removed lines
+    /// has none when they aren't shown.
+    fn anchor_rows(&self, a: &Anchor) -> Option<(usize, usize)> {
+        let f = self.main_file();
+        let (s, e) = (a.start as usize - 1, a.end as usize - 1);
+        match a.side {
+            Side::New => Some((f.line_of(s), f.line_of(e))),
+            Side::Old => {
+                let rows = self.split_left().unwrap_or(f).rows.as_ref()?;
+                let row_of = |l| rows.iter().position(|r| r.old_line() == Some(l));
+                Some((row_of(s)?, row_of(e)?))
+            }
+        }
+    }
+
+    /// Selects rows `start..=end` of the file on screen.
+    fn select_rows(&mut self, start: usize, end: usize) {
         let file = self.main_file_mut();
-        let (start, end) = (file.line_of(start), file.line_of(end));
         let text = file.text.slice(..);
         let last = text.len_lines() - 1;
         let (from, to) = (
@@ -1545,25 +1638,26 @@ impl App {
     fn thread_here(&self) -> Option<usize> {
         let f = self.main_file();
         let text = f.text.slice(..);
-        let line = f.new_line_at(text.char_to_line(f.sel.primary().cursor(text)))? as u32 + 1;
+        let row = text.char_to_line(f.sel.primary().cursor(text));
+        let (side, line) = match f.new_line_at(row) {
+            Some(l) => (Side::New, l),
+            None => (Side::Old, self.old_line_at(row)?),
+        };
+        let line = line as u32 + 1;
         let path = self.state.main_path();
         self.shown_threads()
             .iter()
             .enumerate()
             .filter_map(|(i, t)| t.anchor.as_ref().map(|a| (i, a)))
-            .filter(|(_, a)| a.path == path && a.start <= line && line <= a.end)
+            .filter(|(_, a)| a.path == path && a.side == side && a.start <= line && line <= a.end)
             .max_by_key(|(_, a)| a.start)
             .map(|(i, _)| i)
     }
 
-    /// Where a comment on the selection would go: the primary selection's lines, on the new
-    /// side. The final empty line of a file isn't a line to comment on.
+    /// Where a comment on the selection would go: the primary selection's lines. They're on
+    /// the new side if any of them is, and otherwise on the old side, as removed lines. The
+    /// final empty line of a file isn't a line to comment on.
     fn can_comment(&self) -> Result<Anchor, &'static str> {
-        if let Cur::Change(i) = self.state.cur
-            && self.state.source.changes[i].new == Content::None
-        {
-            return Err("Comments go on the new side, and this file was deleted");
-        }
         let f = self.main_file();
         if f.binary {
             return Err("A binary file has no lines to comment on");
@@ -1579,21 +1673,39 @@ impl App {
             n - 1
         };
         let (s, e) = f.sel.primary().line_range(text);
-        // In a view, the selected lines that are on the new side.
-        let (s, e) = if f.rows.is_some() {
-            let new: Vec<usize> = (s..=e).filter_map(|l| f.new_line_at(l)).collect();
-            match (new.iter().min(), new.iter().max()) {
-                (Some(a), Some(b)) => (*a, *b),
-                _ => return Err("Comments go on the new side: select lines that are on it"),
+        // In a view, the selected lines that are on the new side, or else the removed ones.
+        let (side, s, e) = if f.rows.is_some() {
+            let span = |lines: Vec<usize>| Some((*lines.iter().min()?, *lines.iter().max()?));
+            let new = span((s..=e).filter_map(|l| f.new_line_at(l)).collect());
+            let old = span((s..=e).filter_map(|l| self.old_line_at(l)).collect());
+            match (new, old) {
+                (Some((a, b)), _) => (Side::New, a, b),
+                (None, Some((a, b))) => (Side::Old, a, b),
+                _ => return Err("Select lines of code to comment on"),
             }
         } else {
-            (s, e.min(last))
+            (Side::New, s, e.min(last))
         };
         Ok(Anchor {
             path: self.state.main_path().to_string(),
             start: s.min(e) as u32 + 1,
             end: e as u32 + 1,
+            side,
         })
+    }
+
+    /// The old side's line shown on view line `line` of the file on screen, if it shows one.
+    /// Side by side shows it in the left column.
+    fn old_line_at(&self, line: usize) -> Option<usize> {
+        let f = self.split_left().unwrap_or(self.main_file());
+        f.rows.as_ref()?.get(line)?.old_line()
+    }
+
+    /// The old side's text of changed file `path`, if it's one of the changes.
+    fn old_text(&self, path: &str) -> Option<String> {
+        let c = self.state.source.changes.iter().find(|c| c.path == path)?;
+        let bytes = self.state.source.read(&c.old).ok().flatten()?;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     /// Opens the comment box for `place`, with its draft if one was saved.
@@ -1663,7 +1775,12 @@ impl App {
 
     /// `ret` in the box: the comment is written to the store, and the box closes.
     fn save_box(&mut self) {
-        let file_text = self.base_file().text.to_string();
+        let file_text = match self.comment_box.as_ref().map(|b| &b.place) {
+            Some(Place::Lines(a)) if a.side == Side::Old => {
+                self.old_text(&a.path).unwrap_or_default()
+            }
+            _ => self.base_file().text.to_string(),
+        };
         let on = self.diff_context();
         let Some(b) = &mut self.comment_box else {
             return;
@@ -1800,27 +1917,30 @@ impl App {
     /// Selects the next or previous thread in the file on screen, or with `edge` the last or
     /// first. Returns whether there was one.
     pub(super) fn goto_thread_in(&mut self, forward: bool, edge: bool) -> bool {
+        // In the view's rows, so threads on removed lines take their place among the others.
         let path = self.state.main_path();
-        let mut spans: Vec<(usize, usize)> = self
+        let mut spans: Vec<((usize, usize), Anchor)> = self
             .shown_threads()
             .iter()
             .filter_map(|t| t.anchor.clone())
             .filter(|a| a.path == path)
-            .map(|a| (a.start as usize - 1, a.end as usize - 1))
+            .filter_map(|a| Some((self.anchor_rows(&a)?, a)))
             .collect();
-        spans.sort();
-        spans.dedup();
-        let line = self.cursor_new_line();
+        spans.sort_by_key(|s| s.0);
+        spans.dedup_by_key(|s| s.0);
+        let f = self.main_file();
+        let text = f.text.slice(..);
+        let row = text.char_to_line(f.sel.primary().cursor(text));
         let target = match (edge, forward) {
             (true, true) => spans.last(),
             (true, false) => spans.first(),
-            (false, true) => spans.iter().find(|s| s.0 > line),
-            (false, false) => spans.iter().rev().find(|s| s.0 < line),
+            (false, true) => spans.iter().find(|s| s.0.0 > row),
+            (false, false) => spans.iter().rev().find(|s| s.0.0 < row),
         };
-        let Some((s, e)) = target.copied() else {
+        let Some((_, a)) = target.cloned() else {
             return false;
         };
-        self.select_lines(s, e);
+        self.select_anchor(&a);
         self.scroll_to_cursor(false);
         true
     }
@@ -3363,7 +3483,7 @@ impl App {
         if let Some(left) = self.split_left() {
             // The old side follows the new side's scroll.
             let right = self.main_file();
-            let blank = blank_threads(&threads);
+            let blank = side_threads(&threads, true);
             let none = Style::default();
             view::draw(
                 buf,
@@ -3379,6 +3499,10 @@ impl App {
             );
         }
         let file = self.main_file();
+        let threads = match self.split_left() {
+            Some(_) => side_threads(&threads, false),
+            None => threads,
+        };
         self.thread_hits = view::draw(
             buf,
             self.view,
@@ -3587,21 +3711,38 @@ fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     Ok(())
 }
 
-/// The old side's thread rows in the side-by-side view: blank, so the two sides stay level.
-fn blank_threads(threads: &Threads) -> Threads {
-    let mut blank = Threads::default();
+/// One column's thread rows in the side-by-side view. Each column shows the threads on its own
+/// side, and blank rows for the other side's, so the two columns stay level.
+fn side_threads(threads: &Threads, old: bool) -> Threads {
+    let mut out = Threads {
+        marks: if old {
+            threads.old_marks.clone()
+        } else {
+            threads.marks.clone()
+        },
+        ..Default::default()
+    };
     for (line, rows) in &threads.rows {
-        let pad = rows
+        let rows = rows
             .iter()
             .map(|r| comments::ThreadRow {
-                text: String::new(),
-                style: Style::default(),
+                text: if r.old == old {
+                    r.text.clone()
+                } else {
+                    String::new()
+                },
+                style: if r.old == old {
+                    r.style
+                } else {
+                    Style::default()
+                },
                 thread: r.thread,
+                old: r.old,
             })
             .collect();
-        blank.rows.insert(*line, pad);
+        out.rows.insert(*line, rows);
     }
-    blank
+    out
 }
 
 #[cfg(test)]

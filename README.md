@@ -62,7 +62,8 @@ for output a program can read.
    on the left shows every changed file.
 3. To comment, put the cursor on a line (or select a few with `x`) and press `' c`. Type your
    comment, press `esc`, then `enter` to save it. You can't lose a comment: everything is saved
-   as you type, even if you quit or glos crashes.
+   as you type, even if you quit or glos crashes. A comment on removed lines stays with those
+   lines, and the agent sees it as `path:-12`, with a minus sign before the line number.
 4. When you're done, press `' s` and pick a verdict: approve, request changes, or just send
    comments. The agent gets all your comments at once.
 5. As the agent works, glos updates by itself without moving your screen. Its replies show up
@@ -72,7 +73,8 @@ for output a program can read.
 7. Once you've approved, `:close` closes the review.
 
 If your code changes under a comment, glos moves the comment along with the code. If the code
-it was about is gone, the comment is marked outdated and shows the code as it was.
+it was about is gone, the comment is marked outdated and shows the code as it was. A comment on
+removed lines is marked outdated when the agent puts those lines back.
 
 ## Keys
 

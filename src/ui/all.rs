@@ -132,7 +132,7 @@ impl App {
         }
         let path = &self.state.source.changes[i].path;
         let base = self.state.files[i].as_ref().expect("prepared");
-        self.threads_in(path, base, self.section_file(i))
+        self.threads_in(path, base, self.section_file(i), self.section_left(i))
     }
 
     /// The lines file `i` has in the scroll. A collapsed or binary file has one, which shows
@@ -384,7 +384,7 @@ impl App {
                 if let Some(old) = self.section_left(i) {
                     let col = Rect::new(left_col.x, y, left_col.width, height);
                     regions.push((col, i, line));
-                    let blank = super::blank_threads(t);
+                    let blank = super::side_threads(t, true);
                     view::draw_text(
                         buf,
                         col,
@@ -398,6 +398,7 @@ impl App {
                         &blank,
                     );
                 }
+                let right = self.section_left(i).map(|_| super::side_threads(t, false));
                 let (h, end) = view::draw_text(
                     buf,
                     rest,
@@ -408,7 +409,7 @@ impl App {
                     &self.state.loader,
                     &self.theme,
                     Some(main),
-                    t,
+                    right.as_ref().unwrap_or(t),
                 );
                 hits.extend(h);
                 y = end;

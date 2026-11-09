@@ -244,6 +244,7 @@ mod tests {
             path: "a.rs".into(),
             start: 2,
             end: 2,
+            side: review::Side::New,
         };
         let t = review::comment(
             &conn,

@@ -25,7 +25,7 @@ use super::{
     view::{self, File, SelectionStyles, clean},
 };
 use crate::{
-    review::{Anchor, Thread, YOU},
+    review::{Anchor, Side, Thread, YOU},
     theme::Theme,
 };
 
@@ -301,6 +301,8 @@ pub struct ThreadRow {
     pub style: Style,
     /// Which thread, as an index into the threads it was built from.
     pub thread: usize,
+    /// Whether the thread is on removed lines. Side by side draws it under the old side.
+    pub old: bool,
 }
 
 /// The threads of one file as drawn: rows under their last line, and gutter marks.
@@ -310,6 +312,9 @@ pub struct Threads {
     pub rows: BTreeMap<usize, Vec<ThreadRow>>,
     /// Lines (0-based, inclusive) with a thread, marked in the diagnostics gutter.
     pub marks: Vec<(usize, usize, Style)>,
+    /// The marks of threads on removed lines, which side by side draws on the old side. Other
+    /// views keep them in `marks`.
+    pub old_marks: Vec<(usize, usize, Style)>,
 }
 
 /// Lays out the threads of `path` from `threads`: each collapsed to one line unless it's in
@@ -320,6 +325,7 @@ pub struct Threads {
 pub fn layout(
     threads: &[Thread],
     path: &str,
+    side: Side,
     expanded: &HashSet<String>,
     theme: &Theme,
     here: Option<&str>,
@@ -327,7 +333,11 @@ pub fn layout(
 ) -> Threads {
     let mut out = Threads::default();
     for (i, t) in threads.iter().enumerate() {
-        let Some(a) = t.anchor.as_ref().filter(|a| a.path == path) else {
+        let Some(a) = t
+            .anchor
+            .as_ref()
+            .filter(|a| a.path == path && a.side == side)
+        else {
             continue;
         };
         let started_by_you = t.comments.first().is_none_or(|c| c.author == YOU);
@@ -342,6 +352,7 @@ pub fn layout(
                     text,
                     style,
                     thread: i,
+                    old: side == Side::Old,
                 })
             }
         };
@@ -640,6 +651,7 @@ mod tests {
             path: "src/a.rs".into(),
             start: 3,
             end: 5,
+            side: crate::review::Side::New,
         };
         assert_eq!(Place::Lines(a.clone()).key(), "line:src/a.rs:3-5");
         assert_eq!(Place::Lines(a).title(), "Comment on src/a.rs:3-5");
@@ -654,6 +666,7 @@ mod tests {
                 path: path.into(),
                 start,
                 end,
+                side: crate::review::Side::New,
             }),
             status: "open".into(),
             created_round: 1,
@@ -690,7 +703,7 @@ mod tests {
             thread("t3", "a.rs", 3, 3, &[("claude", "a note")]),
         ];
         let rows = |expanded: &HashSet<String>| -> Vec<(usize, String)> {
-            layout(&threads, "a.rs", expanded, &theme, None, 80)
+            layout(&threads, "a.rs", Side::New, expanded, &theme, None, 80)
                 .rows
                 .into_iter()
                 .flat_map(|(l, rs)| rs.into_iter().map(move |r| (l, r.text)))
@@ -720,7 +733,15 @@ mod tests {
                 "▸ claude: a note · unread"
             ]
         );
-        let l = layout(&threads, "a.rs", &HashSet::new(), &theme, None, 80);
+        let l = layout(
+            &threads,
+            "a.rs",
+            Side::New,
+            &HashSet::new(),
+            &theme,
+            None,
+            80,
+        );
         assert_eq!(l.marks.len(), 2);
         assert_eq!((l.marks[0].0, l.marks[0].1), (1, 2));
         // Agents' threads are drawn in another colour.
@@ -767,7 +788,7 @@ mod tests {
         let body = "this comment is long enough that it has to wrap onto several rows";
         let threads = [thread("t1", "a.rs", 1, 1, &[(YOU, body)])];
         let texts = |expanded: &HashSet<String>| -> Vec<String> {
-            layout(&threads, "a.rs", expanded, &theme, None, 30).rows[&0]
+            layout(&threads, "a.rs", Side::New, expanded, &theme, None, 30).rows[&0]
                 .iter()
                 .map(|r| r.text.clone())
                 .collect()
@@ -798,6 +819,7 @@ mod tests {
                 text: String::new(),
                 style: Style::default(),
                 thread: 0,
+                old: false,
             });
         }
         let mut a = ThreadLines::new(&t, text.slice(..));

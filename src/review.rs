@@ -388,20 +388,58 @@ pub struct DiffContext {
     pub diff: Option<String>,
 }
 
-/// Where a thread sits: lines `start..=end` (1-based) of `path`, on the new side.
+/// Which side of the diff a thread's lines are on. The old side's are removed lines.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    #[default]
+    New,
+    Old,
+}
+
+impl Side {
+    /// As stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Side::New => "new",
+            Side::Old => "old",
+        }
+    }
+
+    fn parse(s: &str) -> Side {
+        if s == "old" { Side::Old } else { Side::New }
+    }
+}
+
+/// Where a thread sits: lines `start..=end` (1-based) of `path`, on `side`.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Anchor {
     pub path: String,
     pub start: u32,
     pub end: u32,
+    pub side: Side,
+}
+
+impl Anchor {
+    /// The place in words, for a reader with room: `a.rs:-12 (removed line)` for the old side.
+    pub fn described(&self) -> String {
+        match (self.side, self.start == self.end) {
+            (Side::New, _) => self.to_string(),
+            (Side::Old, true) => format!("{self} (removed line)"),
+            (Side::Old, false) => format!("{self} (removed lines)"),
+        }
+    }
 }
 
 impl std::fmt::Display for Anchor {
+    /// `path:12` or `path:12-14`. A minus sign before the lines marks removed lines, as in
+    /// `path:-12`.
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let minus = if self.side == Side::Old { "-" } else { "" };
         if self.start == self.end {
-            write!(f, "{}:{}", self.path, self.start)
+            write!(f, "{}:{minus}{}", self.path, self.start)
         } else {
-            write!(f, "{}:{}-{}", self.path, self.start, self.end)
+            write!(f, "{}:{minus}{}-{}", self.path, self.start, self.end)
         }
     }
 }
@@ -465,7 +503,7 @@ pub fn threads(conn: &Connection, review_id: &str) -> Result<Vec<Thread>> {
     let mut threads: Vec<Thread> = conn
         .prepare(
             "SELECT id, path, line_start, line_end, status, created_round, anchor_text,
-                    last_seen_at, old_rev, new_rev, diff
+                    last_seen_at, old_rev, new_rev, diff, side
              FROM threads WHERE review_id = ?1 ORDER BY path, line_start, rowid",
         )?
         .query_map([review_id], |r| {
@@ -477,6 +515,7 @@ pub fn threads(conn: &Connection, review_id: &str) -> Result<Vec<Thread>> {
                         path,
                         start: r.get(2)?,
                         end: r.get(3)?,
+                        side: Side::parse(&r.get::<_, String>(11)?),
                     }),
                     None => None,
                 },
@@ -614,8 +653,8 @@ fn comment_as(
             tx.execute(
                 "INSERT INTO threads (id, review_id, path, line_start, line_end, anchor_text,
                                       context_above, context_below, file_hash, created_round,
-                                      old_rev, new_rev, diff)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                      old_rev, new_rev, diff, side)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     id,
                     review_id,
@@ -629,7 +668,8 @@ fn comment_as(
                     round,
                     on.old_rev,
                     on.new_rev,
-                    on.diff
+                    on.diff,
+                    a.side.as_str()
                 ],
             )?;
         }
@@ -773,6 +813,22 @@ pub fn reanchor(
     new: &str,
     settled: bool,
 ) -> Result<Reanchored> {
+    reanchor_side(conn, review_id, path, Side::New, new, &|_, _| true, settled)
+}
+
+/// [`reanchor`] for the threads on one side of `path`, whose text on that side is now `new`.
+/// `still(start, end)` says whether lines found there (0-based, inclusive) still count. A
+/// thread on removed lines needs them removed still, and is treated as gone when the agent put
+/// them back.
+pub fn reanchor_side(
+    conn: &Connection,
+    review_id: &str,
+    path: &str,
+    side: Side,
+    new: &str,
+    still: &dyn Fn(usize, usize) -> bool,
+    settled: bool,
+) -> Result<Reanchored> {
     /// A thread as stored, with its file's content when it was last placed.
     struct Stored {
         id: String,
@@ -790,9 +846,9 @@ pub fn reanchor(
                     t.context_below, t.status, b.content
              FROM threads t JOIN blobs b ON b.hash = t.file_hash
              WHERE t.review_id = ?1 AND t.path = ?2 AND t.status != 'outdated'
-               AND t.new_rev IS NULL",
+               AND t.new_rev IS NULL AND t.side = ?3",
         )?
-        .query_map(params![review_id, path], |r| {
+        .query_map(params![review_id, path, side.as_str()], |r| {
             let content: Vec<u8> = r.get(7)?;
             Ok(Stored {
                 id: r.get(0)?,
@@ -820,7 +876,8 @@ pub fn reanchor(
         old,
     } in rows
     {
-        if old == new {
+        let (s0, e0) = (start as usize - 1, end as usize - 1);
+        if old == new && still(s0, e0) {
             continue;
         }
         let a = crate::reanchor::Anchored {
@@ -831,7 +888,7 @@ pub fn reanchor(
             above: &above,
             below: &below,
         };
-        match crate::reanchor::place(&a, new) {
+        match crate::reanchor::place(&a, new).filter(|&(s, e)| still(s, e)) {
             Some((s, e)) => {
                 let hash = match &hash {
                     Some(h) => h,
@@ -1173,6 +1230,7 @@ mod tests {
             path: path.into(),
             start,
             end,
+            side: Side::New,
         }
     }
 

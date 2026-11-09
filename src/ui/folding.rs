@@ -43,7 +43,7 @@ impl App {
             .shown_threads_in(path, base)
             .iter()
             .filter_map(|t| t.anchor.as_ref())
-            .filter(|a| a.path == path)
+            .filter(|a| a.path == path && a.side == crate::review::Side::New)
             .map(|a| (a.start as usize - 1, a.end as usize - 1))
             .collect();
         v.sort();
