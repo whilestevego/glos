@@ -471,16 +471,8 @@ pub fn build(
         }
     }
 
-    // The whole-file view has its words already. The other views work them out from the two
-    // sides, as they do the hunks.
-    let computed;
-    let words = if std::ptr::eq(old, new) {
-        (&old.words, &new.words)
-    } else {
-        let w = crate::diff_words::changed(&old.text.to_string(), &new.text.to_string(), hunks);
-        computed = (w.old, w.new);
-        (&computed.0, &computed.1)
-    };
+    let w = crate::diff_words::changed(&old.text.to_string(), &new.text.to_string(), hunks);
+    let words = (&w.old, &w.new);
     let mut d = doc(old, new, words, loader, theme);
     let mut ld = r.left.as_ref().map(|_| Doc {
         old_side: true,

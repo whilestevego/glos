@@ -729,24 +729,42 @@ impl App {
 
     /// The file tree's entries: each change with its added and removed lines and open threads.
     fn tree_entries(&self) -> Vec<tree::Entry> {
-        self.state
-            .source
+        let source = &self.state.source;
+        // Counting the lines means diffing every file, which is most of what opening a big
+        // review costs, so the files are split among the cores.
+        let count = |c: &crate::source::Change| {
+            let read = |x: &Content| source.read(x).ok().flatten().unwrap_or_default();
+            let (old, new) = (read(&c.old), read(&c.new));
+            let (mut added, mut removed) = (0, 0);
+            if !crate::source::is_binary(&old) && !crate::source::is_binary(&new) {
+                for h in crate::diff::hunks(
+                    &String::from_utf8_lossy(&old),
+                    &String::from_utf8_lossy(&new),
+                ) {
+                    added += h.after.len();
+                    removed += h.before.len();
+                }
+            }
+            (added, removed)
+        };
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let chunk = source.changes.len().div_ceil(cores).max(1);
+        let counts: Vec<(usize, usize)> = std::thread::scope(|s| {
+            let parts: Vec<_> = source
+                .changes
+                .chunks(chunk)
+                .map(|cs| s.spawn(move || cs.iter().map(count).collect::<Vec<_>>()))
+                .collect();
+            parts
+                .into_iter()
+                .flat_map(|p| p.join().expect("counting lines"))
+                .collect()
+        });
+        source
             .changes
             .iter()
-            .map(|c| {
-                let read =
-                    |x: &Content| self.state.source.read(x).ok().flatten().unwrap_or_default();
-                let (old, new) = (read(&c.old), read(&c.new));
-                let (mut added, mut removed) = (0, 0);
-                if !crate::source::is_binary(&old) && !crate::source::is_binary(&new) {
-                    for h in crate::diff::hunks(
-                        &String::from_utf8_lossy(&old),
-                        &String::from_utf8_lossy(&new),
-                    ) {
-                        added += h.after.len();
-                        removed += h.before.len();
-                    }
-                }
+            .zip(counts)
+            .map(|(c, (added, removed))| {
                 let threads = self
                     .state
                     .threads
