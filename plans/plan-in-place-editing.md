@@ -79,10 +79,10 @@ their hunks. `glos show` lists them too.
 
 ## Keys
 
-Helix wins any clash (see `DECISIONS.md`). Editing takes back `space c` and `space C` for
-toggling comments in code, so the review commands move into the Review menu first, as step 3 of
-`plan-review-menu.md` describes. `space r` is rename, which needs a language server, so it moves
-with `plan-language-servers.md`.
+Helix wins any clash (see `DECISIONS.md`). Editing binds `space c` and `space C` to toggling
+comments in code. The review commands already left them for the Review menu at `'`, as
+`completed/plan-review-menu.md` describes. `space r` is rename, which needs a language server,
+so `plan-language-servers.md` binds it.
 
 ## Steps
 

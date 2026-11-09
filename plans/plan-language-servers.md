@@ -27,8 +27,9 @@ styles, and the message in a popup when the cursor is on it. glos reads Helix's
 `[editor] end-of-line-diagnostics` and `[editor.inline-diagnostics]` settings, with Helix's
 defaults.
 
-Helix wins key clashes (see `DECISIONS.md`). Before this plan's keys are bound, step 2 of
-`plan-review-menu.md` moves submit, the thread pickers and the thread bracket keys out of the way.
+Helix wins key clashes (see `DECISIONS.md`). Submit, the thread pickers and the thread bracket
+keys already moved to the Review menu at `'` and to `]r`, as `completed/plan-review-menu.md`
+describes, so this plan's keys are free.
 
 Going to a definition in a file outside the review opens it for context, as `space f` does. It's
 `Cur::Context` in `src/ui/mod.rs`, and it goes on the jumplist.
@@ -73,13 +74,12 @@ Going to a definition in a file outside the review opens it for context, as `spa
 
 1. **Spike.** Start rust-analyzer through `helix-lsp` from `glos-helix`, open one file, and print
    its diagnostics. Decide between `helix-lsp` and a client of glos's own.
-2. **Keys.** Build step 2 of `plan-review-menu.md`.
-3. **Servers and diagnostics.** Start and stop servers, sync text, and show diagnostics in the
+2. **Servers and diagnostics.** Start and stop servers, sync text, and show diagnostics in the
    gutter, underlined and in the popup. Add `]d` and its family, `space d` and `space D`.
-4. **Navigation.** `gd`, `gD`, `gy`, `gi`, `gr`, `space h` and hover on `space k`.
-5. **Symbols.** `space s` and `space S`, using the existing picker in `src/ui/picker.rs`.
-6. **`glos doctor`**, and the README.
-7. **After editing:** rename on `space r`, code actions on `space a`, and completion and signature
+3. **Navigation.** `gd`, `gD`, `gy`, `gi`, `gr`, `space h` and hover on `space k`.
+4. **Symbols.** `space s` and `space S`, using the existing picker in `src/ui/picker.rs`.
+5. **`glos doctor`**, and the README.
+6. **After editing:** rename on `space r`, code actions on `space a`, and completion and signature
    help in insert mode.
 
 ## Tests
