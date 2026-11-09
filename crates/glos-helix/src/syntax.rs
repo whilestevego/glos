@@ -533,6 +533,14 @@ mod tests {
             ("a.css", "css", "a { color: red; }\n"),
             ("a.sql", "sql", "SELECT a FROM b WHERE c = 1;\n"),
             ("a.lua", "lua", "local function f() return 1 end\n"),
+            ("a.dart", "dart", "void main() { final x = 1; }\n"),
+            (
+                "a.swift",
+                "swift",
+                "func f() -> Int { let x = 1; return x }\n",
+            ),
+            ("a.kt", "kotlin", "fun f(): Int { val x = 1; return x }\n"),
+            ("build.gradle.kts", "kotlin", "plugins { id(\"java\") }\n"),
         ];
         for (file, lang, text) in samples {
             let rope = Rope::from(text);
@@ -549,7 +557,7 @@ mod tests {
         }
         // Every compiled grammar's queries compile.
         assert!(l.health().iter().all(|(_, ok)| *ok), "{:?}", l.health());
-        assert_eq!(l.health().len(), 20);
+        assert_eq!(l.health().len(), 23);
     }
 
     #[test]

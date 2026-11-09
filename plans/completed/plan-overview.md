@@ -361,8 +361,9 @@ not.
   (`; inherits:`) are followed as Helix does. Moving to a new Helix release means rerunning the
   task.
 - **Languages:** a starting set, listed in one file: Rust, TypeScript/TSX, JavaScript, Python, Go,
-  C, C++, Java, Ruby, Bash, JSON, TOML, YAML, Markdown, HTML, CSS, SQL and Lua. Adding one is a
-  line in `xtask/src/fetch_helix.rs` plus a rerun of the task. Files in other languages show as plain text.
+  C, C++, Java, Ruby, Bash, JSON, TOML, YAML, Markdown, HTML, CSS, SQL, Lua, Dart, Swift and
+  Kotlin. Adding one is a line in `xtask/src/fetch_helix.rs` plus a rerun of the task. Files in
+  other languages show as plain text.
 - **Licences:** Helix's queries, themes and `languages.toml` are MPL-2.0 and stay under it, with
   their notice, in their own folder. Grammars keep their own licences (mostly MIT).
 - **Movement and selections come from Helix itself.** `helix-core` (plain functions over a ropey

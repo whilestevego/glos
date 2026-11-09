@@ -34,6 +34,9 @@ const LANGS: &[&str] = &[
     "css",
     "sql",
     "lua",
+    "dart",
+    "swift",
+    "kotlin",
 ];
 
 const QUERY_FILES: &[&str] = &[
@@ -191,7 +194,10 @@ pub fn run(langs: &[String]) -> Result<()> {
             let licence =
                 ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"].contains(&rel.as_str());
             let source_file = (rel.starts_with(&srcdir) || rel.starts_with("common/"))
-                && [".c", ".h", ".cc"].iter().any(|e| rel.ends_with(e));
+                && [".c", ".h", ".cc"].iter().any(|e| rel.ends_with(e))
+                // Swift ships parsers for older tree-sitter ABIs beside parser.c. build.rs
+                // compiles only parser.c, and each copy is about 15 MB.
+                && !rel[srcdir.len().min(rel.len())..].starts_with("parser_abi");
             if source_file || licence {
                 write(&dest.join(rel), rel, content)?;
             }
