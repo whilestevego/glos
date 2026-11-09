@@ -523,3 +523,18 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
   mix lines from both sides. Editing now has to work in unified, on the new side's lines.
 - **Supersedes:** "full file + gutter by default" under "Views", and the whole-file part of
   "Folding".
+
+## Comments on removed lines (2026-11-09)
+
+- **Chosen:** a thread's anchor has a side. A selection that takes in any new-side line goes on
+  the new side, as before. A selection of removed lines only goes on the old side, and so does
+  one of filler rows in the side-by-side view, which stand beside removed lines. An old-side
+  anchor is written `path:-12`, and `glos show` and the MCP tools add "(removed lines)".
+- **Why:** you could see a removed line in both views but had to comment on a nearby new line to
+  ask about it.
+- **Chosen:** an old-side thread follows the base. It's placed again only in the base scope, and
+  it goes outdated when its lines are no longer removed, after the same quiet period as a
+  new-side thread.
+- **Not done:** `annotate` and `suggest` still take only new-side lines. An agent hasn't needed
+  to point at a line it removed, and doing so needs the old side's text on the MCP side.
+- **Supersedes:** "comments go on the new side only" under "Comments".

@@ -153,8 +153,8 @@ While the agent is editing, a thread isn't marked outdated straight away. glos w
 files have been quiet for a few seconds, or the round ends, so threads don't flicker between open
 and outdated mid-edit. Once outdated, a thread stays outdated until you reopen or resolve it.
 
-Comments go on the new side only. Comments on removed lines may come later, in the unified and
-side-by-side views.
+Comments go on the new side, or on removed lines, as `completed/plan-old-side-comments.md`
+describes.
 
 **A review's life.** A review is open until you close it (`:close`, usually after approving). glos
 archives it on its own when its branch is merged into the base or deleted. Closed and archived

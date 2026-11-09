@@ -31,7 +31,7 @@ document stays the new file as it is, so three things keep working:
 - Line numbers, threads and comments stay on the new side.
 
 Since the cursor never lands on a removed line, you comment on one in the unified or side-by-side
-view, as `plan-old-side-comments.md` describes.
+view, as `completed/plan-old-side-comments.md` describes.
 
 A removed line's text and highlighting come from the old side's `File`, which `src/ui/diffview.rs`
 already builds for the other views. Its changed words come from `src/diff_words.rs` `changed`,

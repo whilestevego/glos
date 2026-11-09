@@ -43,7 +43,7 @@ impl App {
             .shown_threads_in(path, base)
             .iter()
             .filter_map(|t| t.anchor.as_ref())
-            .filter(|a| a.path == path)
+            .filter(|a| a.path == path && a.side == crate::review::Side::New)
             .map(|a| (a.start as usize - 1, a.end as usize - 1))
             .collect();
         v.sort();
@@ -79,18 +79,23 @@ impl App {
         };
         let change = &self.state.source.changes[i];
         let read = |c: &Content| self.state.source.read(c).ok().flatten().unwrap_or_default();
-        let (old_bytes, new_bytes) = (read(&change.old), read(&change.new));
+        let old_bytes = read(&change.old);
         let path = self.state.source.root.join(&change.path);
         let old = File::side(&path, &old_bytes, &self.state.loader);
-        let new = File::side(&path, &new_bytes, &self.state.loader);
-        let hunks = crate::diff::hunks(
-            &String::from_utf8_lossy(&old_bytes),
-            &String::from_utf8_lossy(&new_bytes),
-        );
+        // The base file is the new side, already parsed and diffed. A deleted file's base
+        // shows its old side instead, so its empty new side is made here.
+        let deleted;
+        let (new, hunks) = if change.new == Content::None {
+            deleted = File::side(&path, &[], &self.state.loader);
+            let hunks = crate::diff::hunks(&String::from_utf8_lossy(&old_bytes), "");
+            (&deleted, hunks)
+        } else {
+            (base, base.hunks.clone())
+        };
         Some(diffview::build(
             kind,
             &old,
-            &new,
+            new,
             &hunks,
             ctx,
             &folds,
@@ -103,7 +108,11 @@ impl App {
     /// Builds the view for the file on screen, with the cursor on the base file's line and
     /// column. The whole-file view with nothing folded is the file itself: no view is built.
     pub(super) fn build_alt(&mut self) {
-        let Some(b) = self.built() else {
+        let built = match self.take_built() {
+            Some(b) => b,
+            None => self.built(),
+        };
+        let Some(b) = built else {
             return;
         };
         let threads = self.fold_threads();

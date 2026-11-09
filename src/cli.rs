@@ -89,7 +89,7 @@ pub fn show(conn: &Connection, id: &str, json: bool, out: &mut impl Write) -> Re
         let place = t
             .anchor
             .as_ref()
-            .map_or("the review".into(), |a| a.to_string());
+            .map_or("the review".into(), |a| a.described());
         writeln!(out, "\nThread {} on {place} ({})", t.id, t.status)?;
         if let Some(d) = &t.on.diff {
             writeln!(out, "  made on: {d}")?;
@@ -327,6 +327,24 @@ mod tests {
             serde_json::from_str(&run(|o| show(&conn, &r.id, true, o))).unwrap();
         assert_eq!(doc["threads"][0]["comments"][0]["body"], "looks\ngood");
         assert_eq!(doc["rounds"], json!([]));
+    }
+
+    #[test]
+    fn show_says_which_threads_are_on_removed_lines() {
+        let (_d, conn, r, _cwd) = setup();
+        let at = review::Anchor {
+            path: "a.rs".into(),
+            start: 2,
+            end: 3,
+            side: review::Side::Old,
+        };
+        review::comment(&conn, &r.id, Some((&at, "a\nb\nc\n")), YOU, "why?").unwrap();
+        let text = run(|o| show(&conn, &r.id, false, o));
+        assert!(text.contains(" on a.rs:-2-3 (removed lines) ("), "{text}");
+        let doc: serde_json::Value =
+            serde_json::from_str(&run(|o| show(&conn, &r.id, true, o))).unwrap();
+        assert_eq!(doc["threads"][0]["anchor"]["side"], "old");
+        assert_eq!(doc["threads"][0]["anchor"]["start"], 2);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Comments on removed lines
 
-**Status:** Draft (2026-11-06).
+**Status:** Implemented (2026-11-09) in PR #17.
 
 Comments attach only to lines of the new side. In the unified and side-by-side views you can see
 a removed line, but you can't comment on it. If you want to ask why a check was deleted, you
@@ -49,8 +49,35 @@ have to comment on a nearby new line. This plan lets you comment on removed line
 
 ## Open
 
-- What should `space c` do on a selection that covers removed lines only on one side of the
-  side-by-side view, and new lines on the other?
+- Settled: what should `space c` do on a selection that covers removed lines only on one side of
+  the side-by-side view, and new lines on the other? Any new-side line puts the thread on the new
+  side. A selection of filler rows only, beside removed lines, goes on the old side.
+
+## As built
+
+- `src/store.rs` migration v6 adds `threads.side`. `src/review.rs` has `Side`, `Anchor::side`
+  and `Anchor::described`, which adds "(removed lines)" for `glos show` and the MCP tools.
+- `src/ui/mod.rs` `can_comment` picks the side, and `old_line_at` reads the old side's line of a
+  row, from the left column in side by side. `save_box` stores the old side's text with an
+  old-side thread, read by `old_text`.
+- `src/ui/comments.rs` `layout` lays out one side at a time. `threads_in` puts old-side threads
+  under the row of their last removed line. `ThreadRow::old` and `Threads::old_marks` let
+  `side_threads` draw them in the left column side by side, and leave blank rows on the right.
+  This replaced `blank_threads`.
+- Thread jumps (`]d`, `[d`) in `goto_thread_in` now work in the view's rows, so a thread on
+  removed lines takes its place among the others. `select_anchor` and `anchor_rows` select a
+  thread's lines on either side.
+- `review::reanchor_side` places old-side threads against the base's text, and its `still`
+  check treats a thread as gone when its lines are no longer removed. `App::reanchor` does this
+  only in the base scope, because the other scopes have another old side.
+- A deleted file's lines can now take comments. They're all removed lines, so the thread goes on
+  the old side. The old "this file was deleted" refusal is gone.
+- The MCP `now` note is left out for old-side threads, since removed lines aren't in the agent's
+  files. An outdated one says the lines aren't removed any more.
+- Not built: `annotate` and `suggest` don't take a side. `plans/DECISIONS.md` says why under
+  "Comments on removed lines".
+- A fold you make doesn't count the old-side threads it hides. Removed lines are changes, so
+  only a fold you make can hide them.
 
 ## Relevant code
 
