@@ -103,9 +103,9 @@ and the rest. On top of those, it adds keys for reviewing:
 | `gn` `gp` | Next or previous changed file |
 | `enter` | Open or collapse the thread under the cursor, or open a fold |
 
-Review commands live under `'` so that Helix keeps its own keys. Until glos has language
-servers and editing, `space c`, `space C`, `space r`, `space s`, `space d`, `space D` and `]d`
-still work as before.
+Review commands live under `'`, and threads use `]r` and `[r`, so that Helix keeps its own
+keys. `space c`, `space C`, `space r`, `space s`, `space d`, `space D` and `]d` are free for
+Helix's editing and language-server commands.
 
 ### All files in one scroll
 

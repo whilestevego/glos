@@ -719,7 +719,7 @@ fn mouse_below_notices_and_in_picker() {
     click(&mut t);
     assert_eq!(t.sel(), "one\n#[t|]#wo\n");
     assert!(t.app.prompt.is_some());
-    t.keys("esc space c");
+    t.keys("esc ' c");
     click(&mut t);
     assert!(t.app.comment_box.is_some());
     t.keys("esc q");
@@ -766,7 +766,7 @@ impl T {
 #[test]
 fn comment_box_screen() {
     let mut t = T::files(OLD, NEW);
-    t.keys("x space c").typed("rename `x`");
+    t.keys("x ' c").typed("rename `x`");
     insta::assert_snapshot!(t.screen());
     t.keys("esc ret");
     // Saved, the thread shows as one line under its line, with a mark in the gutter.
@@ -777,7 +777,7 @@ fn comment_box_screen() {
 fn commenting_on_a_selection_saves_at_once() {
     let mut t = T::files(OLD, NEW);
     // The cursor opens on the first change, line 2; `x` then `x` selects lines 2–3.
-    t.keys("x x space c");
+    t.keys("x x ' c");
     assert!(
         t.app.comment_box.as_ref().unwrap().insert,
         "opens in insert mode"
@@ -803,18 +803,18 @@ fn commenting_on_a_selection_saves_at_once() {
 #[test]
 fn drafts_survive_closing_the_box() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("half a thou");
+    t.keys("' c").typed("half a thou");
     t.keys("esc q");
     assert!(t.app.comment_box.is_none());
     assert!(t.said().starts_with("Draft kept"), "{}", t.said());
     assert!(t.bodies().is_empty(), "nothing is sent by closing");
     // Back on the same line, the draft returns, cursor at its end.
-    t.keys("space c");
+    t.keys("' c");
     assert_eq!(t.said(), "Draft restored");
     t.typed("ght").keys("esc ret");
     assert_eq!(t.bodies(), ["half a thought"]);
     // Saved, the draft is gone.
-    t.keys("space c");
+    t.keys("' c");
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "");
     // An empty box saves nothing.
     t.keys("esc ret");
@@ -825,7 +825,7 @@ fn drafts_survive_closing_the_box() {
 #[test]
 fn motions_work_in_the_box_and_files_stay_put() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("one two three").keys("esc");
+    t.keys("' c").typed("one two three").keys("esc");
     // Normal-mode motions act on the box's text, as in Helix.
     t.keys("b b");
     assert_eq!(t.sel(), "one #[|two ]#three");
@@ -847,9 +847,7 @@ fn motions_work_in_the_box_and_files_stay_put() {
 #[test]
 fn threads_open_and_close() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c")
-        .typed("first line\nsecond")
-        .keys("esc ret");
+    t.keys("' c").typed("first line\nsecond").keys("esc ret");
     assert!(t.shows("▸ you: first line · unsent"), "{}", t.screen());
     assert!(!t.shows("second"));
     // ret on the thread's line opens it…
@@ -871,7 +869,7 @@ fn long_comments_wrap_to_the_screen() {
     let mut t = T::files(OLD, NEW);
     let body = "a long comment that goes on well past the right edge of the screen, \
                 so it has to wrap onto more rows to be read in full";
-    t.keys("space c").typed(body).keys("esc ret");
+    t.keys("' c").typed(body).keys("esc ret");
     let width = |l: &str| unicode_width::UnicodeWidthStr::width(l);
     let screen = t.screen();
     assert!(screen.lines().all(|l| width(l) <= 72), "{screen}");
@@ -896,7 +894,7 @@ fn opened_threads_count_when_scrolling() {
         .collect::<Vec<_>>()
         .join("\n");
     let mut t = T::files("", &lines(40));
-    t.keys("g g space c").typed(&body).keys("esc ret ret");
+    t.keys("g g ' c").typed(&body).keys("esc ret ret");
     assert_eq!(t.top(), 0);
     // Nine thread rows sit under line 1: line 4 is already low in a 12-row view.
     t.keys("3 j");
@@ -909,7 +907,7 @@ fn opened_threads_count_when_scrolling() {
 #[test]
 fn editing_and_deleting_a_comment() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("tpyo").keys("esc ret");
+    t.keys("' c").typed("tpyo").keys("esc ret");
     t.keys("' m");
     assert!(t.shows("Edit comment"));
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "tpyo");
@@ -931,15 +929,15 @@ fn editing_and_deleting_a_comment() {
     // With no thread here, there's nothing to edit or reply to.
     t.keys("' m");
     assert_eq!(t.said(), "No comment of yours here");
-    t.keys("space r");
+    t.keys("' r");
     assert_eq!(t.said(), "No thread here to reply to");
 }
 
 #[test]
 fn space_shift_m_twice_deletes_your_latest_unsent_comment() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("first").keys("esc ret");
-    t.keys("space r").typed("second").keys("esc ret");
+    t.keys("' c").typed("first").keys("esc ret");
+    t.keys("' r").typed("second").keys("esc ret");
     t.keys("' M");
     assert_eq!(t.said(), "' M again deletes your comment: «second»");
     assert_eq!(t.bodies(), ["first", "second"]);
@@ -956,7 +954,7 @@ fn space_shift_m_twice_deletes_your_latest_unsent_comment() {
 #[test]
 fn any_other_key_forgets_a_delete() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("keep me").keys("esc ret");
+    t.keys("' c").typed("keep me").keys("esc ret");
     t.keys("' M");
     // esc out of the space menu is a key too.
     t.keys("space esc ' M");
@@ -970,7 +968,7 @@ fn any_other_key_forgets_a_delete() {
 fn a_long_comment_is_quoted_by_its_first_line() {
     let mut t = T::files(OLD, NEW);
     let long = "a first line that runs on for well over forty characters";
-    t.keys("space c")
+    t.keys("' c")
         .typed(long)
         .keys("ret")
         .typed("more")
@@ -981,7 +979,7 @@ fn a_long_comment_is_quoted_by_its_first_line() {
         "' M again deletes your comment: «a first line that runs on for well over…»"
     );
     t.keys("esc");
-    t.keys("space r")
+    t.keys("' r")
         .typed("short")
         .keys("ret")
         .typed("two")
@@ -993,7 +991,7 @@ fn a_long_comment_is_quoted_by_its_first_line() {
 #[test]
 fn the_typed_command_deletes_too() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("gone").keys("esc ret");
+    t.keys("' c").typed("gone").keys("esc ret");
     t.typed(":delete-comment").keys("ret");
     assert!(t.said().starts_with("' M again deletes"), "{}", t.said());
     t.typed(":delete-comment").keys("ret");
@@ -1004,7 +1002,7 @@ fn the_typed_command_deletes_too() {
 #[test]
 fn a_sent_comment_is_not_deleted() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("sent").keys("esc ret");
+    t.keys("' c").typed("sent").keys("esc ret");
     t.keys("' s c");
     t.keys("' M");
     assert_eq!(
@@ -1015,9 +1013,9 @@ fn a_sent_comment_is_not_deleted() {
     assert_eq!(t.bodies(), ["sent"]);
     // An older unsent comment is not reached past the sent one.
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("old").keys("esc ret");
+    t.keys("' c").typed("old").keys("esc ret");
     let old = t.app.state.threads[0].comments[0].id.clone();
-    t.keys("space r").typed("new").keys("esc ret");
+    t.keys("' r").typed("new").keys("esc ret");
     t.keys("' s c");
     // Editing a sent comment makes it unsent again. The UI only edits the latest, so the
     // store edits the older one here.
@@ -1044,8 +1042,8 @@ fn no_comment_of_yours_to_delete() {
 #[test]
 fn space_shift_m_waits_for_the_comment_box() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("one").keys("esc ret");
-    t.keys("space r").typed("draft").keys("esc ' M");
+    t.keys("' c").typed("one").keys("esc ret");
+    t.keys("' r").typed("draft").keys("esc ' M");
     assert!(
         t.said().starts_with("Close the comment box first"),
         "{}",
@@ -1060,7 +1058,7 @@ fn the_palette_finds_delete_comment() {
     t.keys("C-g").typed("delete");
     assert!(!t.shows("Delete your latest comment"), "no thread here yet");
     t.keys("esc");
-    t.keys("space c").typed("one").keys("esc ret");
+    t.keys("' c").typed("one").keys("esc ret");
     t.keys("C-g").typed("delete");
     assert!(t.shows("' M"), "{}", t.screen());
     assert!(t.shows("Delete your latest comment"), "{}", t.screen());
@@ -1069,12 +1067,12 @@ fn the_palette_finds_delete_comment() {
 #[test]
 fn replies_and_review_level_comments() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("one").keys("esc ret");
-    t.keys("space r").typed("two").keys("esc ret");
+    t.keys("' c").typed("one").keys("esc ret");
+    t.keys("' r").typed("two").keys("esc ret");
     assert_eq!(t.said(), "Reply saved · 2 unsent; ' s submits");
     assert_eq!(t.app.state.threads.len(), 1);
     assert_eq!(t.bodies(), ["one", "two"]);
-    t.keys("space C");
+    t.keys("' C");
     assert!(t.shows("Comment on the review"));
     t.typed("overall fine").keys("esc ret");
     assert_eq!(t.app.state.threads.len(), 2);
@@ -1088,11 +1086,11 @@ fn no_comments_on_binary_files_and_removed_ones_on_deleted_files() {
         std::fs::write(n.join("bin.dat"), b"\x00\x01").unwrap();
     });
     assert_eq!(t.path(), "bin.dat");
-    t.keys("space c");
+    t.keys("' c");
     assert!(t.app.comment_box.is_none());
     assert!(t.said().contains("binary"));
     // A deleted file's lines are all removed lines, so a comment goes on the old side.
-    t.keys("g n space c");
+    t.keys("g n ' c");
     assert_eq!(t.path(), "gone.rs");
     assert!(t.shows("Comment on gone.rs:-1 "), "{}", t.screen());
 }
@@ -1100,7 +1098,7 @@ fn no_comments_on_binary_files_and_removed_ones_on_deleted_files() {
 #[test]
 fn the_final_empty_line_comments_on_the_last_line() {
     let mut t = T::files("a\n", "a\nb\n");
-    t.keys("g e space c");
+    t.keys("g e ' c");
     assert!(t.shows("Comment on main.rs:2 "), "{}", t.screen());
 }
 
@@ -1114,7 +1112,7 @@ fn submitting_with_a_verdict() {
     t.keys("esc");
     t.keys("' s r");
     assert!(t.said().starts_with("nothing to submit"), "{}", t.said());
-    t.keys("space c").typed("fix").keys("esc ret");
+    t.keys("' c").typed("fix").keys("esc ret");
     t.keys("' s");
     assert!(t.shows("Request changes") && t.shows("Send comments without a verdict"));
     t.keys("r");
@@ -1148,14 +1146,14 @@ fn submitting_with_a_verdict() {
 #[test]
 fn quitting_with_unsent_comments_reminds_once() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("x").keys("esc ret");
+    t.keys("' c").typed("x").keys("esc ret");
     t.keys(":").typed("q").keys("ret");
     assert!(!t.app.quit);
     assert!(t.said().starts_with("1 comment not sent"), "{}", t.said());
     t.keys(":").typed("q").keys("ret");
     assert!(t.app.quit);
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("x").keys("esc ret");
+    t.keys("' c").typed("x").keys("esc ret");
     t.keys(":").typed("q!").keys("ret");
     assert!(t.app.quit);
 }
@@ -1165,27 +1163,27 @@ fn thread_motions_and_pickers() {
     let mut t = T::files("", &lines(20));
     for line in [3, 9, 15] {
         t.keys(":").typed(&line.to_string());
-        t.keys("ret space c")
+        t.keys("ret ' c")
             .typed(&format!("at {line}"))
             .keys("esc ret");
     }
-    t.keys("g g ] d");
+    t.keys("g g ] r");
     assert!(
         t.sel().contains("#[line 3\n|]#"),
         "selects the thread's lines"
     );
-    t.keys("] d ] d");
+    t.keys("] r ] r");
     assert!(t.sel().contains("#[line 15\n|]#"));
-    t.keys("] d");
+    t.keys("] r");
     assert_eq!(t.said(), "No more threads in this file");
-    t.keys("[ d");
+    t.keys("[ r");
     assert!(t.sel().contains("#[line 9\n|]#"));
-    t.keys("[ D");
+    t.keys("[ R");
     assert!(t.sel().contains("#[line 3\n|]#"));
-    t.keys("] D");
+    t.keys("] R");
     assert!(t.sel().contains("#[line 15\n|]#"));
     // The whole review's thread picker, filtered, opens a thread on its lines and opens it.
-    t.keys("space D").typed("at 9").keys("ret");
+    t.keys("' D").typed("at 9").keys("ret");
     assert!(t.sel().contains("#[line 9\n|]#"));
     assert!(t.shows("▾ thread"));
 }
@@ -1193,8 +1191,8 @@ fn thread_motions_and_pickers() {
 #[test]
 fn a_review_level_thread_opens_its_comment_from_the_picker() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space C").typed("overall").keys("esc ret");
-    t.keys("space D ret");
+    t.keys("' C").typed("overall").keys("esc ret");
+    t.keys("' D ret");
     assert!(t.shows("Edit comment"), "{}", t.screen());
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "overall");
 }
@@ -1288,7 +1286,7 @@ impl T {
 
 /// A review with one submitted comment on line 2 of `NEW`, and the thread's id.
 fn sent(t: &mut T) -> String {
-    t.keys("space c").typed("why hello?").keys("esc ret ' s r");
+    t.keys("' c").typed("why hello?").keys("esc ret ' s r");
     t.app.state.threads[0].id.clone()
 }
 
@@ -1370,7 +1368,7 @@ fn next_unread_goes_across_files() {
 #[test]
 fn resolve_and_reopen() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("x").keys("esc ret");
+    t.keys("' c").typed("x").keys("esc ret");
     t.keys("' x");
     assert_eq!(t.said(), "Thread resolved");
     assert_eq!(t.app.state.threads[0].status, "resolved");
@@ -1409,7 +1407,7 @@ fn files_changing_keep_your_place_and_move_threads() {
     let mut t = T::files("", &lines(30));
     t.keys(":")
         .typed("20")
-        .keys("ret space c")
+        .keys("ret ' c")
         .typed("this one")
         .keys("esc ret");
     t.keys("5 l");
@@ -1432,7 +1430,7 @@ fn threads_go_outdated_only_once_files_settle() {
     let mut t = T::files("", &lines(10));
     t.keys(":")
         .typed("5")
-        .keys("ret space c")
+        .keys("ret ' c")
         .typed("hmm")
         .keys("esc ret");
     t.edit(&lines(10).replace("line 5\n", "line five\n"));
@@ -1486,7 +1484,7 @@ fn threads_follow_changes_made_while_glos_was_closed() {
     let mut t = T::files("", &lines(10));
     t.keys(":")
         .typed("3")
-        .keys("ret space c")
+        .keys("ret ' c")
         .typed("x")
         .keys("esc ret");
     let dir = t._dir.path().to_path_buf();
@@ -1743,11 +1741,11 @@ fn unified_folds_and_comments_go_on_the_new_side() {
     // The cursor opens on the change; the line above it is the removed one.
     assert_eq!(t.app.cursor_new_line(), 9);
     // The removed line alone takes a comment on the old side.
-    t.keys("k space c");
+    t.keys("k ' c");
     assert!(t.shows("Comment on main.rs:-10 "), "{}", t.screen());
     t.keys("esc q");
     // Selecting the removed and added lines comments on the added one.
-    t.keys("x x space c");
+    t.keys("x x ' c");
     assert!(t.shows("Comment on main.rs:10 "), "{}", t.screen());
     t.typed("ten?").keys("esc ret");
     assert_eq!(t.thread_lines(), [(10, 10, "open".into())]);
@@ -1767,7 +1765,7 @@ fn a_comment_on_removed_lines_goes_on_the_old_side() {
         .replace("line 15\n", "line fifteen\n");
     let mut t = T::files(&old, &new);
     // The cursor opens on the line after the removed one.
-    t.keys("k space c");
+    t.keys("k ' c");
     assert!(t.shows("Comment on main.rs:-10 "), "{}", t.screen());
     t.typed("why?").keys("esc ret");
     let a = t.app.state.threads[0].anchor.clone().unwrap();
@@ -1780,7 +1778,7 @@ fn a_comment_on_removed_lines_goes_on_the_old_side() {
     let row = |t: &T, s: &str| t.screen().lines().position(|l| l.contains(s)).unwrap();
     assert_eq!(row(&t, "▸ you: why?"), row(&t, "line 10") + 1);
     // Thread keys find it among the others, and reply to it.
-    t.keys("g g").keys("] d");
+    t.keys("g g").keys("] r");
     assert!(t.sel().contains("line 10"), "{}", t.sel());
     t.keys("' r");
     assert!(t.shows("Reply"), "{}", t.screen());
@@ -1793,8 +1791,8 @@ fn a_comment_on_removed_lines_goes_on_the_old_side() {
     let at = l.chars().position(|c| c == '▸').unwrap();
     assert!(at < l.chars().count() / 2, "{l}");
     // A new comment there, on the filler row beside the removed line, goes on the old side too.
-    t.keys("g g").keys("] d");
-    t.keys("space c");
+    t.keys("g g").keys("] r");
+    t.keys("' c");
     assert!(t.shows("Comment on main.rs:-10 "), "{}", t.screen());
 }
 
@@ -1803,7 +1801,7 @@ fn a_thread_on_removed_lines_goes_outdated_when_they_come_back() {
     let old = lines(10);
     let new = old.replace("line 5\n", "");
     let mut t = T::files(&old, &new);
-    t.keys("k space c").typed("why?").keys("esc ret");
+    t.keys("k ' c").typed("why?").keys("esc ret");
     assert_eq!(t.thread_lines(), [(5, 5, "open".into())]);
     // The agent changes something else: the line is still removed, and the thread stays.
     t.edit(&new.replace("line 1\n", "line one\n"));
@@ -1820,7 +1818,7 @@ fn a_thread_on_removed_lines_goes_outdated_when_they_come_back() {
 fn split_keeps_the_sides_level_with_threads() {
     let mut t = T::files("a\nb\nc\n", "a\nB\nnew\nc\n");
     t.keys("' v s");
-    t.keys("g g j space c").typed("x").keys("esc ret");
+    t.keys("g g j ' c").typed("x").keys("esc ret");
     let screen = t.screen();
     let lines: Vec<&str> = screen.lines().collect();
     // The thread row on the right has a blank row on the left: `c` is level on both sides.
@@ -1878,7 +1876,7 @@ fn one_commit_at_a_time() {
     t.keys("] C");
     assert_eq!(t.said(), "The last commit");
     // Comments work on a commit too.
-    t.keys("space c");
+    t.keys("' c");
     assert!(t.app.comment_box.is_some());
     t.keys("esc q");
     t.keys("[ C [ C");
@@ -1899,7 +1897,7 @@ fn filtering_files() {
     assert_eq!(t.said(), "Old vs new, files *.rs: 2 files");
     t.keys("g n g n");
     assert_eq!(t.path(), "a.rs", "b.md is left out");
-    t.keys("space c").typed("x").keys("esc ret g n");
+    t.keys("' c").typed("x").keys("esc ret g n");
     t.keys(":").typed("filter threads").keys("ret");
     assert_eq!(t.said(), "Old vs new, files with open threads: 1 file");
     t.keys(":").typed("filter").keys("ret");
@@ -2194,7 +2192,7 @@ fn a_revision_against_your_files() {
     assert_eq!(paths, ["b.rs", "c.rs"]);
     assert!(t.shows("HEAD~1 vs your files"), "{}", t.screen());
     // The new side is your files: comments work, on the branch's review.
-    t.keys("space c").typed("ok?").keys("esc ret");
+    t.keys("' c").typed("ok?").keys("esc ret");
     assert_eq!(t.bodies(), ["ok?"]);
     assert_eq!(t.app.review.kind, "git");
     assert_eq!(
@@ -2221,7 +2219,7 @@ fn comments_on_two_revisions_keep_their_diff() {
     assert_eq!(paths, ["a.rs"]);
     assert!(t.shows("HEAD~2 vs HEAD~1"), "{}", t.screen());
     // The cursor opens on the change, `line two`, which is the commit's content.
-    t.keys("space c").typed("why two?").keys("esc ret");
+    t.keys("' c").typed("why two?").keys("esc ret");
     let th = &t.app.state.threads[0];
     let (old, new) = (
         t.app.state.source.old_commit.unwrap(),
@@ -2264,7 +2262,7 @@ fn comments_on_one_commit_stay_on_it() {
     let mut t = git_repo();
     t.keys("' o c");
     assert_eq!(t.path(), "a.rs");
-    t.keys("space c").typed("on the commit").keys("esc ret");
+    t.keys("' c").typed("on the commit").keys("esc ret");
     let th = t.app.state.threads[0].clone();
     let commit = &t.app.commits[0];
     assert_eq!(th.on.new_rev, Some(commit.id.to_string()));
@@ -2281,7 +2279,7 @@ fn comments_on_one_commit_stay_on_it() {
     t.draw();
     assert!(t.shows("▸ you: on the commit"), "{}", t.screen());
     // A comment made on your files shows in the commit's view too, marked as such.
-    t.keys("space c").typed("on files").keys("esc ret");
+    t.keys("' c").typed("on files").keys("esc ret");
     t.keys("' o c");
     assert!(
         t.shows("on files · unsent · on your files"),
@@ -2374,7 +2372,7 @@ fn palette_lists_what_applies_and_runs_it() {
     // Typing filters by what a key does.
     t.typed("comment");
     assert!(
-        t.shows("space c") && t.shows("Comment on the selected lines"),
+        t.shows("' c") && t.shows("Comment on the selected lines"),
         "{}",
         t.screen()
     );
@@ -2406,7 +2404,7 @@ fn palette_lists_what_applies_and_runs_it() {
 #[test]
 fn palette_in_the_comment_box() {
     let mut t = T::files(OLD, NEW);
-    t.keys("space c").typed("draft").keys("C-g");
+    t.keys("' c").typed("draft").keys("C-g");
     assert_eq!(t.palette().0, "Comment box: insert mode");
     assert!(t.shows("New line"));
     // esc goes back to typing, the text kept.
@@ -2434,8 +2432,8 @@ fn each_context(t: &mut T, mut check: impl FnMut(&mut T, Context)) {
         (Context::Tree, "space e", "q"),
         (Context::Picker, "space g", "esc"),
         (Context::Prompt, ":", "esc"),
-        (Context::BoxInsert, "space C", "esc q"),
-        (Context::BoxNormal, "space C esc", "q"),
+        (Context::BoxInsert, "' C", "esc q"),
+        (Context::BoxNormal, "' C esc", "q"),
     ];
     for (context, open, close) in steps {
         t.keys(open);
@@ -2491,7 +2489,7 @@ fn c_g_opens_and_closes_the_palette_everywhere() {
         );
     });
     // Partway through a sequence too, and before the character `f` waits for.
-    for keys in ["space C-g", "f C-g", "Z C-g"] {
+    for keys in ["' C-g", "f C-g", "Z C-g"] {
         t.keys(keys);
         assert!(t.app.pickers.last().is_some_and(|p| p.palette), "{keys}");
         t.keys("esc");
@@ -2509,7 +2507,7 @@ fn unbound_characters_are_typed_where_text_goes() {
     assert!(t.shows("xq"), "the picker's filter: {}", t.screen());
     t.keys("esc :").typed("xq");
     assert_eq!(t.app.prompt.as_ref().unwrap().line, "xq");
-    t.keys("esc space C").typed("xq");
+    t.keys("esc ' C").typed("xq");
     assert_eq!(t.app.comment_box.as_ref().unwrap().body(), "xq");
     t.keys("esc q");
     // The tree has no text input, so a character it doesn't bind does nothing.
@@ -2620,7 +2618,7 @@ fn the_dashboard_is_a_command_and_a_key() {
 #[test]
 fn close_needs_everything_sent_then_quits() {
     let mut t = T::files(OLD, NEW);
-    t.keys("x space c").typed("hmm").keys("esc ret");
+    t.keys("x ' c").typed("hmm").keys("esc ret");
     t.keys(": c l o s e ret");
     assert!(!t.app.quit);
     assert!(t.said().contains("1 comment not sent"), "{}", t.said());
@@ -2797,7 +2795,7 @@ fn jumps_open_the_folds_they_land_in() {
     assert!(t.sel().contains("#[l|]#ine twenty"), "{}", t.sel());
     assert!(!t.shows("1 changed"));
     // Threads are never folded by the context.
-    t.keys("z R : 3 0 ret space c")
+    t.keys("z R : 3 0 ret ' c")
         .typed("thirty")
         .keys("esc ret z M");
     assert!(t.shows("line 30"), "{}", t.screen());
@@ -2806,7 +2804,7 @@ fn jumps_open_the_folds_they_land_in() {
     t.keys("x z f");
     assert!(t.shows("↕ line 30 (1) · 1 thread"), "{}", t.screen());
     assert!(!t.shows("▸ you: thirty"));
-    t.keys("g g ] d");
+    t.keys("g g ] r");
     assert!(t.shows("▸ you: thirty"), "{}", t.screen());
     assert!(t.sel().contains("#[line 30\n|]#"), "{}", t.sel());
     // ' n opens a folded line an agent suggested.
@@ -2860,7 +2858,7 @@ fn unified_and_side_by_side_fold_with_the_same_keys() {
     t.keys("' v u");
     assert!(text(&t).starts_with("↕ lines 1–16"));
     // A comment next to a fold goes on the right line.
-    t.keys("g g j x space c");
+    t.keys("g g j x ' c");
     assert!(t.shows("Comment on main.rs:17 "), "{}", t.screen());
 }
 

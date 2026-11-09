@@ -237,12 +237,12 @@ commands! {
     submit_changes, "Request changes", App(AppAction::Submit(Verdict::Changes));
     submit_comment, "Send comments without a verdict", App(AppAction::Submit(Verdict::Comment));
     // Threads are glos's diagnostics.
-    diagnostics_picker, "Open thread picker", App(AppAction::ThreadPicker { all: false });
-    workspace_diagnostics_picker, "Open thread picker for the whole review", App(AppAction::ThreadPicker { all: true });
-    goto_next_diag, "Goto next thread", App(AppAction::NextThread(true));
-    goto_prev_diag, "Goto previous thread", App(AppAction::NextThread(false));
-    goto_last_diag, "Goto last thread", App(AppAction::EdgeThread(true));
-    goto_first_diag, "Goto first thread", App(AppAction::EdgeThread(false));
+    thread_picker, "Open thread picker", App(AppAction::ThreadPicker { all: false });
+    workspace_thread_picker, "Open thread picker for the whole review", App(AppAction::ThreadPicker { all: true });
+    goto_next_thread, "Goto next thread", App(AppAction::NextThread(true));
+    goto_prev_thread, "Goto previous thread", App(AppAction::NextThread(false));
+    goto_last_thread, "Goto last thread", App(AppAction::EdgeThread(true));
+    goto_first_thread, "Goto first thread", App(AppAction::EdgeThread(false));
     goto_next_unread, "Goto next unread reply", App(AppAction::NextUnread(true));
     goto_prev_unread, "Goto previous unread reply", App(AppAction::NextUnread(false));
     toggle_resolved, "Resolve or reopen the thread under the cursor", App(AppAction::ToggleResolved);
@@ -580,10 +580,8 @@ fn normal_defs() -> Vec<Def> {
             "[",
             "Left bracket",
             vec![
-                cmd("d", "goto_prev_diag"),
-                cmd("D", "goto_first_diag"),
-                cmd("r", "goto_prev_diag"),
-                cmd("R", "goto_first_diag"),
+                cmd("r", "goto_prev_thread"),
+                cmd("R", "goto_first_thread"),
                 cmd("u", "goto_prev_unread"),
                 cmd("C", "goto_prev_commit"),
                 cmd("g", "goto_prev_change"),
@@ -602,10 +600,8 @@ fn normal_defs() -> Vec<Def> {
             "]",
             "Right bracket",
             vec![
-                cmd("d", "goto_next_diag"),
-                cmd("D", "goto_last_diag"),
-                cmd("r", "goto_next_diag"),
-                cmd("R", "goto_last_diag"),
+                cmd("r", "goto_next_thread"),
+                cmd("R", "goto_last_thread"),
                 cmd("u", "goto_next_unread"),
                 cmd("C", "goto_next_commit"),
                 cmd("g", "goto_next_change"),
@@ -660,16 +656,8 @@ fn normal_defs() -> Vec<Def> {
             vec![
                 cmd("f", "file_picker"),
                 cmd("g", "changed_file_picker"),
-                cmd("d", "diagnostics_picker"),
-                cmd("D", "workspace_diagnostics_picker"),
                 cmd("y", "yank_to_clipboard"),
                 cmd("Y", "yank_main_selection_to_clipboard"),
-                // These duplicate the Review menu's keys at `'` until Helix's language
-                // server and editing commands take them back.
-                cmd("c", "comment"),
-                cmd("C", "review_comment"),
-                cmd("r", "reply"),
-                menu("s", "Submit", submit_defs()),
                 cmd("e", "file_explorer"),
                 cmd("?", "command_palette"),
             ],
@@ -685,8 +673,8 @@ fn normal_defs() -> Vec<Def> {
                 cmd("M", "delete_comment"),
                 cmd("x", "toggle_resolved"),
                 cmd("n", "goto_suggestion"),
-                cmd("d", "diagnostics_picker"),
-                cmd("D", "workspace_diagnostics_picker"),
+                cmd("d", "thread_picker"),
+                cmd("D", "workspace_thread_picker"),
                 cmd("l", "dashboard"),
                 menu("s", "Submit", submit_defs()),
                 menu(
@@ -1160,8 +1148,8 @@ mod tests {
             ("' M", "delete_comment"),
             ("' x", "toggle_resolved"),
             ("' n", "goto_suggestion"),
-            ("' d", "diagnostics_picker"),
-            ("' D", "workspace_diagnostics_picker"),
+            ("' d", "thread_picker"),
+            ("' D", "workspace_thread_picker"),
             ("' l", "dashboard"),
             ("' s a", "submit_approve"),
             ("' s r", "submit_changes"),
@@ -1173,20 +1161,26 @@ mod tests {
             ("' o r", "scope_since_review"),
             ("' o c", "scope_commits"),
             ("' o f", "filter_files"),
-            ("] r", "goto_next_diag"),
-            ("[ r", "goto_prev_diag"),
-            ("] R", "goto_last_diag"),
-            ("[ R", "goto_first_diag"),
-            // These stay until Helix's own commands need them.
-            ("space c", "comment"),
-            ("space s a", "submit_approve"),
-            ("space d", "diagnostics_picker"),
-            ("] d", "goto_next_diag"),
+            ("] r", "goto_next_thread"),
+            ("[ r", "goto_prev_thread"),
+            ("] R", "goto_last_thread"),
+            ("[ R", "goto_first_thread"),
         ] {
             assert_eq!(bound_seq(&k, keys), Some(name), "{keys}");
         }
-        // The keys that never clashed with Helix moved outright.
+        // Every review key left the space menu and `]d`, which are Helix's language server
+        // and editing keys.
         for keys in [
+            "space c",
+            "space C",
+            "space r",
+            "space s a",
+            "space d",
+            "space D",
+            "] d",
+            "[ d",
+            "] D",
+            "[ D",
             "space m",
             "space M",
             "space x",

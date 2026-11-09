@@ -121,7 +121,7 @@ const PHASES: &[Phase] = &[
         t.keys(&"g n ".repeat(10));
     }),
     ("a comment", |t| {
-        t.keys("x space c")
+        t.keys("x ' c")
             .typed("Is this right?")
             .keys("esc ret ] g [ g");
     }),

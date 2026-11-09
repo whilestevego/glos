@@ -470,7 +470,7 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
 
 - **Chosen:** when a glos key clashes with a Helix key, Helix keeps it, and glos moves its
   command. Review commands move under one Review menu at `space v`, and each one moves only when
-  the Helix command that needs its key arrives. `plan-review-menu.md` has the layout and the steps.
+  the Helix command that needs its key arrives. `completed/plan-review-menu.md` has the layout and the steps.
 - **Why:** glos promises Helix's keys. Until now it took `space s`, `space r`, `space c`,
   `space C`, `space d`, `space D` and the `]d` family because glos had no language servers or
   editing. Language servers and editing are now planned, and those keys would mean different
@@ -538,3 +538,16 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
 - **Not done:** `annotate` and `suggest` still take only new-side lines. An agent hasn't needed
   to point at a line it removed, and doing so needs the old side's text on the MCP side.
 - **Supersedes:** "comments go on the new side only" under "Comments".
+
+## Review keys leave Helix's keys now (2026-11-09)
+
+- **Chosen:** steps 2 and 3 of `completed/plan-review-menu.md` are done now, ahead of the
+  language server and editing plans. `space c`, `space C`, `space r`, `space s`, `space d`,
+  `space D` and the `]d` family are unbound until those plans bind Helix's commands. The thread
+  commands take names of their own, such as `thread_picker` and `goto_next_thread`.
+- **Why:** the user asked for the plan to be finished. Moving every key at once means one change
+  to learn, and leaves the later plans with only their own work.
+- **Rejected:** keeping the duplicates until each Helix command arrives, as "Helix wins key
+  clashes" first planned. That spread the move over two more releases.
+- **Supersedes:** "each one moves only when the Helix command that needs its key arrives" under
+  "Helix wins key clashes".

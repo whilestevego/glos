@@ -12,14 +12,6 @@ use regex::Regex;
 
 use crate::{HELIX_TAG, fetch, root};
 
-/// Keys glos took from Helix for review actions, and what they do now.
-const REPLACED: &[(&str, &str)] = &[
-    ("space c", "comment on the selection (M2)"),
-    ("space C", "review-level comment (M2)"),
-    ("space r", "reply to the thread (M2)"),
-    ("space s", "submit with a verdict (M2)"),
-];
-
 /// Helix commands glos has no use for, by why: matched against the command's name.
 const NOT_APPLICABLE: &[(&str, &str)] = &[
     (
@@ -167,8 +159,6 @@ fn checklist(helix_src: &str, glos_src: &str) -> (String, Vec<(String, usize)>) 
         let g = glos_cmd(key);
         let status = if g == Some(cmd.as_str()) {
             "done".to_string()
-        } else if let Some((_, what)) = REPLACED.iter().find(|(k, _)| k == key) {
-            format!("replaced: {what}")
         } else if let Some(g) = g {
             format!("replaced: `{g}`")
         } else if let Some((why, _)) = not_applicable.iter().find(|(_, p)| p.is_match(cmd)) {
@@ -344,7 +334,7 @@ fn tree_defs() -> Vec<Def> {
             "| `h` | `move_char_left` | done |",
             "| `i` | `insert_mode` | not applicable: editing comes after the MVP |",
             "| `g d` | `goto_definition` | not applicable: needs a language server |",
-            "| `space c` | `toggle_comments` | replaced: comment on the selection (M2) |",
+            "| `space c` | `toggle_comments` | replaced: `comment` |",
             "| `space w v` | `vsplit` | not applicable: glos has no buffers or windows |",
             "| `] f` | `goto_next_function` | to do |",
             "| `space l` | `dashboard` |",

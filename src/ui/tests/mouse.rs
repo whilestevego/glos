@@ -88,7 +88,7 @@ fn a_click_on_a_tree_file_opens_it_and_keeps_focus() {
     t.keys("esc :");
     t.mouse(CLICK, 3, y);
     assert_eq!(t.path(), "f03.rs");
-    t.keys("esc x space c");
+    t.keys("esc x ' c");
     t.mouse(CLICK, 3, y + 1);
     assert_eq!(t.path(), "f03.rs");
     assert!(t.app.comment_box.is_some());
@@ -118,7 +118,7 @@ fn the_wheel_scrolls_what_it_is_over() {
 #[test]
 fn the_wheel_scrolls_the_comment_box_and_the_code_under_it() {
     let mut t = T::files_sized("", &lines(100), 72, 14);
-    t.keys("x space c");
+    t.keys("x ' c");
     for i in 0..20 {
         t.typed(&format!("line {i}")).keys("ret");
     }
@@ -145,8 +145,8 @@ fn the_wheel_scrolls_the_comment_box_and_the_code_under_it() {
 #[test]
 fn the_wheel_scrolls_the_help_panel_and_completions() {
     let mut t = T::files_sized(OLD, NEW, 72, 10);
-    // The space menu is too long to fit on a 10-row screen.
-    t.keys("space");
+    // The View menu is too long to fit on a 10-row screen.
+    t.keys("z");
     let help = t.app.help_area;
     assert!(help.height > 0);
     let first = t.row(help.y as usize + 1);
@@ -159,7 +159,7 @@ fn the_wheel_scrolls_the_help_panel_and_completions() {
     let last = t.app.help_top;
     t.mouse(DOWN, help.x + 2, help.y + 2);
     assert_eq!(t.app.help_top, last, "no further than the last row");
-    t.keys("esc space");
+    t.keys("esc z");
     assert_eq!(t.app.help_top, 0, "a key press resets the scroll");
     assert_eq!(t.row(help.y as usize + 1), first);
 

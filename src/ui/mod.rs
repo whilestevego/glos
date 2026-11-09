@@ -2019,9 +2019,9 @@ impl App {
                 .is_some_and(|i| self.state.threads[i].latest_yours().is_some()),
             "submit_changes" | "submit_comment" => self.unsent > 0,
             "comment" => self.can_comment().is_ok(),
-            "goto_next_diag" | "goto_prev_diag" | "goto_first_diag" | "goto_last_diag"
-            | "diagnostics_picker" => here(),
-            "workspace_diagnostics_picker" => !self.state.threads.is_empty(),
+            "goto_next_thread" | "goto_prev_thread" | "goto_first_thread" | "goto_last_thread"
+            | "thread_picker" => here(),
+            "workspace_thread_picker" => !self.state.threads.is_empty(),
             "view_unified" => self.view_kind != ViewKind::Unified,
             "view_split" => self.view_kind != ViewKind::Split,
             "scope_base" => self.scope != Scope::Base,
@@ -3312,9 +3312,7 @@ impl App {
             }
             "editor" => match self.comment_box {
                 Some(_) => self.run_editor = true,
-                None => {
-                    self.status = Some(("No comment box is open: space c opens one".into(), true))
-                }
+                None => self.status = Some(("No comment box is open: ' c opens one".into(), true)),
             },
             "toggle" | "toggle-option" => match args.trim() {
                 "soft-wrap" | "soft-wrap.enable" => {
