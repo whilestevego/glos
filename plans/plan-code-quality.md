@@ -1,6 +1,6 @@
 # Code quality checks
 
-**Status:** In progress on `build/code-quality` (2026-11-21).
+**Status:** Built on `build/code-quality` (2026-11-22). The branch is not pushed, and it has no PR yet.
 
 glos keeps its rules in `CLAUDE.md`, and nothing checks them. The workspace has no lint table and
 no `rustfmt.toml`. It has no git hooks, no CI and no prose lint. This plan adds checks for the
@@ -125,3 +125,35 @@ One branch, `build/code-quality`, with one commit for each step. Each commit bui
 - Block comments (`/* */`). Vale's Rust grammar does not read them, and glos does not use them.
 - A coverage floor.
 - The plans in `plans/completed/` and `plans/abandoned/`. They are history and stay as written.
+
+## As built
+
+The work follows the design. These points depart from the plan or add to it.
+
+- **Steps 5 to 7 became three lint commits.** An `#[expect]` warns when its lint is off, so each
+  commit turns on its own lints with the fixes and the exceptions for them. The commits turn on
+  `pedantic`, then the restriction lints, then `unsafe_code`.
+- **Three lints are allowed for the whole workspace,** each with its reason in `Cargo.toml`:
+  `format_collect`, `format_push_string` and `many_single_char_names`. The plan expected no
+  workspace-wide exception. glos builds only short strings, and `write!` into a `String` needs
+  an ignored `Result` at each of the 39 sites. Short names are the house style for pairs and
+  maths.
+- **Casts saturate.** `src/num.rs` has `cells`, `to_u32`, `to_isize`, `to_usize` and
+  `line_number`, and `crates/glos-helix/src/lib.rs` has `to_u32` and `to_isize`. They replace
+  about 80 `as` casts that could wrap.
+- **Every other exception is local:** 55 `#[expect]` attributes, each with a reason, and one
+  more that `build.rs` writes into the generated code. Most are
+  `too_many_lines` (13) and `expect_used` on a stated invariant (10). The old `#[allow]`
+  attributes, one for `deprecated`, one for `unnecessary_unwrap` and three for
+  `too_many_arguments`, became `#[expect]` with a reason.
+- **Small changes in behaviour.** `Agent::open_target` returns a message if a git source has no
+  git data. It panicked before. The MCP server goes on after a tool call panics and poisons its
+  mutex. `xtask keymap` returns an error for a Helix keymap that it cannot parse.
+- **Vale reads `///` comments as plain text.** A code span in a doc comment is checked like the
+  words around it. Vale does not read block comments.
+- **`commit-msg` writes the message to `target/COMMIT_EDITMSG.md`,** because Vale picks its
+  rules by the extension of the file.
+- **The SHA in `.git-blame-ignore-revs` is the SHA on this branch.** A rebase or a squash merge
+  changes it, so update the file after such a merge.
+- **CI is not run yet.** The workflow runs on GitHub only after a push.
+

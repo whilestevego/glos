@@ -36,7 +36,7 @@ is the keymap checklist, and `cargo xtask keymap` writes it. Do not edit it by h
 | [plan-channels.md](plan-channels.md) | Blocked until Claude Code releases channels. Sends your review into the session of the agent. |
 | [plan-review-identity.md](plan-review-identity.md) | Draft. Reviews follow renamed branches, and the key of a detached HEAD is its start commit. |
 | [plan-folder-snapshot.md](plan-folder-snapshot.md) | Draft. Review a folder outside git against a snapshot from the start of the review. |
-| [plan-code-quality.md](plan-code-quality.md) | In progress on `build/code-quality`. Lints, formatting, git hooks, a prose lint and `cargo xtask ci`. |
+| [plan-code-quality.md](plan-code-quality.md) | Built on `build/code-quality`, with no PR yet. Lints, formatting, git hooks, a prose lint and `cargo xtask ci`. |
 
 Remappable keys, from the "After the MVP" list in
 [completed/plan-overview.md](completed/plan-overview.md), have no plan yet.
