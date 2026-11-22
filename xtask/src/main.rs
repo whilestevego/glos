@@ -5,6 +5,8 @@
 //! - `keymap [default.rs]`: writes `plans/KEYMAP.md`, the keymap checklist.
 //! - `prose [base]`: runs Vale on the lines that this branch adds since it left `base` (`main`).
 //! - `prose-test`: checks that each Vale rule fires on its fixture.
+//! - `setup`: installs the git hooks in `.githooks/`.
+//! - `pre-commit` and `commit-msg <file>`: the checks that the hooks run.
 
 #![expect(
     clippy::print_stdout,
@@ -12,6 +14,7 @@
     reason = "xtask is a command-line tool, and the terminal is its interface"
 )]
 
+mod check;
 mod fetch_helix;
 mod keymap;
 mod prose;
@@ -35,7 +38,10 @@ const USAGE: &str = "\
 fetch-helix [lang …]   vendor the pinned Helix release into crates/glos-helix
 keymap [default.rs]    write plans/KEYMAP.md
 prose [base]           lint the prose on lines added since base (default main)
-prose-test             check that each prose rule fires on its fixture";
+prose-test             check that each prose rule fires on its fixture
+setup                  install the git hooks in .githooks/
+pre-commit             the format check and clippy
+commit-msg <file>      check the subject and the prose of a commit message";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -44,6 +50,12 @@ fn main() -> Result<()> {
         Some("keymap") => keymap::run(args.get(1).map(PathBuf::from)),
         Some("prose") => prose::run(args.get(1).map_or("main", String::as_str)),
         Some("prose-test") => prose::self_test(),
+        Some("setup") => check::setup(),
+        Some("pre-commit") => check::pre_commit(),
+        Some("commit-msg") => match args.get(1) {
+            Some(path) => check::commit_msg(path),
+            None => bail!("usage: cargo xtask commit-msg <file>"),
+        },
         _ => bail!("usage: cargo xtask <task>\n\n{USAGE}"),
     }
 }
