@@ -1,6 +1,10 @@
 [workspace]
 members = ["crates/glos-helix", "xtask"]
 
+[workspace.lints.rust]
+# Each `unsafe` site needs an `#[expect(unsafe_code, reason = "...")]` and a `// SAFETY:` comment.
+unsafe_code = "deny"
+
 # Each exception to these lints is an `#[expect(lint, reason = "...")]` on the item that needs it.
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -12,6 +16,7 @@ print_stderr = "warn"
 print_stdout = "warn"
 todo = "warn"
 unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"
 unwrap_used = "warn"
 # glos builds short strings for the UI and MCP. The extra allocation does not matter, and
 # `write!` into a `String` needs an ignored `Result` at each site.

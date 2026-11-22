@@ -47,7 +47,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         names.push(name);
     }
     names.sort();
-    code.push_str("unsafe extern \"C\" {\n");
+    code.push_str(concat!(
+        "#[expect(unsafe_code, reason = \"the grammars are C code that Rust links to\")]\n",
+        "// SAFETY: each declaration matches the `tree_sitter_<name>` function that the grammar's\n",
+        "// parser.c defines, which takes nothing and returns a pointer to its language.\n",
+        "unsafe extern \"C\" {\n",
+    ));
     for n in &names {
         writeln!(code, "    fn tree_sitter_{n}() -> *const ();")?;
     }

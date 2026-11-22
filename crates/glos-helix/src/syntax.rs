@@ -377,6 +377,10 @@ impl LanguageLoader for Loader {
         data.compiled
             .get_or_init(|| {
                 let f = data.grammar?;
+                #[expect(
+                    unsafe_code,
+                    reason = "a grammar compiled from C reaches Rust only as a raw function"
+                )]
                 // SAFETY: each GRAMMARS entry is a tree-sitter language function compiled in
                 // by build.rs, which is what LanguageFn wraps.
                 let f = unsafe { tree_sitter_language::LanguageFn::from_raw(f) };

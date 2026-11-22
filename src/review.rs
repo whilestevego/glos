@@ -343,10 +343,14 @@ pub fn gc(conn: &Connection, older_than: jiff::SignedDuration) -> Result<(usize,
 
 /// Whether process `pid` is still running.
 pub fn alive(pid: i64) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
+    #[expect(
+        unsafe_code,
+        reason = "libc has no safe call to check that a process exists"
+    )]
+    // SAFETY: signal 0 sends nothing. It only checks that the process exists.
     let r = unsafe { libc::kill(pid, 0) };
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }

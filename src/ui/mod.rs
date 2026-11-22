@@ -3747,8 +3747,11 @@ impl App {
 /// `ctrl-z`: give the terminal back, stop, and take it again on `fg`.
 fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     ratatui::restore();
-    // SAFETY: raising a signal on ourselves; the shell resumes us with SIGCONT.
-    unsafe { libc::raise(libc::SIGTSTP) };
+    #[expect(unsafe_code, reason = "libc has no safe call to stop the process")]
+    // SAFETY: glos raises the signal on itself, and the shell resumes it with SIGCONT.
+    unsafe {
+        libc::raise(libc::SIGTSTP)
+    };
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     terminal.clear()?;
