@@ -31,6 +31,17 @@ pub fn pre_commit() -> Result<()> {
     ])
 }
 
+/// Everything CI runs: the format check, clippy, the tests, the prose lint on the lines added
+/// since `base`, and the prose self-test. It stops at the first failure.
+pub fn ci(base: &str) -> Result<()> {
+    pre_commit()?;
+    cargo(&["test", "--workspace"])?;
+    println!("$ cargo xtask prose {base}");
+    prose::run(base)?;
+    println!("$ cargo xtask prose-test");
+    prose::self_test()
+}
+
 /// Checks the subject of the commit message in `path`, then the prose of the whole message.
 pub fn commit_msg(path: &str) -> Result<()> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
