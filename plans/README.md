@@ -36,6 +36,7 @@ the options considered and why one won. [KEYMAP.md](KEYMAP.md) is the keymap che
 | [plan-channels.md](plan-channels.md) | Blocked until Claude Code releases channels. Pushes your review into the agent's session. |
 | [plan-review-identity.md](plan-review-identity.md) | Draft. Reviews follow renamed branches, and detached HEAD is keyed by its start commit. |
 | [plan-folder-snapshot.md](plan-folder-snapshot.md) | Draft. Review a folder outside git against a snapshot taken when the review starts. |
+| [plan-code-quality.md](plan-code-quality.md) | In progress on `build/code-quality`. Lints, formatting, git hooks, a prose lint and `cargo xtask ci`. |
 
 Remappable keys, from the overview's "After the MVP" list in
 [completed/plan-overview.md](completed/plan-overview.md), has no plan yet.
