@@ -515,7 +515,7 @@ fn build(name: &'static str, sticky: bool, defs: Vec<Def>) -> Menu {
             },
             Def::Menu(k, name, sticky, defs) => {
                 keys.push((
-                    Key::parse(k).unwrap(),
+                    Key::parse(k).unwrap_or_else(|| panic!("bad key {k}")),
                     Node::Menu(build(name, sticky, defs)),
                 ));
             },
@@ -926,6 +926,10 @@ impl Keymaps {
         }
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "the keymap builds a menu for every context"
+    )]
     pub fn get(&self, context: Context) -> &Menu {
         &self.menus.iter().find(|(c, _)| *c == context).unwrap().1
     }

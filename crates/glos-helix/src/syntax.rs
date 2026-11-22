@@ -119,6 +119,7 @@ impl Loader {
             .or_else(|| self.by_extension.get(path.extension()?.to_str()?).copied())
     }
 
+    #[expect(clippy::unwrap_used, reason = "the pattern is a literal that compiles")]
     fn language_for_shebang(&self, text: RopeSlice) -> Option<Language> {
         use std::sync::LazyLock;
         // helix-core's, anchored at the start of the file.

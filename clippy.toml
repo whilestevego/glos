@@ -1,0 +1,5 @@
+# Tests may panic on a broken invariant and print what they see.
+allow-dbg-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true
+allow-unwrap-in-tests = true

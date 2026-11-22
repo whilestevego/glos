@@ -832,7 +832,7 @@ pub fn clean(s: &str) -> Cow<'_, str> {
     }
     s.chars()
         .map(|c| match c as u32 {
-            0..=0x1f => char::from_u32(0x2400 + c as u32).unwrap(),
+            0..=0x1f => char::from_u32(0x2400 + c as u32).unwrap_or(char::REPLACEMENT_CHARACTER),
             0x7f => '␡',
             _ if c.is_control() => '�',
             _ => c,

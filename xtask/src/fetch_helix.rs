@@ -75,7 +75,9 @@ fn write(dest: &Path, rel: &str, content: &[u8]) -> Result<()> {
     {
         bail!("bad path in archive: {rel}");
     }
-    fs::create_dir_all(dest.parent().unwrap())?;
+    if let Some(dir) = dest.parent() {
+        fs::create_dir_all(dir)?;
+    }
     fs::write(dest, content)?;
     Ok(())
 }

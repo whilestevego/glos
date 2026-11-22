@@ -77,6 +77,7 @@ impl App {
     }
 
     /// Reads file `i` if it isn't loaded, and builds its view unless the cursor is in it.
+    #[expect(clippy::expect_used, reason = "the file is loaded just above")]
     fn prepare(&mut self, i: usize) {
         let built = (self.generation, self.diff_context, Some(self.view_kind));
         if built != self.all.built {
@@ -114,6 +115,10 @@ impl App {
     }
 
     /// File `i` as it's drawn. It must be prepared.
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn section_file(&self, i: usize) -> &File {
         if i == self.cur_index() {
             return self.main_file();
@@ -140,6 +145,10 @@ impl App {
         self.state.wrap && self.left_view.width == 0
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn section_threads(&self, i: usize) -> Threads {
         if i == self.cur_index() {
             return self.main_threads();
@@ -174,6 +183,10 @@ impl App {
 
     /// File `i`'s notices. The one a generated file has says how to expand it, which its
     /// summary says instead.
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn notices(&self, i: usize) -> impl Iterator<Item = &String> {
         // From the file itself, as the unified and side-by-side views have none of their own.
         let f = self.state.files[i].as_ref().expect("prepared");
@@ -464,6 +477,10 @@ impl App {
     }
 
     /// A file's header: its path, the lines added and removed, and its open threads.
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn header(&self, i: usize) -> (String, String, String, String) {
         let path = &self.state.source.changes[i].path;
         let base = self.state.files[i].as_ref().expect("prepared");
@@ -755,6 +772,7 @@ impl App {
 
     /// Collapses file `i` to its header, or expands it. Its folds stay as they were, and so
     /// does the cursor in it.
+    #[expect(clippy::expect_used, reason = "the file is loaded just above")]
     pub(super) fn toggle_file(&mut self, i: usize) {
         self.load(i);
         let f = self.state.files[i].as_mut().expect("loaded above");

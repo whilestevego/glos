@@ -649,14 +649,12 @@ impl App {
 
     /// The source read again, the way glos found it at the start.
     fn rebuild_source(&self) -> Result<Source> {
-        let base = match (&self.state.source.git, &self.state.source.paths) {
-            (Some(g), _) if self.state.source.revs.is_some() => {
-                let (o, n) = self.state.source.revs.clone().unwrap();
-                Source::revs(&g.worktree, &o, n.as_deref())?
-            },
-            (Some(g), _) => Source::git(&g.worktree, Some(&g.base))?,
-            (None, Some((old, new))) => Source::diff(old, new)?,
-            (None, None) => anyhow::bail!("nothing to read again"),
+        let s = &self.state.source;
+        let base = match (&s.git, &s.paths, &s.revs) {
+            (Some(g), _, Some((o, n))) => Source::revs(&g.worktree, o, n.as_deref())?,
+            (Some(g), _, None) => Source::git(&g.worktree, Some(&g.base))?,
+            (None, Some((old, new)), _) => Source::diff(old, new)?,
+            (None, None, _) => anyhow::bail!("nothing to read again"),
         };
         let mut source = match &self.scope {
             Scope::Base => base,
@@ -762,7 +760,7 @@ impl App {
                 .collect();
             parts
                 .into_iter()
-                .flat_map(|p| p.join().expect("counting lines"))
+                .flat_map(|p| p.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
                 .collect()
         });
         source
@@ -914,7 +912,9 @@ impl App {
         }
         let paths: Vec<String> = self.state.context.keys().cloned().collect();
         for p in paths {
-            let old = self.state.context.remove(&p).unwrap();
+            let Some(old) = self.state.context.remove(&p) else {
+                continue;
+            };
             let new = File::context(&p, &self.state.source, &self.state.loader);
             if old.text != new.text {
                 self.forget_folds(&p);
@@ -1189,6 +1189,7 @@ impl App {
 
     #[expect(
         clippy::unnecessary_unwrap,
+        clippy::unwrap_used,
         reason = "`if let` cannot return this borrow (a borrow checker limit), so the code checks first"
     )]
     fn file_mut(&mut self) -> &mut File {
@@ -1207,6 +1208,10 @@ impl App {
         }
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "`if let` cannot return this borrow (a borrow checker limit), so the code checks first"
+    )]
     fn main_file_mut(&mut self) -> &mut File {
         let alt =
             matches!(&self.alt, Some(a) if a.cur == self.state.cur && a.kind == self.view_kind);
@@ -1217,6 +1222,10 @@ impl App {
     }
 
     /// The file itself: a change's new side (or its old side, if deleted), or a context file.
+    #[expect(
+        clippy::expect_used,
+        reason = "a file is loaded before it becomes the current file"
+    )]
     fn base_file(&self) -> &File {
         match &self.state.cur {
             Cur::Change(i) => self.state.files[*i]
@@ -1226,6 +1235,10 @@ impl App {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "a file is loaded before it becomes the current file"
+    )]
     fn base_file_mut(&mut self) -> &mut File {
         match &self.state.cur {
             Cur::Change(i) => self.state.files[*i]
@@ -2598,7 +2611,9 @@ impl App {
         if all.is_some() {
             return self.search_across(&line, forward, false);
         }
-        let regex = commands::search_regex(&line).expect("checked above");
+        let Some(regex) = commands::search_regex(&line) else {
+            return;
+        };
         self.doc_command(|cx| commands::search(cx, &regex, forward, false));
     }
 
@@ -3337,7 +3352,7 @@ impl App {
                 other => self.status = Some((format!("unknown option '{other}'"), true)),
             },
             n if n.parse::<usize>().is_ok() => {
-                self.count = NonZeroUsize::new(n.parse().unwrap());
+                self.count = NonZeroUsize::new(n.parse().unwrap_or(0));
                 if !self.goto_line_number() {
                     self.doc_command(commands::goto_line);
                 }

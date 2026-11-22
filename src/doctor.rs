@@ -1,6 +1,6 @@
 //! `glos doctor`: checks the setup, like `hx --health`.
 
-use std::{fmt::Write as _, io::Write, path::Path};
+use std::{io::Write, path::Path};
 
 use glos_helix::syntax::Loader;
 
@@ -14,10 +14,16 @@ pub fn run(out: &mut impl Write, db: &Path, log: Option<&Path>) -> std::io::Resu
     out.write_all(report(db, log).as_bytes())
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the default theme is embedded in glos, and a test loads it"
+)]
 fn report(db: &Path, log: Option<&Path>) -> String {
     let mut r = String::new();
-    // Writing to a String can't fail.
-    let mut line = |s: String| writeln!(r, "{s}").unwrap();
+    let mut line = |s: String| {
+        r.push_str(&s);
+        r.push('\n');
+    };
     line(format!(
         "glos {} (Helix 25.07.1)",
         env!("CARGO_PKG_VERSION")

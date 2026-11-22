@@ -33,6 +33,10 @@ const NOT_APPLICABLE: &[(&str, &str)] = &[
     ),
 ];
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "every pattern is a literal in this file"
+)]
 fn re(s: &str) -> Regex {
     Regex::new(s).unwrap()
 }
@@ -44,9 +48,11 @@ fn parse_helix(src: &str) -> Vec<(String, String)> {
     let quoted = re(r#""([^"]+)""#);
     let (mut out, mut stack) = (vec![], vec![]);
     for line in src.lines() {
-        let line = line.split("//").next().unwrap().trim();
+        let line = line.split_once("//").map_or(line, |(code, _)| code).trim();
         if let Some(m) = menu.captures(line) {
-            stack.push(quoted.captures(&m[1]).unwrap()[1].to_string());
+            if let Some(q) = quoted.captures(&m[1]) {
+                stack.push(q[1].to_string());
+            }
         } else if let Some(m) = bind.captures(line) {
             for key in quoted.captures_iter(&m[1]) {
                 let path = stack.iter().cloned().chain([key[1].to_string()]);
@@ -72,6 +78,10 @@ const CONTEXTS: &[(&str, &str)] = &[
 ];
 
 /// The keys that `defs` (such as `normal_defs`) binds in glos's `keymap.rs`, as key paths.
+#[expect(
+    clippy::expect_used,
+    reason = "keymap.rs defines each function that a menu names, so a missing one is a bug in this task"
+)]
 fn parse_glos(src: &str, defs: &str) -> Vec<(String, String)> {
     fn walk(
         body: &str,
@@ -134,14 +144,14 @@ fn parse_glos(src: &str, defs: &str) -> Vec<(String, String)> {
 }
 
 /// The checklist, as markdown, and the counts by status in the order first seen.
-fn checklist(helix_src: &str, glos_src: &str) -> (String, Vec<(String, usize)>) {
+fn checklist(helix_src: &str, glos_src: &str) -> Result<(String, Vec<(String, usize)>)> {
     // Only the normal-mode map: select mode is the same keys extending, insert mode needs editing.
     let start = helix_src
         .find("let normal = keymap!")
-        .expect("Helix's normal keymap");
+        .context("no normal keymap in Helix's keymap")?;
     let end = helix_src
         .find("let mut select")
-        .expect("Helix's select keymap");
+        .context("no select keymap in Helix's keymap")?;
     let helix = parse_helix(&helix_src[start..end]);
     let glos = parse_glos(glos_src, "normal_defs");
     let glos_cmd = |k: &str| {
@@ -166,7 +176,10 @@ fn checklist(helix_src: &str, glos_src: &str) -> (String, Vec<(String, usize)>) 
         } else {
             "to do".to_string()
         };
-        let kind = status.split(':').next().unwrap().to_string();
+        let kind = status
+            .split_once(':')
+            .map_or(status.as_str(), |(k, _)| k)
+            .to_string();
         match counts.iter_mut().find(|(k, _)| *k == kind) {
             Some(c) => c.1 += 1,
             None => counts.push((kind, 1)),
@@ -227,7 +240,7 @@ fn checklist(helix_src: &str, glos_src: &str) -> (String, Vec<(String, usize)>) 
         );
     }
     out.push(String::new());
-    (out.join("\n"), counts)
+    Ok((out.join("\n"), counts))
 }
 
 pub fn run(helix_keymap: Option<PathBuf>) -> Result<()> {
@@ -238,7 +251,7 @@ pub fn run(helix_keymap: Option<PathBuf>) -> Result<()> {
         ))?)?,
     };
     let glos_src = std::fs::read_to_string(root().join("src/ui/keymap.rs"))?;
-    let (md, counts) = checklist(&helix_src, &glos_src);
+    let (md, counts) = checklist(&helix_src, &glos_src)?;
     std::fs::write(root().join("plans/KEYMAP.md"), md)?;
     let counts: Vec<String> = counts.iter().map(|(s, n)| format!("{n} {s}")).collect();
     println!("wrote plans/KEYMAP.md: {}", counts.join(", "));
@@ -329,7 +342,7 @@ fn tree_defs() -> Vec<Def> {
 
     #[test]
     fn every_helix_key_gets_a_status() {
-        let (md, counts) = checklist(HELIX, GLOS);
+        let (md, counts) = checklist(HELIX, GLOS).unwrap();
         for row in [
             "| `h` | `move_char_left` | done |",
             "| `i` | `insert_mode` | not applicable: editing comes after the MVP |",

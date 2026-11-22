@@ -191,6 +191,10 @@ fn default_db() -> Result<PathBuf> {
 pub static STARTED: std::sync::LazyLock<std::time::Instant> =
     std::sync::LazyLock::new(std::time::Instant::now);
 
+#[expect(
+    clippy::print_stderr,
+    reason = "the error of a command goes to the terminal"
+)]
 fn main() -> ExitCode {
     std::sync::LazyLock::force(&STARTED);
     match run() {
@@ -209,7 +213,9 @@ fn init_log(verbose: u8) -> Result<PathBuf> {
         .state_dir()
         .unwrap_or_default()
         .join("glos/glos.log");
-    std::fs::create_dir_all(path.parent().unwrap())?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -229,6 +235,11 @@ fn init_log(verbose: u8) -> Result<PathBuf> {
 }
 
 #[expect(clippy::too_many_lines, reason = "one match arm for each subcommand")]
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "the messages of a command go to the terminal"
+)]
 fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     let log = init_log(cli.verbose).ok();
@@ -317,16 +328,16 @@ fn run() -> Result<ExitCode> {
         ) => {
             use cli::AgentAction as A;
             let (name, id) = (author.name.clone(), review.id.clone());
-            let action = match cli.command.unwrap() {
-                Command::Reply { thread, body, .. } => A::Reply { thread, body },
-                Command::Resolve { thread, note, .. } => A::Resolve { thread, note },
-                Command::Reopen { thread, note, .. } => A::Reopen {
+            let action = match cli.command {
+                Some(Command::Reply { thread, body, .. }) => A::Reply { thread, body },
+                Some(Command::Resolve { thread, note, .. }) => A::Resolve { thread, note },
+                Some(Command::Reopen { thread, note, .. }) => A::Reopen {
                     thread,
                     note: note.unwrap_or_default(),
                 },
-                Command::Annotate {
+                Some(Command::Annotate {
                     path, lines, body, ..
-                } => A::Annotate { path, lines, body },
+                }) => A::Annotate { path, lines, body },
                 _ => unreachable!(),
             };
             cli::agent(conn, &cwd, &id, &name, action, cli.json, out)?;
@@ -392,14 +403,13 @@ fn run() -> Result<ExitCode> {
         },
     };
     if source.changes.is_empty() {
-        match &source.git {
-            Some(_) if source.revs.is_some() => {
-                let (o, n) = source.revs.as_ref().unwrap();
+        match (&source.git, &source.revs) {
+            (Some(_), Some((o, n))) => {
                 let n = n.as_deref().unwrap_or("your files");
                 println!("Nothing to review: no changes between {o} and {n}.");
             },
-            Some(g) => println!("Nothing to review: no changes since {}.", g.base),
-            None => println!("Nothing to review: no differences."),
+            (Some(g), None) => println!("Nothing to review: no changes since {}.", g.base),
+            (None, _) => println!("Nothing to review: no differences."),
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -409,6 +419,10 @@ fn run() -> Result<ExitCode> {
 }
 
 /// As Helix: say what's wrong with the config, then carry on with the defaults.
+#[expect(
+    clippy::print_stderr,
+    reason = "Helix also shows a bad config on stderr before the UI starts"
+)]
 fn show_config_error(error: Option<String>) {
     if let Some(e) = error {
         eprintln!("Bad config: {e}");

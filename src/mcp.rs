@@ -142,7 +142,9 @@ impl Agent {
                     Ok(s) => s,
                     Err(e) => return Ok(Err(format!("{}: {e:#}", folder.display()))),
                 };
-                let g = source.git.as_ref().expect("a git source");
+                let Some(g) = source.git.as_ref() else {
+                    return Ok(Err(format!("{} is not a git repository", folder.display())));
+                };
                 let on = g.branch.as_deref().unwrap_or("a detached HEAD");
                 if on != branch {
                     return Ok(Err(format!(
@@ -738,6 +740,15 @@ struct Server {
     agent: Arc<Mutex<Agent>>,
 }
 
+impl Server {
+    /// The agent. A tool call that panicked leaves the lock poisoned, and the next call goes on.
+    fn agent(&self) -> std::sync::MutexGuard<'_, Agent> {
+        self.agent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The agent's name, from the `clientInfo` its MCP client sent.
 fn client_name(ctx: &RequestContext<RoleServer>) -> String {
     ctx.peer
@@ -768,7 +779,7 @@ impl Server {
         &self,
         Parameters(p): Parameters<OpenReview>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.open_review(&p.target).map(said).map_err(internal)
     }
 
@@ -776,7 +787,7 @@ impl Server {
         description = "The user's review: the last verdict, the files, and the open threads (comments the user has submitted, with what's new since your last call). Pass thread_id for one whole thread."
     )]
     async fn get_review(&self, Parameters(p): Parameters<GetReview>) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.get_review(&p.review_id, p.thread_id.as_deref())
             .map_err(internal)
     }
@@ -789,7 +800,7 @@ impl Server {
         Parameters(p): Parameters<RequestReview>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.request_review(
             &client_name(&ctx),
             &p.review_id,
@@ -807,7 +818,7 @@ impl Server {
         Parameters(p): Parameters<Reply>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.reply(&client_name(&ctx), &p.review_id, &p.thread_id, &p.body)
             .map(said)
             .map_err(internal)
@@ -819,7 +830,7 @@ impl Server {
         Parameters(p): Parameters<Resolve>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.set_status(
             &client_name(&ctx),
             &p.review_id,
@@ -837,7 +848,7 @@ impl Server {
         Parameters(p): Parameters<Reopen>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.set_status(
             &client_name(&ctx),
             &p.review_id,
@@ -857,7 +868,7 @@ impl Server {
         Parameters(p): Parameters<Annotate>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.annotate(
             &client_name(&ctx),
             &p.review_id,
@@ -878,7 +889,7 @@ impl Server {
         Parameters(p): Parameters<Suggest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.suggest(
             &client_name(&ctx),
             &p.review_id,
@@ -906,9 +917,7 @@ impl Server {
         loop {
             // The store is checked about twice a second; the lock isn't held while sleeping.
             if let Some(answer) = self
-                .agent
-                .lock()
-                .unwrap()
+                .agent()
                 .try_take(&p.review_id, &name)
                 .map_err(internal)?
             {
@@ -938,7 +947,7 @@ impl ServerHandler for Server {
             .peer
             .peer_info()
             .map_or("agent".into(), |i| i.client_info.name.clone());
-        if let Err(e) = self.agent.lock().unwrap().register(&name) {
+        if let Err(e) = self.agent().register(&name) {
             tracing::error!("registering the session: {e:#}");
         }
     }
@@ -963,7 +972,10 @@ pub fn run(conn: Connection, db: &std::path::Path, open_command: Option<String>)
         server.waiting().await?;
         anyhow::Ok(())
     });
-    agent.lock().unwrap().unregister();
+    agent
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unregister();
     result
 }
 

@@ -30,12 +30,12 @@ pub fn list(conn: &Connection, all: bool, json: bool, out: &mut impl Write) -> R
         let reviews: Vec<_> = rows
             .iter()
             .map(|(r, unsent, open)| {
-                let mut v = serde_json::to_value(r).unwrap();
+                let mut v = serde_json::to_value(r)?;
                 v["unsent"] = json!(unsent);
                 v["open_threads"] = json!(open);
-                v
+                Ok(v)
             })
-            .collect();
+            .collect::<Result<_>>()?;
         writeln!(out, "{}", json!({ "version": VERSION, "reviews": reviews }))?;
         return Ok(());
     }
@@ -167,6 +167,10 @@ pub fn open_review(
 
 /// `glos open`: opens glos on a review the way `request_review` does. `false` when it couldn't
 /// (no `open-command`), after saying how to open it by hand.
+#[expect(
+    clippy::print_stderr,
+    reason = "the refusal goes to stderr, apart from the normal output in `out`"
+)]
 pub fn open(
     conn: &Connection,
     id: &str,

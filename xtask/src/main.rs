@@ -4,6 +4,12 @@
 //!   `crates/glos-helix` (rerun to move to a new release).
 //! - `keymap [default.rs]`: writes `plans/KEYMAP.md`, the keymap checklist.
 
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "xtask is a command-line tool, and the terminal is its interface"
+)]
+
 mod fetch_helix;
 mod keymap;
 

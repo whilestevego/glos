@@ -553,13 +553,13 @@ pub fn build(
         full.push(start);
     }
     let (old_n, new_n) = (line_count(&old.text), line_count(&new.text));
-    let (mut doc, left) = match kind {
-        ViewKind::Unified => (d.file(old_n.max(new_n)), None),
-        ViewKind::Split => {
-            let mut left = ld.unwrap().file(old_n);
+    let (mut doc, left) = match (kind, ld) {
+        (ViewKind::Split, Some(ld)) => {
+            let mut left = ld.file(old_n);
             left.old_numbers = true;
             (d.file(new_n), Some(left))
         },
+        _ => (d.file(old_n.max(new_n)), None),
     };
     doc.tab_width = new.tab_width;
     Built {

@@ -435,14 +435,13 @@ impl Source {
                 (Some(e), Content::File(f)) => blob_id(&repo, f)? == Some(e.object_id()),
                 _ => false,
             };
-            let old_path = old_entry.is_some().then(|| old_path.unwrap());
+            let old_path = old_path.filter(|_| old_entry.is_some());
             if same_content && old_path.as_deref() == Some(&path) && old_mode == new_mode {
                 continue; // changed and then changed back
             }
-            let path = if new == Content::None {
-                old_path.clone().unwrap()
-            } else {
-                path
+            let path = match (&new, &old_path) {
+                (Content::None, Some(p)) => p.clone(),
+                _ => path,
             };
             changes.push(Change {
                 path,

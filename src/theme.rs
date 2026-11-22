@@ -190,10 +190,9 @@ fn merge_themes(parent: Table, child: Table) -> Table {
         2,
     );
     let mut theme = merge(Value::Table(parent), Value::Table(child), 1);
-    theme
-        .as_table_mut()
-        .unwrap()
-        .insert("palette".into(), palette);
+    if let Some(t) = theme.as_table_mut() {
+        t.insert("palette".into(), palette);
+    }
     match theme {
         Value::Table(t) => t,
         _ => unreachable!(),
@@ -391,7 +390,7 @@ fn tint_256(from: Rgb, to: Rgb, amount: f32, avoid: &[u8]) -> u8 {
                 !(r == g && g == b)
             })
             .min_by(|&a, &b| dist(a).total_cmp(&dist(b)))
-            .unwrap();
+            .unwrap_or(16);
         if (c != bg && !avoid.contains(&c)) || t >= 1.0 {
             return c;
         }
@@ -465,8 +464,7 @@ pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
             .iter()
             .enumerate()
             .min_by_key(|(_, s)| (i32::from(**s) - i32::from(v)).abs())
-            .unwrap()
-            .0
+            .map_or(0, |(i, _)| i)
     };
     let (ri, gi, bi) = (level(r), level(g), level(b));
     let cube = (STEPS[ri], STEPS[gi], STEPS[bi]);

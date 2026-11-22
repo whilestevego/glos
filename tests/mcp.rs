@@ -1,3 +1,7 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "the helpers of an integration test fail it by panicking"
+)]
 //! The MCP server end to end, as an agent host drives it: `glos mcp` speaking JSON-RPC over
 //! stdio in a git repo, with the user's submit made through the CLI in between.
 
