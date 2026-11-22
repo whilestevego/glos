@@ -1,0 +1,27 @@
+extends: existence
+message: "'%s' is on the banned list. State the point plainly."
+level: error
+ignorecase: true
+tokens:
+  - groundbreaking
+  - game-changing
+  - transformative\w*
+  - landscapes?
+  - empower\w*
+  - robust\w*
+  - vibrant\w*
+  - vital(?:ly)?
+  - crucial\w*
+  - fundamental\w*
+  - effortless\w*
+  - profound\w*
+  - genuine\w*
+  - promising
+  - enhanc\w*
+  - leaps?
+  - thrilling
+  - unlock\w*
+exceptions:
+  - leap year
+  - leap years
+  - leap day

@@ -355,8 +355,8 @@ fn rgb_color((r, g, b): Rgb) -> Color {
 }
 
 /// `from` moved `amount` of the way toward `to`, in `OKLab`. `OKLab` is perceptual, so the same
-/// amount looks about as strong on a dark theme as on a light one, and mid-tones don't go muddy
-/// as they do when RGB is mixed directly.
+/// amount looks about as strong on a dark theme as on a light one. Mid-tones also stay clear,
+/// which they do not when RGB is mixed directly.
 pub fn mix(from: Rgb, to: Rgb, amount: f32) -> Rgb {
     let (a, b) = (oklab(from), oklab(to));
     let t = amount.clamp(0.0, 1.0);

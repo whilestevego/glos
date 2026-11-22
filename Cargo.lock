@@ -5061,6 +5061,7 @@ dependencies = [
  "anyhow",
  "flate2",
  "regex",
+ "sha2",
  "tar",
  "toml",
  "ureq",

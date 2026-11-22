@@ -62,8 +62,8 @@ also copies `~/hobby/murmur/.github/workflows/ci.yml`: actions pinned to commit 
   - `Banned.yml`: the banned words from `~/.claude/CLAUDE.md`.
   - `Dashes.yml`: no em or en dashes.
   - `SentenceLength.yml`: a sentence has 25 words or fewer.
-  - `Structures.yml`: the banned structures that a regex can find, such as "not just",
-    "not only", "it's not X, it's Y", "think of it as" and "imagine".
+  - `Structures.yml`: the banned structures that a regex can find, such as `not just`,
+    `not only`, `it's not X, it's Y`, `think of it as` and `imagine`.
 - Words that are banned only in one sense, such as "shift" as a noun, are not in the list. A
   regex cannot tell the senses apart.
 - Vale reads Rust comments with its Rust grammar, which `vale sync` downloads.
@@ -112,10 +112,11 @@ One branch, `build/code-quality`, with one commit for each step. Each commit bui
 ## Tests
 
 - `cargo clippy --workspace --all-targets -- -D warnings` passes.
-- Unit tests in `xtask` for the subject rule: each type, a scope, no scope, an uppercase
-  summary, a final period, 72 and 73 characters, a missing colon and the git subjects.
-- Unit tests in `xtask` for the parser of added lines: a hunk of one line, a hunk of many lines,
-  a hunk that only removes, and a new file.
+- Unit tests in `xtask` for the subject rule. They cover each type, a scope, no scope, an
+  uppercase summary and a final period. They also cover 72 and 73 characters, a missing colon
+  and the subjects that git writes.
+- Unit tests in `xtask` for the parser of added lines. They cover a hunk of one line, a hunk of
+  many lines, a hunk that only removes, a new file and a deleted file.
 - `cargo xtask prose-test` passes, and fails when a rule is removed from a style.
 - `cargo xtask ci` passes on the branch.
 

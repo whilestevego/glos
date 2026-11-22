@@ -342,8 +342,8 @@ impl Source {
             .context("the repository has no commits")?
             .id;
         let branch = repo.head_name()?.map(|n| n.shorten().to_string());
-        // Against a revision: the review is still the branch's (its base found as usual, if
-        // there is one), but the old side is that revision.
+        // Against a revision, the review is still the branch's, with its base found as usual if it
+        // has one. The old side is that revision.
         let (base, merge_base) = if let Some(rev) = against {
             let id = repo
                 .rev_parse_single(rev)
