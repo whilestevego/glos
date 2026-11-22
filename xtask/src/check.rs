@@ -9,10 +9,9 @@ use crate::{prose, root, vale};
 /// The commit types that `CLAUDE.md` allows.
 const TYPES: &[&str] = &["feat", "fix", "refactor", "docs", "test", "build", "chore"];
 
-/// Points git at the versioned hooks in `.githooks/` and at `.git-blame-ignore-revs`.
+/// Points git at the versioned hooks in `.githooks/`.
 pub fn setup() -> Result<()> {
     git_config("core.hooksPath", ".githooks")?;
-    git_config("blame.ignoreRevsFile", ".git-blame-ignore-revs")?;
     vale::command()?;
     println!("git hooks installed from .githooks/");
     Ok(())

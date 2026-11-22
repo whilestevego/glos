@@ -8,7 +8,7 @@ and `cargo xtask keymap` writes it.
 ## Engineering standard
 
 Run `cargo xtask setup` once after you clone the repo. It installs the git hooks from
-`.githooks/`, and it tells `git blame` to skip the commits in `.git-blame-ignore-revs`.
+`.githooks/`.
 
 | Command | What it does |
 |---|---|
@@ -25,8 +25,7 @@ Run `cargo xtask setup` once after you clone the repo. It installs the git hooks
   not use `#[allow]`. A clippy lint rejects it.
 - `unsafe_code` is denied. Each `unsafe` site has an `#[expect(unsafe_code, reason = "...")]`
   and a `// SAFETY:` comment directly above the `unsafe` block.
-- `rustfmt.toml` sets the format. A commit that only reformats goes in
-  `.git-blame-ignore-revs`.
+- `rustfmt.toml` sets the format.
 - The prose rules are in `.vale/styles/GLOS/`. They apply to Markdown files and to `//`, `///`
   and `//!` comments. Vale checks only the lines that a branch adds. The plans in
   `plans/completed/` and `plans/abandoned/` are history, and Vale does not check them.

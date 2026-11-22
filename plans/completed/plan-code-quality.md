@@ -1,6 +1,6 @@
 # Code quality checks
 
-**Status:** Built on `build/code-quality` (2026-11-22). The branch is not pushed, and it has no PR yet.
+**Status:** Implemented (2026-11-22) in PR #20.
 
 glos keeps its rules in `CLAUDE.md`, and nothing checks them. The workspace has no lint table and
 no `rustfmt.toml`. It has no git hooks, no CI and no prose lint. This plan adds checks for the
@@ -153,7 +153,9 @@ The work follows the design. These points depart from the plan or add to it.
   words around it. Vale does not read block comments.
 - **`commit-msg` writes the message to `target/COMMIT_EDITMSG.md`,** because Vale picks its
   rules by the extension of the file.
-- **The SHA in `.git-blame-ignore-revs` is the SHA on this branch.** A rebase or a squash merge
-  changes it, so update the file after such a merge.
-- **CI is not run yet.** The workflow runs on GitHub only after a push.
+- **No `.git-blame-ignore-revs`.** PR #20 was squash-merged, so the reformat commit is not on
+  `main`. Its changes are in `8f24f8a` with the other changes of the PR, and `git blame` must
+  show that commit. The file and the `blame.ignoreRevsFile` setting in `xtask setup` were
+  removed after the merge.
+- **CI first ran on PR #20.**
 
