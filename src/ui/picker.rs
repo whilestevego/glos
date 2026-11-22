@@ -178,7 +178,7 @@ impl Picker {
             PickerCmd::Close => return Outcome::Msg(Msg::Close),
             PickerCmd::Choose => {
                 return Outcome::Msg(self.selected().cloned().map_or(Msg::Close, Msg::Open));
-            }
+            },
             PickerCmd::Prev => self.cursor = (self.cursor + n - 1) % n,
             PickerCmd::Next => self.cursor = (self.cursor + 1) % n,
             PickerCmd::PageDown => self.cursor = (self.cursor + page).min(last),
@@ -188,7 +188,7 @@ impl Picker {
             PickerCmd::DeleteChar => {
                 self.query.pop();
                 self.refilter();
-            }
+            },
         }
         Outcome::Consumed
     }
@@ -457,7 +457,7 @@ impl Component for Picker {
                     Some(t) => Outcome::Msg(Msg::Open(t)),
                     None => Outcome::Consumed,
                 }
-            }
+            },
             _ => Outcome::Consumed,
         }
     }

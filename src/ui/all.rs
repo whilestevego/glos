@@ -468,7 +468,7 @@ impl App {
             .filter(|t| t.status == "open" && t.anchor.as_ref().is_some_and(|a| &a.path == path))
             .count();
         match open {
-            0 => {}
+            0 => {},
             1 => s += "  1 thread",
             n => s += &format!("  {n} threads"),
         }
@@ -535,19 +535,19 @@ impl App {
             // A count that goes past the file carries on into the next one.
             "move_visual_line_down" | "move_line_down" if line + count > last && i + 1 < n => {
                 self.move_lines(count, true)
-            }
+            },
             "move_visual_line_up" | "move_line_up" if count > line && i > 0 => {
                 self.move_lines(count, false)
-            }
+            },
             "scroll_down" | "scroll_up" => self.all_wheel(count, name == "scroll_down"),
             "align_view_center" => {
                 self.all.top = self.back_rows(self.cursor_pos(), height / 2);
-            }
+            },
             "align_view_top" => self.all.top = self.back_rows(self.cursor_pos(), so),
             "align_view_bottom" => {
                 let rows = height.saturating_sub(so + 1);
                 self.all.top = self.back_rows(self.cursor_pos(), rows);
-            }
+            },
             "goto_window_top" | "goto_window_center" | "goto_window_bottom" => {
                 let (first, middle, last) = self.on_screen();
                 let to = match name {
@@ -559,11 +559,11 @@ impl App {
                     self.enter_file(to.0, false);
                 }
                 self.cursor_to_line(to.1);
-            }
+            },
             "goto_file_start" if self.count.is_none() => {
                 self.enter_file(0, false);
                 self.all.top = (0, 0);
-            }
+            },
             "goto_line" if self.count.is_none() => self.enter_file(n - 1, true),
             "page_down" | "page_up" | "page_cursor_half_down" | "page_cursor_half_up" => {
                 let rows = self.view.height as usize;
@@ -573,7 +573,7 @@ impl App {
                     rows
                 };
                 self.page(rows.max(1), name.ends_with("down"));
-            }
+            },
             _ => return false,
         }
         true
@@ -937,13 +937,13 @@ impl App {
         match name {
             "goto_next_change" | "goto_prev_change" => {
                 self.change_across(name == "goto_next_change", f)
-            }
+            },
             "goto_next_paragraph" | "goto_prev_paragraph" => {
                 self.paragraph_across(name == "goto_next_paragraph", f)
-            }
+            },
             "goto_last_change" | "goto_first_change" => {
                 self.edge_change(name == "goto_last_change", f)
-            }
+            },
             _ => return false,
         }
         true

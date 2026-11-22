@@ -127,7 +127,7 @@ impl File {
                 "renamed from {}",
                 change.old_path.as_deref().unwrap_or("?")
             )),
-            Kind::ModeChanged | Kind::Modified => {}
+            Kind::ModeChanged | Kind::Modified => {},
         }
         if let (Some(a), Some(b)) = (change.old_mode, change.new_mode)
             && a != b
@@ -264,7 +264,7 @@ impl File {
                 Some(h) if h.after.end == i => {
                     h.after.end = i + 1;
                     h.before.end = i + 1;
-                }
+                },
                 _ => hunks.push(Hunk {
                     before: i..i + 1,
                     after: i..i + 1,
@@ -510,7 +510,7 @@ pub fn draw_text(
                 |st: Style, i| st.patch(theme.highlight(i)),
             );
             &computed
-        }
+        },
         (None, None) => &[],
     };
     let mut span = 0;
@@ -536,7 +536,7 @@ pub fn draw_text(
                 .iter()
                 .map(|r| text.char_to_line(r.cursor(text)))
                 .collect()
-        }
+        },
         _ => vec![],
     };
     let primary = file.sel.primary_index();
@@ -605,7 +605,7 @@ pub fn draw_text(
                             ("▍", modified, true)
                         }
                     })
-            }
+            },
             Some(_) => None,
         };
         let mark = threads
@@ -744,13 +744,13 @@ pub fn draw_text(
                         for i in 1..w as u16 {
                             buf[(x + i, yy)].set_symbol("").set_style(style);
                         }
-                    }
+                    },
                     // Tabs and the newline (where the cursor can sit) draw as spaces.
                     _ => {
                         for i in 0..w as u16 {
                             buf[(x + i, yy)].set_symbol(" ").set_style(style);
                         }
-                    }
+                    },
                 }
             }
             if matches!(g.raw, Grapheme::Newline) {

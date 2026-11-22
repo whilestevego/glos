@@ -373,7 +373,7 @@ impl Component for Tree {
                     self.focused = false;
                     return Outcome::Msg(Msg::Open(Target::Path(p)));
                 }
-            }
+            },
             TreeCmd::Unfocus => self.focused = false,
             TreeCmd::Close => return Outcome::Msg(Msg::CloseTree),
             TreeCmd::Search(forward) => return Outcome::Msg(Msg::TreeSearch(forward)),
@@ -399,13 +399,13 @@ impl Component for Tree {
                         None => self.toggle(i),
                     }
                 }
-            }
+            },
             MouseEventKind::ScrollDown => {
                 let height = area.height.saturating_sub(1) as usize;
                 self.top = (self.top + 3).min(self.visible().len().saturating_sub(height));
-            }
+            },
             MouseEventKind::ScrollUp => self.top = self.top.saturating_sub(3),
-            _ => {}
+            _ => {},
         }
         Outcome::Consumed
     }
@@ -420,7 +420,7 @@ impl Component for Tree {
             match self.rows.iter().position(|r| r.path == current) {
                 Some(i) if self.focused => self.reveal(i),
                 Some(i) => self.go(i),
-                None => {}
+                None => {},
             }
         }
         self.render_in(buf, area, current, cx.theme);

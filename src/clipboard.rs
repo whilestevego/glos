@@ -37,7 +37,7 @@ pub fn copy(text: &str) -> Result<()> {
             let mut out = std::io::stdout();
             write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
             return Ok(out.flush()?);
-        }
+        },
     };
     let mut child = Command::new(cmd)
         .args(args)

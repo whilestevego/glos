@@ -176,12 +176,12 @@ pub fn run(
                         continue;
                     }
                     keys.as_mut().unwrap_or(&mut list).press(&keymaps, key, &cx)
-                }
+                },
                 Event::Mouse(m) => keys.as_mut().unwrap_or(&mut list).mouse(m, screen, &cx),
                 _ => Outcome::Consumed,
             };
             match outcome {
-                Outcome::Ignored | Outcome::Consumed => {}
+                Outcome::Ignored | Outcome::Consumed => {},
                 Outcome::Msg(Msg::Close) if keys.is_some() => keys = None,
                 Outcome::Msg(Msg::Close) => return Ok(None),
                 Outcome::Msg(Msg::Open(Target::Review(id))) => match source_of(conn, &id) {
@@ -189,7 +189,7 @@ pub fn run(
                     Err(e) => status = Some(format!("{e:#}")),
                 },
                 Outcome::Msg(Msg::Open(_)) => keys = None,
-                Outcome::Msg(_) => {} // a picker sends nothing else
+                Outcome::Msg(_) => {}, // a picker sends nothing else
             }
         }
         let v = version();

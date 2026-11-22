@@ -197,7 +197,7 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("glos: {e:#}");
             ExitCode::FAILURE
-        }
+        },
     }
 }
 
@@ -238,18 +238,18 @@ fn run() -> Result<ExitCode> {
         Some(Command::Doctor) => {
             doctor::run(&mut std::io::stdout(), &db, log.as_deref())?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Completions { shell }) => {
             use clap::CommandFactory;
             clap_complete::generate(*shell, &mut Cli::command(), "glos", &mut std::io::stdout());
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Man) => {
             use clap::CommandFactory;
             clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
             return Ok(ExitCode::SUCCESS);
-        }
-        _ => {}
+        },
+        _ => {},
     }
     let conn = store::open(&db)?;
     let cwd = std::env::current_dir()?.canonicalize()?;
@@ -258,15 +258,15 @@ fn run() -> Result<ExitCode> {
         Some(Command::Mcp) => {
             mcp::run(conn, &db, config::load().0.open_command)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Close { review }) => {
             cli::close(&conn, &review.id, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Gc { days }) => {
             cli::gc(&conn, *days, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Open { review }) => {
             let command = config::load().0.open_command;
             let opened = cli::open(&conn, &review.id, command.as_deref(), &db, out)?;
@@ -275,15 +275,15 @@ fn run() -> Result<ExitCode> {
             } else {
                 ExitCode::FAILURE
             });
-        }
+        },
         Some(Command::List { all }) => {
             cli::list(&conn, *all, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Show { review }) => {
             cli::show(&conn, &review.id, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::OpenReview { target }) => {
             // Paths given on the command line are the shell's: relative to where it runs.
             let abs = |p: &std::path::Path| -> Result<String> {
@@ -306,7 +306,7 @@ fn run() -> Result<ExitCode> {
             };
             cli::open_review(conn, &cwd, target, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(
             Command::Reply { author, review, .. }
             | Command::Resolve { author, review, .. }
@@ -329,12 +329,12 @@ fn run() -> Result<ExitCode> {
             };
             cli::agent(conn, &cwd, &id, &name, action, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         Some(Command::Submit { verdict, review }) => {
             cli::submit(&conn, &review.id, *verdict, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
-        }
-        _ => {}
+        },
+        _ => {},
     }
 
     let (config, config_error) = config::load();
@@ -343,7 +343,7 @@ fn run() -> Result<ExitCode> {
             let r = review::Review::get(&conn, id)?
                 .with_context(|| format!("no review {id}; see glos list"))?;
             Some(ui::Start::Review(Box::new(r.source()?)))
-        }
+        },
         (Some(Command::Dashboard), _) => {
             review::archive_finished(&conn)?;
             if review::Review::list(&conn, false)?.is_empty() {
@@ -351,7 +351,7 @@ fn run() -> Result<ExitCode> {
                 return Ok(ExitCode::SUCCESS);
             }
             Some(ui::Start::Dashboard)
-        }
+        },
         _ => None,
     };
     let source = match start {
@@ -360,23 +360,23 @@ fn run() -> Result<ExitCode> {
             show_config_error(config_error);
             ui::run(ui::Start::Dashboard, &config, conn)?;
             return Ok(ExitCode::SUCCESS);
-        }
+        },
         None => match cli.command {
             Some(Command::Diff { old, new }) => {
                 let is_path = |p: &str| std::path::Path::new(p).exists();
                 match new {
                     Some(new) if is_path(&old) && is_path(&new) => {
                         Source::diff(old.as_ref(), new.as_ref())?
-                    }
+                    },
                     None if is_path(&old) => {
                         eprintln!(
                             "glos: give two files or folders, or a git revision (glos diff HEAD~1)"
                         );
                         return Ok(ExitCode::from(2));
-                    }
+                    },
                     new => Source::revs(&cwd, &old, new.as_deref())?,
                 }
-            }
+            },
             Some(_) => unreachable!(),
             None => match Source::git(&std::env::current_dir()?, None) {
                 Ok(s) => s,
@@ -384,7 +384,7 @@ fn run() -> Result<ExitCode> {
                     eprintln!("glos: not in a git repository ({e:#}).");
                     eprintln!("To review two files or folders: glos diff <old> <new>");
                     return Ok(ExitCode::from(2));
-                }
+                },
                 Err(e) => return Err(e),
             },
         },
@@ -395,7 +395,7 @@ fn run() -> Result<ExitCode> {
                 let (o, n) = source.revs.as_ref().unwrap();
                 let n = n.as_deref().unwrap_or("your files");
                 println!("Nothing to review: no changes between {o} and {n}.");
-            }
+            },
             Some(g) => println!("Nothing to review: no changes since {}.", g.base),
             None => println!("Nothing to review: no differences."),
         }

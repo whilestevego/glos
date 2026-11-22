@@ -283,7 +283,7 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
                 return;
             }
             head
-        }
+        },
         Direction::Backward => {
             let row = cx.height.saturating_sub(scrolloff + 1) as isize;
             let (head, _) =
@@ -292,7 +292,7 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
                 return;
             }
             head
-        }
+        },
     };
     let anchor = if cx.extend { range.anchor } else { head };
     cx.sel = cx
@@ -412,10 +412,10 @@ pub fn select_textobject(cx: &mut Ctx, around: bool, ch: char) {
                 .with_direction(r.direction()),
                 None => r,
             }
-        }
+        },
         ch if !ch.is_ascii_alphanumeric() => {
             textobject::textobject_pair_surround(None, text, r, objtype, ch, count)
-        }
+        },
         _ => r,
     });
 }
@@ -777,12 +777,12 @@ pub fn regex_selections(cx: &mut Ctx, action: RegexAction, regex: &helix_stdx::r
     let result = match action {
         RegexAction::Select => {
             selection::select_on_matches(text, &cx.sel, regex).ok_or("nothing selected")
-        }
+        },
         RegexAction::Split => Ok(selection::split_on_matches(text, &cx.sel, regex)),
         RegexAction::Keep | RegexAction::Remove => {
             selection::keep_or_remove_matches(text, &cx.sel, regex, action == RegexAction::Remove)
                 .ok_or("no selections remaining")
-        }
+        },
     };
     match result {
         Ok(sel) => cx.sel = sel,

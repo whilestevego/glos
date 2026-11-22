@@ -72,7 +72,7 @@ impl Theme {
                     let c = tint_256(b, f, *amount, &avoid);
                     line_256.entry(toward).or_insert(c);
                     Some(Color::Indexed(c))
-                }
+                },
                 (Some(b), Some(f), _) => Some(rgb_color(mix(b, f, *amount))),
                 _ => None,
             };
@@ -174,7 +174,7 @@ fn resolve(
                 resolve(parent, user_dir, visited)?
             };
             Ok(merge_themes(parent, theme))
-        }
+        },
         Some(other) => Err(anyhow!(
             "theme {name}: expected 'inherits' to be a string: {other}"
         )),
@@ -212,7 +212,7 @@ fn merge(left: Value, right: Value, depth: usize) -> Value {
                 l.insert(k, v);
             }
             Value::Table(l)
-        }
+        },
         (_, r) => r,
     }
 }
@@ -322,7 +322,7 @@ fn adapt(style: Style, colors: ColorSupport) -> Style {
         (_, ColorSupport::None) => None,
         (Some(Color::Rgb(r, g, b)), ColorSupport::Indexed) => {
             Some(Color::Indexed(nearest_256(r, g, b)))
-        }
+        },
         (c, _) => c,
     };
     Style {

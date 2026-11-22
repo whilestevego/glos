@@ -96,7 +96,7 @@ impl Review {
                     let key = format!("git:{}:{}:{branch}", s(&g.common_dir), s(&g.worktree));
                     let git = (Some(s(&g.common_dir)), Some(branch), Some(g.base.clone()));
                     ("git", key, s(&g.worktree), None, None, git.0, git.1, git.2)
-                }
+                },
                 (None, Some((old, new))) => {
                     let kind = if new.is_dir() { "folders" } else { "files" };
                     let folder = if new.is_dir() {
@@ -107,7 +107,7 @@ impl Review {
                     let key = format!("{kind}:{}:{}", s(old), s(new));
                     let (o, n) = (Some(s(old)), Some(s(new)));
                     (kind, key, s(folder), o, n, None, None, None)
-                }
+                },
                 (None, None) => bail!("a source with neither git nor paths"),
             };
         let t = now();
@@ -186,7 +186,7 @@ impl Review {
                     );
                 }
                 Ok(s)
-            }
+            },
             (_, Some(old), Some(new)) => Source::diff(Path::new(old), Path::new(new)),
             _ => bail!("review {} has no paths", self.id),
         }
@@ -212,7 +212,7 @@ impl Review {
                     ),
                     _ => format!("{o} → {n}"),
                 }
-            }
+            },
             _ => self.folder.clone(),
         }
     }
@@ -672,14 +672,14 @@ fn comment_as(
                     a.side.as_str()
                 ],
             )?;
-        }
+        },
         None => {
             tx.execute(
                 "INSERT INTO threads (id, review_id, created_round, old_rev, new_rev, diff)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![id, review_id, round, on.old_rev, on.new_rev, on.diff],
             )?;
-        }
+        },
     }
     add_comment(&tx, &id, author, kind, body)?;
     touch(&tx, review_id)?;
@@ -913,16 +913,16 @@ pub fn reanchor_side(
                 if (s as u32 + 1, e as u32 + 1) != (start, end) {
                     done.moved += 1;
                 }
-            }
+            },
             // A resolved thread whose code is gone stays resolved.
-            None if status != "open" => {}
+            None if status != "open" => {},
             None if settled => {
                 tx.execute(
                     "UPDATE threads SET status = 'outdated' WHERE id = ?1",
                     [&id],
                 )?;
                 done.outdated += 1;
-            }
+            },
             None => done.pending += 1,
         }
     }

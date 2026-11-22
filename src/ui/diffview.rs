@@ -113,7 +113,7 @@ impl Doc<'_> {
                     self.spans.push((start + b - lb, *st));
                 }
                 self.text += &text;
-            }
+            },
             None => match row {
                 Row::Fold {
                     len,
@@ -127,7 +127,7 @@ impl Doc<'_> {
                     self.text += &text;
                     self.spans.push((self.text.len(), self.fold.1));
                     self.text += &hint;
-                }
+                },
                 _ => self.spans.push((start, Style::default())),
             },
         }
@@ -369,7 +369,7 @@ pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
                 left: None,
                 changed,
             }
-        }
+        },
         ViewKind::Split => {
             let (mut l, mut r) = (vec![], vec![]);
             let (mut o, mut n) = (0, 0);
@@ -412,7 +412,7 @@ pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
                 left: Some(l),
                 changed,
             }
-        }
+        },
     }
 }
 
@@ -483,7 +483,7 @@ pub fn build(
             match row {
                 Row::Same { new, .. } | Row::Added(new) => new_lines.push(new),
                 Row::Removed(old) => old_lines.push(old),
-                Row::Fold { .. } | Row::Filler => {}
+                Row::Fold { .. } | Row::Filler => {},
             }
         }
     }
@@ -548,7 +548,7 @@ pub fn build(
             let mut left = ld.unwrap().file(old_n);
             left.old_numbers = true;
             (d.file(new_n), Some(left))
-        }
+        },
     };
     doc.tab_width = new.tab_width;
     Built {

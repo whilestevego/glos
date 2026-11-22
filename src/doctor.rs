@@ -29,7 +29,7 @@ fn report(db: &Path, log: Option<&Path>) -> String {
                 .pragma_query_value(None, "user_version", |r| r.get(0))
                 .unwrap_or(0);
             line(format!("Database: {} (schema v{v})", db.display()));
-        }
+        },
         Err(e) => line(format!("Database: {} — error: {e:#}", db.display())),
     }
 
@@ -45,14 +45,14 @@ fn report(db: &Path, log: Option<&Path>) -> String {
         Ok(t) => {
             line(format!("Theme: {}", cfg.theme));
             t
-        }
+        },
         Err(e) => {
             line(format!(
                 "Theme: {} — error: {e:#}; using {DEFAULT_THEME}",
                 cfg.theme
             ));
             Theme::load(DEFAULT_THEME, colors).expect("the default theme is embedded")
-        }
+        },
     };
     line(format!(
         "Log: {}",
@@ -97,7 +97,7 @@ fn report(db: &Path, log: Option<&Path>) -> String {
                     broken.join(", ")
                 ));
             }
-        }
+        },
         Err(e) => line(format!("Languages: error: {e:#}")),
     }
     line(

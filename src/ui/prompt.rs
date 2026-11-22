@@ -110,7 +110,7 @@ pub fn completions(line: &str) -> (usize, Vec<(String, &'static str)>) {
                     .map(|(a, d)| (a.to_string(), *d))
                     .collect(),
             )
-        }
+        },
     }
 }
 
@@ -277,7 +277,7 @@ impl Component for Prompt {
                 self.line = format!("{}{}", &typed[..start], items[i].0);
                 self.completion = Some((typed, i));
                 Outcome::Consumed
-            }
+            },
             PromptCmd::Complete(_) => Outcome::Consumed,
             PromptCmd::DeleteChar => {
                 self.completion = None;
@@ -285,7 +285,7 @@ impl Component for Prompt {
                     Some(_) => Outcome::Msg(Msg::PreviewPrompt),
                     None => Outcome::Msg(Msg::CancelPrompt),
                 }
-            }
+            },
         }
     }
 
@@ -308,7 +308,7 @@ impl Component for Prompt {
             match m.kind {
                 MouseEventKind::ScrollDown => self.scrolled = Some((first + 3).min(last)),
                 MouseEventKind::ScrollUp => self.scrolled = Some(first.saturating_sub(3)),
-                _ => {}
+                _ => {},
             }
         }
         Outcome::Consumed

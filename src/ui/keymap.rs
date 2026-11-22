@@ -405,7 +405,7 @@ impl Key {
                     return None;
                 }
                 KeyCode::Char(ch)
-            }
+            },
         };
         Some(Key { code, mods })
     }
@@ -509,13 +509,13 @@ fn build(name: &'static str, sticky: bool, defs: Vec<Def>) -> Menu {
                         Node::Cmd(command),
                     ));
                 }
-            }
+            },
             Def::Menu(k, name, sticky, defs) => {
                 keys.push((
                     Key::parse(k).unwrap(),
                     Node::Menu(build(name, sticky, defs)),
                 ));
-            }
+            },
         }
     }
     Menu { name, keys, sticky }
@@ -894,7 +894,7 @@ impl Context {
                 select.push(cmd("v", "normal_mode"));
                 select.push(cmd("esc", "exit_select_mode"));
                 select
-            }
+            },
             Context::Tree => tree_defs(),
             Context::Picker => picker_defs(),
             Context::Prompt => prompt_defs(),

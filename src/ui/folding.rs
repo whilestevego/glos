@@ -235,7 +235,7 @@ impl App {
                 Some((start, n)) => {
                     self.folds.entry(k).or_default().open(start..start + n, len);
                     self.refold(Some(start));
-                }
+                },
                 None => self.status = Some(("No fold here".into(), false)),
             },
             FoldKey::Toggle => {
@@ -249,7 +249,7 @@ impl App {
                 } else {
                     self.status = Some(("No fold here".into(), false));
                 }
-            }
+            },
             FoldKey::OpenAll => {
                 let f = self.folds.entry(k).or_default();
                 f.opened = vec![true; len];
@@ -257,7 +257,7 @@ impl App {
                     h.1 = true;
                 }
                 self.refold(None);
-            }
+            },
             FoldKey::CloseAll => {
                 let f = self.folds.entry(k).or_default();
                 f.opened.clear();
@@ -265,7 +265,7 @@ impl App {
                     h.1 = false;
                 }
                 self.refold(None);
-            }
+            },
             FoldKey::Make => {
                 let f = self.main_file();
                 let t = f.text.slice(..);
@@ -292,14 +292,14 @@ impl App {
                 self.folds.entry(k).or_default().hand.extend(made);
                 self.state.mode = super::Mode::Normal;
                 self.refold(Some(first));
-            }
+            },
             FoldKey::Delete => {
                 let rows = match self.fold_here() {
                     Some((s, n)) => s..s + n,
                     None => {
                         let r = self.full_row(self.cursor_line());
                         r..r + 1
-                    }
+                    },
                 };
                 let f = self.folds.entry(k).or_default();
                 let before = f.hand.len();
@@ -310,7 +310,7 @@ impl App {
                 } else {
                     self.refold(Some(rows.start));
                 }
-            }
+            },
             FoldKey::Context(more) => {
                 self.diff_context = if more {
                     self.diff_context + 1
@@ -323,7 +323,7 @@ impl App {
                     false,
                 ));
                 self.refold(None);
-            }
+            },
         }
     }
 
@@ -370,7 +370,7 @@ impl App {
                     .filter(|(_, l)| l.is_some_and(|l| start <= l && l <= end))
                     .map(|(i, _)| i)
                     .collect()
-            }
+            },
             None => return,
         };
         let (Some(&a), Some(&b)) = (rows.first(), rows.last()) else {

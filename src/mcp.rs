@@ -150,7 +150,7 @@ impl Agent {
                     )));
                 }
                 source
-            }
+            },
             Target::Diff { old, new } => {
                 let (old, new) = match (absolute(old, "old"), absolute(new, "new")) {
                     (Ok(o), Ok(n)) => (o, n),
@@ -160,7 +160,7 @@ impl Agent {
                     Ok(s) => s,
                     Err(e) => return Ok(Err(format!("{e:#}"))),
                 }
-            }
+            },
         };
         let r = Review::open(&self.conn, &source)?;
         self.touch();
@@ -235,7 +235,7 @@ impl Agent {
                             round.comments,
                             plural(round.comments)
                         )
-                    }
+                    },
                     None => out += "Nothing submitted yet.\n",
                 }
                 if let Some(at) = &r.requested_at {
@@ -250,7 +250,7 @@ impl Agent {
                         for c in &s.changes {
                             out += &format!("- {} ({:?})\n", c.path, c.kind());
                         }
-                    }
+                    },
                     Err(e) => out += &format!("Files: can't read them ({e:#}).\n"),
                 }
                 let open: Vec<&Thread> = threads.iter().filter(|t| t.status == "open").collect();
@@ -274,7 +274,7 @@ impl Agent {
                 }
                 out += "Call get_review with a thread_id for a whole thread.";
                 out
-            }
+            },
         };
         self.touch();
         Ok(out)
@@ -494,7 +494,7 @@ impl Agent {
         match review::place(&self.conn, &t.id, &text) {
             Ok(Some((s, e))) if t.on.new_rev.is_none() && (s, e) == (a.start, a.end) => {
                 String::new() // where it says: nothing to add
-            }
+            },
             Ok(Some((s, e))) => {
                 let at = Anchor {
                     path: a.path.clone(),
@@ -503,7 +503,7 @@ impl Agent {
                     side: a.side,
                 };
                 format!("Now: the same code is at {at} in your files.\n")
-            }
+            },
             _ => format!(
                 "Now: that code isn't in {} as it is in your files: it has changed since.\n",
                 a.path
@@ -633,11 +633,11 @@ fn delivery(
             "Changes are requested: address every comment, reply on each thread (resolve the \
              ones you've addressed, with a note), then call request_review and wait_for_review \
              again."
-        }
+        },
         Verdict::Comment => {
             "These are comments without a verdict: answer them or take them into account, then \
              call request_review when you want another look."
-        }
+        },
     };
     out
 }

@@ -66,11 +66,11 @@ impl Loader {
                 match ft {
                     FileType::Extension(e) => {
                         loader.by_extension.insert(e.clone(), lang);
-                    }
+                    },
                     FileType::Glob(g) => {
                         globs.add(g.clone());
                         loader.glob_langs.push((g.glob().len(), lang));
-                    }
+                    },
                 }
             }
             for s in &config.shebangs {
@@ -347,15 +347,15 @@ impl LanguageLoader for Loader {
                         .max_by_key(|(len, _)| *len)
                         .map(|(_, i)| Language::new(i as u32))
                 })
-            }
+            },
             InjectionLanguageMarker::Filename(text) => {
                 let name: Cow<str> = text.into();
                 self.language_for_path(Path::new(name.as_ref()))
-            }
+            },
             InjectionLanguageMarker::Shebang(text) => {
                 let name: Cow<str> = text.into();
                 self.by_shebang.get(name.as_ref()).copied()
-            }
+            },
         }
     }
 

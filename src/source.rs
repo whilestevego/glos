@@ -152,7 +152,7 @@ impl Source {
                             .with_context(|| format!("reading {}", path.display()))?,
                     )
                 }
-            }
+            },
             Content::Bytes(b) => Some(b.to_vec()),
             Content::Blob(id) => {
                 let git = self
@@ -160,7 +160,7 @@ impl Source {
                     .as_ref()
                     .ok_or_else(|| anyhow!("blob without a git source"))?;
                 Some(git.repo.to_thread_local().find_object(*id)?.detach().data)
-            }
+            },
         })
     }
 
@@ -351,7 +351,7 @@ impl Source {
                     .id;
                 let base = find_base(&repo, base).map_or(rev.to_string(), |(b, _)| b);
                 (base, id)
-            }
+            },
             None => {
                 let (base, base_id) = find_base(&repo, base)?;
                 let mb = repo
@@ -359,7 +359,7 @@ impl Source {
                     .with_context(|| format!("this branch shares no history with {base}"))?
                     .detach();
                 (base, mb)
-            }
+            },
         };
         let base_tree = repo.find_commit(merge_base)?.tree()?;
 
@@ -384,11 +384,11 @@ impl Source {
                         location.to_str_lossy().into(),
                         Some(source_location.to_str_lossy().into()),
                     );
-                }
+                },
                 Item::TreeIndex(change) => {
                     let p: String = change.location().to_str_lossy().into();
                     paths.entry(p.clone()).or_insert(Some(p));
-                }
+                },
                 Item::IndexWorktree(index_worktree::Item::Rewrite {
                     source,
                     dirwalk_entry,
@@ -398,18 +398,18 @@ impl Source {
                     let src: String = source.rela_path().to_str_lossy().into();
                     let old = paths.remove(&src).flatten().unwrap_or(src);
                     paths.insert(dirwalk_entry.rela_path.to_str_lossy().into(), Some(old));
-                }
+                },
                 Item::IndexWorktree(index_worktree::Item::DirectoryContents { entry, .. }) => {
                     if entry.status == gix::dir::entry::Status::Untracked {
                         paths
                             .entry(entry.rela_path.to_str_lossy().into())
                             .or_insert(None);
                     }
-                }
+                },
                 Item::IndexWorktree(index_worktree::Item::Modification { rela_path, .. }) => {
                     let p: String = rela_path.to_str_lossy().into();
                     paths.entry(p.clone()).or_insert(Some(p));
-                }
+                },
             }
         }
 
@@ -683,7 +683,7 @@ fn find_base(repo: &gix::Repository, given: Option<&str>) -> Result<(String, gix
                 candidates.push(name.shorten().to_string());
             }
             candidates.extend(["main", "master", "origin/main", "origin/master"].map(String::from));
-        }
+        },
     }
     for c in &candidates {
         if let Ok(id) = repo.rev_parse_single(c.as_str()) {

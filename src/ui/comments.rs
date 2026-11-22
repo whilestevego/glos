@@ -148,20 +148,20 @@ impl CommentBox {
             ),
             KeyCode::Enter => {
                 Transaction::insert(&self.file.text, &self.file.sel, Tendril::from("\n"))
-            }
+            },
             KeyCode::Tab => {
                 Transaction::insert(&self.file.text, &self.file.sel, Tendril::from("\t"))
-            }
+            },
             KeyCode::Backspace => {
                 Transaction::change_by_selection(&self.file.text, &self.file.sel, |r| {
                     (prev_grapheme_boundary(text, r.head), r.head, None)
                 })
-            }
+            },
             KeyCode::Delete => {
                 Transaction::change_by_selection(&self.file.text, &self.file.sel, |r| {
                     (r.head, next_grapheme_boundary(text, r.head), None)
                 })
-            }
+            },
             KeyCode::Left
             | KeyCode::Right
             | KeyCode::Up
@@ -171,7 +171,7 @@ impl CommentBox {
                 let sel = self.file.sel.clone();
                 self.file.sel = sel.transform(|r| Range::point(move_point(text, r.head, code)));
                 return false;
-            }
+            },
             _ => return false,
         };
         tx.apply(&mut self.file.text);
@@ -229,11 +229,11 @@ impl Component for CommentBox {
             BoxCmd::Insert | BoxCmd::Append => {
                 self.enter_insert(cmd == BoxCmd::Append);
                 return Outcome::Msg(Msg::BoxInsert);
-            }
+            },
             BoxCmd::NormalMode => {
                 self.leave_insert();
                 return Outcome::Msg(Msg::BoxMoved);
-            }
+            },
             BoxCmd::Newline => KeyCode::Enter,
             BoxCmd::Tab => KeyCode::Tab,
             BoxCmd::DeleteBackward => KeyCode::Backspace,

@@ -185,7 +185,7 @@ pub fn open(
                 launch::by_hand(&r)
             );
             return Ok(false);
-        }
+        },
     }
     Ok(true)
 }
@@ -268,7 +268,7 @@ pub fn agent(
                 anyhow::bail!("lines are `12` or `12-14`, not `{lines}`");
             };
             a.annotate(author, id, &path, start, end, &body)?
-        }
+        },
     };
     let message = outcome.map_err(anyhow::Error::msg)?;
     if json {
