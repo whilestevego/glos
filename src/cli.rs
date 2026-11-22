@@ -30,12 +30,12 @@ pub fn list(conn: &Connection, all: bool, json: bool, out: &mut impl Write) -> R
         let reviews: Vec<_> = rows
             .iter()
             .map(|(r, unsent, open)| {
-                let mut v = serde_json::to_value(r).unwrap();
+                let mut v = serde_json::to_value(r)?;
                 v["unsent"] = json!(unsent);
                 v["open_threads"] = json!(open);
-                v
+                Ok(v)
             })
-            .collect();
+            .collect::<Result<_>>()?;
         writeln!(out, "{}", json!({ "version": VERSION, "reviews": reviews }))?;
         return Ok(());
     }
@@ -89,7 +89,7 @@ pub fn show(conn: &Connection, id: &str, json: bool, out: &mut impl Write) -> Re
         let place = t
             .anchor
             .as_ref()
-            .map_or("the review".into(), |a| a.described());
+            .map_or("the review".into(), super::review::Anchor::described);
         writeln!(out, "\nThread {} on {place} ({})", t.id, t.status)?;
         if let Some(d) = &t.on.diff {
             writeln!(out, "  made on: {d}")?;
@@ -150,12 +150,12 @@ pub fn gc(conn: &Connection, days: u32, json: bool, out: &mut impl Write) -> Res
 pub fn open_review(
     conn: Connection,
     cwd: &Path,
-    target: crate::mcp::Target,
+    target: &crate::mcp::Target,
     json: bool,
     out: &mut impl Write,
 ) -> Result<()> {
     let mut a = crate::mcp::Agent::new(conn, cwd.to_path_buf());
-    let (r, files) = a.open_target(&target)?.map_err(anyhow::Error::msg)?;
+    let (r, files) = a.open_target(target)?.map_err(anyhow::Error::msg)?;
     if json {
         let doc = json!({ "version": VERSION, "review": r, "changed_files": files });
         writeln!(out, "{doc}")?;
@@ -167,6 +167,10 @@ pub fn open_review(
 
 /// `glos open`: opens glos on a review the way `request_review` does. `false` when it couldn't
 /// (no `open-command`), after saying how to open it by hand.
+#[expect(
+    clippy::print_stderr,
+    reason = "the refusal goes to stderr, apart from the normal output in `out`"
+)]
 pub fn open(
     conn: &Connection,
     id: &str,
@@ -185,7 +189,7 @@ pub fn open(
                 launch::by_hand(&r)
             );
             return Ok(false);
-        }
+        },
     }
     Ok(true)
 }
@@ -268,7 +272,7 @@ pub fn agent(
                 anyhow::bail!("lines are `12` or `12-14`, not `{lines}`");
             };
             a.annotate(author, id, &path, start, end, &body)?
-        }
+        },
     };
     let message = outcome.map_err(anyhow::Error::msg)?;
     if json {
@@ -371,17 +375,17 @@ mod tests {
         };
         let db = conn.path().unwrap().to_string();
         let c = || crate::store::open(Path::new(&db)).unwrap();
-        let text = run(|o| open_review(c(), &cwd, target.clone(), false, o));
+        let text = run(|o| open_review(c(), &cwd, &target, false, o));
         assert!(text.starts_with(&format!("{}  ", r.id)), "{text}");
         let doc: serde_json::Value =
-            serde_json::from_str(&run(|o| open_review(c(), &cwd, target, true, o))).unwrap();
+            serde_json::from_str(&run(|o| open_review(c(), &cwd, &target, true, o))).unwrap();
         assert_eq!(doc["review"]["id"], r.id.as_str());
         assert_eq!(doc["changed_files"], 1);
         let bad = crate::mcp::Target::Diff {
             old: "/no/such".into(),
             new: "/no/such/either".into(),
         };
-        assert!(open_review(c(), &cwd, bad, false, &mut vec![]).is_err());
+        assert!(open_review(c(), &cwd, &bad, false, &mut vec![]).is_err());
     }
 
     #[test]
@@ -403,7 +407,7 @@ mod tests {
         let run_agent = |action| {
             let mut out = vec![];
             agent(c(), &cwd, &r.id, "script", action, false, &mut out)
-                .map(|_| String::from_utf8(out).unwrap())
+                .map(|()| String::from_utf8(out).unwrap())
         };
         let note = run_agent(AgentAction::Annotate {
             path: "a.rs".into(),
@@ -424,7 +428,7 @@ mod tests {
         // A refusal is an error, for the exit code.
         let err = run_agent(AgentAction::Resolve {
             thread: t.clone(),
-            note: "".into(),
+            note: String::new(),
         })
         .unwrap_err();
         assert!(err.to_string().contains("needs a note"));
@@ -435,7 +439,7 @@ mod tests {
         .unwrap();
         run_agent(AgentAction::Reopen {
             thread: t.clone(),
-            note: "".into(),
+            note: String::new(),
         })
         .unwrap();
         let bad = run_agent(AgentAction::Annotate {

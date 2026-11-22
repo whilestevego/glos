@@ -1,6 +1,7 @@
 //! The file tree (`space e`): the review's changed files by folder, each with the lines it adds
 //! and removes and its open threads.
 
+use crate::num::cells;
 use std::collections::HashSet;
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -305,18 +306,18 @@ impl Tree {
         let w = area.width.saturating_sub(1) as usize; // the last column separates it
         for (row, &i) in visible.iter().enumerate().skip(self.top).take(height) {
             let r = &self.rows[i];
-            let y = area.y + 1 + (row - self.top) as u16;
-            let mut style = theme.get(if !r.is_folder() {
-                "ui.text"
-            } else {
+            let y = area.y + 1 + cells(row - self.top);
+            let mut style = theme.get(if r.is_folder() {
                 "ui.text.directory"
+            } else {
+                "ui.text"
             });
             if r.file() == Some(current) {
                 style = style.patch(theme.get("ui.text.focus"));
             }
             if i == self.cursor && self.focused {
                 style = style.patch(theme.get("ui.menu.selected"));
-                buf.set_style(Rect::new(area.x, y, w as u16, 1), style);
+                buf.set_style(Rect::new(area.x, y, cells(w), 1), style);
             }
             // Right-aligned: +added -removed and a thread badge.
             let mut tail = vec![];
@@ -340,7 +341,7 @@ impl Tree {
             let mut x = area.x as usize + w.saturating_sub(tail_w);
             for (t, s) in tail {
                 if x + t.width() <= area.x as usize + w {
-                    buf.set_string(x as u16, y, &t, style.patch(s));
+                    buf.set_string(cells(x), y, &t, style.patch(s));
                 }
                 x += t.width() + 1;
             }
@@ -373,7 +374,7 @@ impl Component for Tree {
                     self.focused = false;
                     return Outcome::Msg(Msg::Open(Target::Path(p)));
                 }
-            }
+            },
             TreeCmd::Unfocus => self.focused = false,
             TreeCmd::Close => return Outcome::Msg(Msg::CloseTree),
             TreeCmd::Search(forward) => return Outcome::Msg(Msg::TreeSearch(forward)),
@@ -399,13 +400,13 @@ impl Component for Tree {
                         None => self.toggle(i),
                     }
                 }
-            }
+            },
             MouseEventKind::ScrollDown => {
                 let height = area.height.saturating_sub(1) as usize;
                 self.top = (self.top + 3).min(self.visible().len().saturating_sub(height));
-            }
+            },
             MouseEventKind::ScrollUp => self.top = self.top.saturating_sub(3),
-            _ => {}
+            _ => {},
         }
         Outcome::Consumed
     }
@@ -420,7 +421,7 @@ impl Component for Tree {
             match self.rows.iter().position(|r| r.path == current) {
                 Some(i) if self.focused => self.reveal(i),
                 Some(i) => self.go(i),
-                None => {}
+                None => {},
             }
         }
         self.render_in(buf, area, current, cx.theme);

@@ -1,6 +1,7 @@
 //! The review model over the store: reviews, threads, comments, drafts, rounds and snapshots.
 //! Every change is one transaction, written the moment it happens.
 
+use crate::num::{line_number, to_u32, to_usize};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -96,7 +97,7 @@ impl Review {
                     let key = format!("git:{}:{}:{branch}", s(&g.common_dir), s(&g.worktree));
                     let git = (Some(s(&g.common_dir)), Some(branch), Some(g.base.clone()));
                     ("git", key, s(&g.worktree), None, None, git.0, git.1, git.2)
-                }
+                },
                 (None, Some((old, new))) => {
                     let kind = if new.is_dir() { "folders" } else { "files" };
                     let folder = if new.is_dir() {
@@ -107,7 +108,7 @@ impl Review {
                     let key = format!("{kind}:{}:{}", s(old), s(new));
                     let (o, n) = (Some(s(old)), Some(s(new)));
                     (kind, key, s(folder), o, n, None, None, None)
-                }
+                },
                 (None, None) => bail!("a source with neither git nor paths"),
             };
         let t = now();
@@ -186,7 +187,7 @@ impl Review {
                     );
                 }
                 Ok(s)
-            }
+            },
             (_, Some(old), Some(new)) => Source::diff(Path::new(old), Path::new(new)),
             _ => bail!("review {} has no paths", self.id),
         }
@@ -212,7 +213,7 @@ impl Review {
                     ),
                     _ => format!("{o} → {n}"),
                 }
-            }
+            },
             _ => self.folder.clone(),
         }
     }
@@ -307,7 +308,7 @@ fn branch_over(conn: &Connection, r: &Review) -> Result<bool> {
         .merge_base(tip, base_id)
         .ok()
         .flatten()
-        .map(|m| m.detach())
+        .map(gix::Id::detach)
         == Some(tip);
     if !merged || rounds(conn, &r.id)?.is_empty() {
         return Ok(false);
@@ -342,8 +343,15 @@ pub fn gc(conn: &Connection, older_than: jiff::SignedDuration) -> Result<(usize,
 
 /// Whether process `pid` is still running.
 pub fn alive(pid: i64) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
-    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    #[expect(
+        unsafe_code,
+        reason = "libc has no safe call to check that a process exists"
+    )]
+    // SAFETY: signal 0 sends nothing. It only checks that the process exists.
+    let r = unsafe { libc::kill(pid, 0) };
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
@@ -612,7 +620,7 @@ pub fn annotate(
     author: &str,
     body: &str,
 ) -> Result<String> {
-    let lines = file.split_inclusive('\n').count().max(1) as u32;
+    let lines = to_u32(file.split_inclusive('\n').count().max(1));
     if anchor.start == 0 || anchor.start > anchor.end || anchor.end > lines {
         bail!(
             "{} has {lines} lines; lines {}-{} aren't in it",
@@ -672,14 +680,14 @@ fn comment_as(
                     a.side.as_str()
                 ],
             )?;
-        }
+        },
         None => {
             tx.execute(
                 "INSERT INTO threads (id, review_id, created_round, old_rev, new_rev, diff)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![id, review_id, round, on.old_rev, on.new_rev, on.diff],
             )?;
-        }
+        },
     }
     add_comment(&tx, &id, author, kind, body)?;
     touch(&tx, review_id)?;
@@ -788,7 +796,7 @@ pub fn place(conn: &Connection, thread_id: &str, text: &str) -> Result<Option<(u
         above: &above,
         below: &below,
     };
-    Ok(crate::reanchor::place(&a, text).map(|(s, e)| (s as u32 + 1, e as u32 + 1)))
+    Ok(crate::reanchor::place(&a, text).map(|(s, e)| (line_number(s), line_number(e))))
 }
 
 /// What [`reanchor`] did to a file's threads.
@@ -902,27 +910,27 @@ pub fn reanchor_side(
                      WHERE id = ?1",
                     params![
                         id,
-                        s as u32 + 1,
-                        e as u32 + 1,
+                        line_number(s),
+                        line_number(e),
                         hash,
                         ctx(s.saturating_sub(3)..s),
                         ctx(e + 1..(e + 4).min(lines.len())),
                         ctx(s..e + 1)
                     ],
                 )?;
-                if (s as u32 + 1, e as u32 + 1) != (start, end) {
+                if (line_number(s), line_number(e)) != (start, end) {
                     done.moved += 1;
                 }
-            }
+            },
             // A resolved thread whose code is gone stays resolved.
-            None if status != "open" => {}
+            None if status != "open" => {},
             None if settled => {
                 tx.execute(
                     "UPDATE threads SET status = 'outdated' WHERE id = ?1",
                     [&id],
                 )?;
                 done.outdated += 1;
-            }
+            },
             None => done.pending += 1,
         }
     }
@@ -973,12 +981,12 @@ pub fn delete(conn: &Connection, comment_id: &str) -> Result<()> {
 
 /// How many of your comments the agent hasn't received.
 pub fn unsent(conn: &Connection, review_id: &str) -> Result<usize> {
-    Ok(conn.query_row(
+    Ok(to_usize(conn.query_row(
         "SELECT count(*) FROM comments c JOIN threads t ON t.id = c.thread_id
          WHERE t.review_id = ?1 AND c.author = ?2 AND c.submitted_in IS NULL",
         params![review_id, YOU],
         |r| r.get::<_, i64>(0),
-    )? as usize)
+    )?))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1039,12 +1047,12 @@ pub fn rounds(conn: &Connection, review_id: &str) -> Result<Vec<Round>> {
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
         .map(|(n, verdict, submitted_at, delivered_to)| {
-            let comments = conn.query_row(
+            let comments = to_usize(conn.query_row(
                 "SELECT count(*) FROM comments c JOIN threads t ON t.id = c.thread_id
                  WHERE t.review_id = ?1 AND c.submitted_in = ?2",
                 params![review_id, n],
                 |r| r.get::<_, i64>(0),
-            )? as usize;
+            )?);
             Ok(Round {
                 n,
                 verdict: Verdict::parse(&verdict).context("a bad verdict in the store")?,

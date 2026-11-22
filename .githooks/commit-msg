@@ -1,0 +1,3 @@
+#!/bin/sh
+# Checks the subject of the commit message, then its prose. `cargo xtask setup` installs this hook.
+exec cargo xtask commit-msg "$1"

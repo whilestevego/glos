@@ -551,3 +551,27 @@ The plan and what was built are in `completed/plan-keymap-contexts.md`.
   clashes" first planned. That spread the move over two more releases.
 - **Supersedes:** "each one moves only when the Helix command that needs its key arrives" under
   "Helix wins key clashes".
+
+## Code quality checks (2026-11-21)
+
+- **Options for the exceptions:** `#[allow]` with a comment; `#[expect]` with a `reason`; one
+  crate-wide list in `Cargo.toml`.
+- **Chosen:** `#[expect(..., reason = "...")]` on the item that needs it. The lints
+  `allow_attributes` and `allow_attributes_without_reason` enforce this.
+- **Why:** an `#[expect]` warns when its lint stops firing, so an old exception does not stay. A
+  crate-wide list hides which code needs the exception.
+- **Options for `unsafe_code`:** `forbid`; `deny`.
+- **Chosen:** `deny`. Each site has its own `#[expect(unsafe_code)]` and a `// SAFETY:`
+  comment. `forbid` cannot be overridden at a site, and glos needs four sites.
+- **Options for rustfmt:** write down only the defaults; also set `match_block_trailing_comma`.
+- **Chosen:** also set `match_block_trailing_comma = true`. With the defaults alone, `cargo fmt`
+  changes nothing. With the comma, each match arm ends the same way, so a new arm does not edit
+  the line above it.
+- **Options for Vale:** each person installs it; xtask downloads a pinned release.
+- **Chosen:** xtask downloads Vale 3.27.0 into `target/vale/` and checks its SHA-256. Local runs
+  and CI then use the same version, and nobody installs it by hand.
+- **Chosen:** the prose lint checks only the lines that a branch adds. Old text does not block a
+  change, and a line that a change touches must then follow the rules.
+- **Open:** words that are banned in one sense only ("shift" as a noun, "significant" as an
+  intensifier, "baseline" outside technical text). A regex cannot tell the senses apart, so the
+  lint does not check them.

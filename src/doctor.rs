@@ -1,6 +1,6 @@
 //! `glos doctor`: checks the setup, like `hx --health`.
 
-use std::{fmt::Write as _, io::Write, path::Path};
+use std::{io::Write, path::Path};
 
 use glos_helix::syntax::Loader;
 
@@ -14,10 +14,16 @@ pub fn run(out: &mut impl Write, db: &Path, log: Option<&Path>) -> std::io::Resu
     out.write_all(report(db, log).as_bytes())
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the default theme is embedded in glos, and a test loads it"
+)]
 fn report(db: &Path, log: Option<&Path>) -> String {
     let mut r = String::new();
-    // Writing to a String can't fail.
-    let mut line = |s: String| writeln!(r, "{s}").unwrap();
+    let mut line = |s: String| {
+        r.push_str(&s);
+        r.push('\n');
+    };
     line(format!(
         "glos {} (Helix 25.07.1)",
         env!("CARGO_PKG_VERSION")
@@ -29,7 +35,7 @@ fn report(db: &Path, log: Option<&Path>) -> String {
                 .pragma_query_value(None, "user_version", |r| r.get(0))
                 .unwrap_or(0);
             line(format!("Database: {} (schema v{v})", db.display()));
-        }
+        },
         Err(e) => line(format!("Database: {} — error: {e:#}", db.display())),
     }
 
@@ -45,14 +51,14 @@ fn report(db: &Path, log: Option<&Path>) -> String {
         Ok(t) => {
             line(format!("Theme: {}", cfg.theme));
             t
-        }
+        },
         Err(e) => {
             line(format!(
                 "Theme: {} — error: {e:#}; using {DEFAULT_THEME}",
                 cfg.theme
             ));
             Theme::load(DEFAULT_THEME, colors).expect("the default theme is embedded")
-        }
+        },
     };
     line(format!(
         "Log: {}",
@@ -97,7 +103,7 @@ fn report(db: &Path, log: Option<&Path>) -> String {
                     broken.join(", ")
                 ));
             }
-        }
+        },
         Err(e) => line(format!("Languages: error: {e:#}")),
     }
     line(

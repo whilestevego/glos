@@ -148,20 +148,20 @@ impl CommentBox {
             ),
             KeyCode::Enter => {
                 Transaction::insert(&self.file.text, &self.file.sel, Tendril::from("\n"))
-            }
+            },
             KeyCode::Tab => {
                 Transaction::insert(&self.file.text, &self.file.sel, Tendril::from("\t"))
-            }
+            },
             KeyCode::Backspace => {
                 Transaction::change_by_selection(&self.file.text, &self.file.sel, |r| {
                     (prev_grapheme_boundary(text, r.head), r.head, None)
                 })
-            }
+            },
             KeyCode::Delete => {
                 Transaction::change_by_selection(&self.file.text, &self.file.sel, |r| {
                     (r.head, next_grapheme_boundary(text, r.head), None)
                 })
-            }
+            },
             KeyCode::Left
             | KeyCode::Right
             | KeyCode::Up
@@ -171,7 +171,7 @@ impl CommentBox {
                 let sel = self.file.sel.clone();
                 self.file.sel = sel.transform(|r| Range::point(move_point(text, r.head, code)));
                 return false;
-            }
+            },
             _ => return false,
         };
         tx.apply(&mut self.file.text);
@@ -229,11 +229,11 @@ impl Component for CommentBox {
             BoxCmd::Insert | BoxCmd::Append => {
                 self.enter_insert(cmd == BoxCmd::Append);
                 return Outcome::Msg(Msg::BoxInsert);
-            }
+            },
             BoxCmd::NormalMode => {
                 self.leave_insert();
                 return Outcome::Msg(Msg::BoxMoved);
-            }
+            },
             BoxCmd::Newline => KeyCode::Enter,
             BoxCmd::Tab => KeyCode::Tab,
             BoxCmd::DeleteBackward => KeyCode::Backspace,
@@ -353,7 +353,7 @@ pub fn layout(
                     style,
                     thread: i,
                     old: side == Side::Old,
-                })
+                });
             }
         };
         let mut row = |text: String, style: Style| wrapped(text, style, usize::MAX);
@@ -672,7 +672,7 @@ mod tests {
             created_round: 1,
             anchor_text: None,
             last_seen_at: None,
-            on: Default::default(),
+            on: crate::review::DiffContext::default(),
             comments: bodies
                 .iter()
                 .map(|(author, body)| crate::review::Comment {
@@ -832,10 +832,10 @@ mod tests {
 
     #[test]
     fn external_editor_round_trip() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("ed");
         std::fs::write(&script, "#!/bin/sh\nprintf ' world\\n' >> \"$1\"\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let ed = script.to_string_lossy();
         assert_eq!(external_edit(&ed, "hello").unwrap(), "hello world");

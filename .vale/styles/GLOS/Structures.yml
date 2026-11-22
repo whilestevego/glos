@@ -1,0 +1,12 @@
+extends: existence
+message: "'%s' is a banned structure. State the point directly."
+level: error
+ignorecase: true
+nonword: true
+tokens:
+  - '\bnot just\b'
+  - '\bnot only\b'
+  - '\bthink of (?:it|this|that|them|these|those)\b'
+  - '\bimagine\b'
+  - '\b(?:it|this|that)[''’]?s not [^,.;]{1,40}, (?:it|this|that)[''’]?s\b'
+  - '\b(?:it|this|that) is not [^,.;]{1,40}, (?:it|this|that) is\b'

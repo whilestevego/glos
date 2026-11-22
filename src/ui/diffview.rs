@@ -113,7 +113,7 @@ impl Doc<'_> {
                     self.spans.push((start + b - lb, *st));
                 }
                 self.text += &text;
-            }
+            },
             None => match row {
                 Row::Fold {
                     len,
@@ -127,7 +127,7 @@ impl Doc<'_> {
                     self.text += &text;
                     self.spans.push((self.text.len(), self.fold.1));
                     self.text += &hint;
-                }
+                },
                 _ => self.spans.push((start, Style::default())),
             },
         }
@@ -332,6 +332,10 @@ pub fn hidden(keep: &[bool], context: usize, folds: &Folds) -> Vec<bool> {
 /// A view's rows before folding: the new side's rows (both sides' for side by side), and which
 /// rows are changes.
 pub struct Rows {
+    #[expect(
+        clippy::struct_field_names,
+        reason = "every view has these rows, and `left` beside them is the optional old side"
+    )]
     pub rows: Vec<Row>,
     /// The old side, for side by side: level with `rows`.
     pub left: Option<Vec<Row>>,
@@ -349,7 +353,7 @@ pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
                 rows.extend((0..len).map(|i| Row::Same {
                     old: o + i,
                     new: n + i,
-                }))
+                }));
             };
             for h in hunks {
                 same(&mut rows, o, n, h.after.start as usize - n);
@@ -369,7 +373,7 @@ pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
                 left: None,
                 changed,
             }
-        }
+        },
         ViewKind::Split => {
             let (mut l, mut r) = (vec![], vec![]);
             let (mut o, mut n) = (0, 0);
@@ -412,7 +416,7 @@ pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
                 left: Some(l),
                 changed,
             }
-        }
+        },
     }
 }
 
@@ -433,7 +437,14 @@ pub struct Built {
 
 /// Builds a view of `new` (and `old`), folded by `context`, `folds`, and the threads (as
 /// new-side line ranges, inclusive) that keep their lines in view.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "builds the rows of each view kind in one pass over the hunks"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an independent input of the view"
+)]
 pub fn build(
     kind: ViewKind,
     old: &File,
@@ -483,7 +494,7 @@ pub fn build(
             match row {
                 Row::Same { new, .. } | Row::Added(new) => new_lines.push(new),
                 Row::Removed(old) => old_lines.push(old),
-                Row::Fold { .. } | Row::Filler => {}
+                Row::Fold { .. } | Row::Filler => {},
             }
         }
     }
@@ -542,13 +553,13 @@ pub fn build(
         full.push(start);
     }
     let (old_n, new_n) = (line_count(&old.text), line_count(&new.text));
-    let (mut doc, left) = match kind {
-        ViewKind::Unified => (d.file(old_n.max(new_n)), None),
-        ViewKind::Split => {
-            let mut left = ld.unwrap().file(old_n);
+    let (mut doc, left) = match (kind, ld) {
+        (ViewKind::Split, Some(ld)) => {
+            let mut left = ld.file(old_n);
             left.old_numbers = true;
             (d.file(new_n), Some(left))
-        }
+        },
+        _ => (d.file(old_n.max(new_n)), None),
     };
     doc.tab_width = new.tab_width;
     Built {

@@ -13,6 +13,7 @@ mod prompt;
 mod tree;
 mod view;
 
+use crate::num::{cells, line_number, to_isize, to_u32};
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
@@ -177,7 +178,7 @@ impl State {
             Target::Thread(id) => {
                 let (p, line) = self.thread_place(id)?;
                 Some((at_path(&p)?, Some(line)))
-            }
+            },
             Target::Command(_) | Target::Nothing | Target::Review(_) => None,
         }
     }
@@ -195,6 +196,10 @@ macro_rules! cx {
     };
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is independent UI state, so no enum replaces them"
+)]
 pub struct App {
     state: State,
     theme: Theme,
@@ -393,7 +398,7 @@ pub fn run(start: Start, config: &Config, conn: Connection) -> Result<()> {
         Err(e) => {
             tracing::warn!("{e}; using the default theme");
             Theme::load(crate::config::DEFAULT_THEME, ColorSupport::detect())
-        }
+        },
     };
     // Raw mode and the alternate screen; the terminal is restored on a panic too.
     let mut terminal = ratatui::init();
@@ -484,7 +489,7 @@ impl App {
             delete_kept: false,
             run_editor: false,
             data_version: 0,
-            placed: Default::default(),
+            placed: std::cell::RefCell::default(),
             generation: 0,
             watch: None,
             changed_at: None,
@@ -644,24 +649,22 @@ impl App {
 
     /// The source read again, the way glos found it at the start.
     fn rebuild_source(&self) -> Result<Source> {
-        let base = match (&self.state.source.git, &self.state.source.paths) {
-            (Some(g), _) if self.state.source.revs.is_some() => {
-                let (o, n) = self.state.source.revs.clone().unwrap();
-                Source::revs(&g.worktree, &o, n.as_deref())?
-            }
-            (Some(g), _) => Source::git(&g.worktree, Some(&g.base))?,
-            (None, Some((old, new))) => Source::diff(old, new)?,
-            (None, None) => anyhow::bail!("nothing to read again"),
+        let s = &self.state.source;
+        let base = match (&s.git, &s.paths, &s.revs) {
+            (Some(g), _, Some((o, n))) => Source::revs(&g.worktree, o, n.as_deref())?,
+            (Some(g), _, None) => Source::git(&g.worktree, Some(&g.base))?,
+            (None, Some((old, new)), _) => Source::diff(old, new)?,
+            (None, None, _) => anyhow::bail!("nothing to read again"),
         };
         let mut source = match &self.scope {
             Scope::Base => base,
             Scope::SinceReview(n) => {
                 base.since(&review::snapshot(&self.conn, &self.review.id, *n)?)?
-            }
+            },
             Scope::Commit(i) => {
                 let c = self.commits.get(*i).context("no such commit")?;
                 base.commit(c.id)?
-            }
+            },
         };
         match &self.filter {
             Some(Filter::Glob(_, m)) => source.changes.retain(|c| {
@@ -676,8 +679,8 @@ impl App {
                     .filter_map(|t| t.anchor.as_ref().map(|a| a.path.as_str()))
                     .collect();
                 source.changes.retain(|c| open.contains(c.path.as_str()));
-            }
-            None => {}
+            },
+            None => {},
         }
         Ok(source)
     }
@@ -696,12 +699,12 @@ impl App {
                     self.status = Some(("The branch has no commits since its base".into(), true));
                     (self.scope, self.filter) = (old_scope, old_filter);
                     return;
-                }
+                },
                 Err(e) => {
                     self.status = Some((format!("{e:#}"), true));
                     (self.scope, self.filter) = (old_scope, old_filter);
                     return;
-                }
+                },
             }
         }
         if let Err(e) = self.rebuild_source() {
@@ -747,7 +750,7 @@ impl App {
             }
             (added, removed)
         };
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let chunk = source.changes.len().div_ceil(cores).max(1);
         let counts: Vec<(usize, usize)> = std::thread::scope(|s| {
             let parts: Vec<_> = source
@@ -757,7 +760,7 @@ impl App {
                 .collect();
             parts
                 .into_iter()
-                .flat_map(|p| p.join().expect("counting lines"))
+                .flat_map(|p| p.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
                 .collect()
         });
         source
@@ -796,7 +799,7 @@ impl App {
             match &self.filter {
                 Some(Filter::Glob(g, _)) => s += &format!(", files {g}"),
                 Some(Filter::Threads) => s += ", files with open threads",
-                None => {}
+                None => {},
             }
             return s;
         }
@@ -814,12 +817,12 @@ impl App {
                     &id[..7],
                     c.summary
                 )
-            }
+            },
         };
         match &self.filter {
             Some(Filter::Glob(g, _)) => s += &format!(", files {g}"),
             Some(Filter::Threads) => s += ", files with open threads",
-            None => {}
+            None => {},
         }
         s
     }
@@ -827,6 +830,10 @@ impl App {
     /// Files changed on disk: the review's changes are found again, and every loaded file is
     /// read again with its cursor, selections and scroll mapped onto the same code, as Helix
     /// does when a file changes under it. Threads follow their lines.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "reloads each part of the state that depends on the files, in order"
+    )]
     fn files_changed(&mut self) {
         self.changed_at = Some(std::time::Instant::now());
         self.generation += 1;
@@ -837,14 +844,14 @@ impl App {
             .shown_alt()
             .map(|a| (a.doc.sel.clone(), a.doc.top, a.doc.text.clone()));
         if let Some(a) = self.alt.take() {
-            self.sync_base(a);
+            self.sync_base(&a);
         }
         let source = match self.rebuild_source() {
             Ok(s) => s,
             Err(e) => {
                 self.status = Some((format!("Couldn't read the changes again: {e:#}"), true));
                 return;
-            }
+            },
         };
         let path_of = |app: &App, cur: &Cur| match cur {
             Cur::Change(i) => app.state.source.changes[*i].path.clone(),
@@ -905,7 +912,9 @@ impl App {
         }
         let paths: Vec<String> = self.state.context.keys().cloned().collect();
         for p in paths {
-            let old = self.state.context.remove(&p).unwrap();
+            let Some(old) = self.state.context.remove(&p) else {
+                continue;
+            };
             let new = File::context(&p, &self.state.source, &self.state.loader);
             if old.text != new.text {
                 self.forget_folds(&p);
@@ -938,7 +947,7 @@ impl App {
             Cur::Context(p) => {
                 let p = p.clone();
                 self.load_context(&p);
-            }
+            },
         }
         self.jumps = jumps
             .into_iter()
@@ -996,7 +1005,7 @@ impl App {
                     let old = self.old_text(&p).unwrap_or_else(|| text.clone());
                     let hunks = crate::diff::hunks(&old, &text);
                     let removed = |s: usize, e: usize| {
-                        (s..=e).all(|l| hunks.iter().any(|h| h.before.contains(&(l as u32))))
+                        (s..=e).all(|l| hunks.iter().any(|h| h.before.contains(&to_u32(l))))
                     };
                     review::reanchor_side(
                         &self.conn,
@@ -1007,7 +1016,7 @@ impl App {
                         &removed,
                         settled,
                     )
-                }
+                },
             };
             if let Err(e) = done {
                 self.status = Some((format!("{e:#}"), true));
@@ -1050,11 +1059,11 @@ impl App {
                         if self.key(Key::from(k)) == Some(AppAction::Suspend) {
                             suspend(terminal)?;
                         }
-                    }
+                    },
                     Event::Mouse(m) => self.mouse(m),
                     // Coming back to glos: look at the files again.
                     Event::FocusGained => self.files_changed(),
-                    _ => {} // resizes and anything else just redraw
+                    _ => {}, // resizes and anything else just redraw
                 }
             }
             if std::mem::take(&mut self.run_editor) {
@@ -1152,7 +1161,6 @@ impl App {
         match self.pickers.last().and_then(|p| p.selected().cloned()) {
             Some(Target::Change(i)) => self.load(i),
             Some(Target::Path(p)) => self.load_context(&p),
-            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) => {}
             Some(Target::Thread(id)) => {
                 if let Some((path, _)) = self.state.thread_place(&id) {
                     match self
@@ -1166,8 +1174,8 @@ impl App {
                         None => self.load_context(&path),
                     }
                 }
-            }
-            None => {}
+            },
+            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) | None => {},
         }
     }
 
@@ -1179,8 +1187,11 @@ impl App {
         }
     }
 
-    // `if let` can't return the borrow here (a borrow checker limit), so this checks first.
-    #[allow(clippy::unnecessary_unwrap)]
+    #[expect(
+        clippy::unnecessary_unwrap,
+        clippy::unwrap_used,
+        reason = "`if let` cannot return this borrow (a borrow checker limit), so the code checks first"
+    )]
     fn file_mut(&mut self) -> &mut File {
         if self.comment_box.is_some() {
             return &mut self.comment_box.as_mut().unwrap().file;
@@ -1197,6 +1208,10 @@ impl App {
         }
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "`if let` cannot return this borrow (a borrow checker limit), so the code checks first"
+    )]
     fn main_file_mut(&mut self) -> &mut File {
         let alt =
             matches!(&self.alt, Some(a) if a.cur == self.state.cur && a.kind == self.view_kind);
@@ -1207,6 +1222,10 @@ impl App {
     }
 
     /// The file itself: a change's new side (or its old side, if deleted), or a context file.
+    #[expect(
+        clippy::expect_used,
+        reason = "a file is loaded before it becomes the current file"
+    )]
     fn base_file(&self) -> &File {
         match &self.state.cur {
             Cur::Change(i) => self.state.files[*i]
@@ -1216,6 +1235,10 @@ impl App {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "a file is loaded before it becomes the current file"
+    )]
     fn base_file_mut(&mut self) -> &mut File {
         match &self.state.cur {
             Cur::Change(i) => self.state.files[*i]
@@ -1281,13 +1304,13 @@ impl App {
             return;
         }
         if let Some(a) = self.alt.take() {
-            self.sync_base(a);
+            self.sync_base(&a);
         }
         self.build_alt();
     }
 
     /// Leaving a view: its cursor goes back to the file, so the next view opens there.
-    fn sync_base(&mut self, a: Alt) {
+    fn sync_base(&mut self, a: &Alt) {
         let t = a.doc.text.slice(..);
         let cursor = a.doc.sel.primary().cursor(t);
         let line = t.char_to_line(cursor);
@@ -1391,14 +1414,14 @@ impl App {
                     self.commits.len(),
                     c.summary
                 )
-            }
+            },
             (Scope::SinceReview(n), ..) => {
                 format!("your files vs what you reviewed in round {n}")
-            }
+            },
             (Scope::Base, Some((o, Some(n))), ..) => format!("{o} ({old}) vs {n} ({new})"),
             (Scope::Base, Some((o, None)), ..) => {
                 format!("{o} ({old}) vs your files, uncommitted changes included")
-            }
+            },
             (Scope::Base, None, Some(g), _) => format!(
                 "branch {} vs {} (merge base {old}): your files, uncommitted changes included",
                 g.branch.as_deref().unwrap_or("(detached HEAD)"),
@@ -1406,7 +1429,7 @@ impl App {
             ),
             (Scope::Base, None, None, Some((o, n))) => {
                 format!("{} vs {}", o.display(), n.display())
-            }
+            },
             (Scope::Base, None, None, None) => "the review".into(),
         };
         review::DiffContext {
@@ -1431,7 +1454,7 @@ impl App {
     fn threads_in(&self, path: &str, base: &File, f: &File, left: Option<&File>) -> Threads {
         let here = self.here_rev();
         // Thread rows wrap to the text area, as they're drawn from its left edge.
-        let width = self.view.width.saturating_sub(f.gutter_width() as u16) as usize;
+        let width = self.view.width.saturating_sub(cells(f.gutter_width())) as usize;
         let shown = self.shown_threads_in(path, base);
         let layout = |side| {
             comments::layout(
@@ -1449,8 +1472,7 @@ impl App {
             return t;
         }
         // In a view, threads go under the view's line for their last new-side line.
-        let mut rows: std::collections::BTreeMap<usize, Vec<comments::ThreadRow>> =
-            Default::default();
+        let mut rows = std::collections::BTreeMap::<usize, Vec<comments::ThreadRow>>::new();
         for (line, r) in t.rows {
             // A thread in a fold you made is counted on the fold line instead.
             let at = f.line_of(line);
@@ -1507,18 +1529,17 @@ impl App {
 
     /// The focused file's text area: (rows, columns).
     fn text_size(&self) -> (usize, u16) {
-        match &self.comment_box {
-            Some(_) => (
+        if self.comment_box.is_some() {
+            (
                 self.box_area.height.saturating_sub(2) as usize,
                 self.box_area.width.saturating_sub(2),
-            ),
-            None => {
-                let f = self.main_file();
-                (
-                    self.view.height.saturating_sub(f.notices.len() as u16) as usize,
-                    self.view.width.saturating_sub(f.gutter_width() as u16),
-                )
-            }
+            )
+        } else {
+            let f = self.main_file();
+            (
+                self.view.height.saturating_sub(cells(f.notices.len())) as usize,
+                self.view.width.saturating_sub(cells(f.gutter_width())),
+            )
         }
     }
 
@@ -1540,12 +1561,12 @@ impl App {
                         Ok(s) => {
                             self.switch = Some(s);
                             self.quit = true;
-                        }
+                        },
                         Err(e) => self.status = Some((format!("{e:#}"), true)),
                     }
                 }
                 return;
-            }
+            },
             Target::Change(i) => {
                 let _ = self.push_jump();
                 self.load(i);
@@ -1557,7 +1578,7 @@ impl App {
                     self.cursor_to_line(0);
                     self.all.top = (i, 0);
                 }
-            }
+            },
             Target::Path(p) => {
                 // A changed file opens as its change, with its diff.
                 if let Some(i) = self.state.source.changes.iter().position(|c| c.path == p) {
@@ -1566,7 +1587,7 @@ impl App {
                 let _ = self.push_jump();
                 self.load_context(&p);
                 self.state.cur = Cur::Context(p);
-            }
+            },
             Target::Thread(id) => {
                 let Some(t) = self.state.threads.iter().find(|t| t.id == id).cloned() else {
                     return;
@@ -1577,23 +1598,20 @@ impl App {
                         self.open(Target::Path(a.path.clone()));
                         self.expanded.insert(t.id.clone());
                         // On what's shown now: it may have been made on another version.
-                        match self.shown_anchor(&t) {
-                            Some(a) => {
-                                self.select_anchor(&a);
-                                self.scroll_to_cursor(true);
-                            }
-                            None => {
-                                let on = t.on.diff.as_deref().unwrap_or("another version");
-                                self.status = Some((
-                                    format!(
-                                        "Its code isn't in what's shown: it was made on {on} \
-                                         (' o changes the scope)"
-                                    ),
-                                    true,
-                                ));
-                            }
+                        if let Some(a) = self.shown_anchor(&t) {
+                            self.select_anchor(&a);
+                            self.scroll_to_cursor(true);
+                        } else {
+                            let on = t.on.diff.as_deref().unwrap_or("another version");
+                            self.status = Some((
+                                format!(
+                                    "Its code isn't in what's shown: it was made on {on} \
+                                     (' o changes the scope)"
+                                ),
+                                true,
+                            ));
                         }
-                    }
+                    },
                     // A review-level thread has no lines to show: its comment opens instead.
                     None => match t.latest_yours() {
                         Some(c) => self.open_box(Place::Edit(c.id.clone())),
@@ -1601,7 +1619,7 @@ impl App {
                     },
                 }
                 return;
-            }
+            },
         }
         self.state.mode = Mode::Normal;
     }
@@ -1621,7 +1639,7 @@ impl App {
                 if let Some((s, e)) = self.anchor_rows(a) {
                     self.select_rows(s, e);
                 }
-            }
+            },
         }
     }
 
@@ -1636,7 +1654,7 @@ impl App {
                 let rows = self.split_left().unwrap_or(f).rows.as_ref()?;
                 let row_of = |l| rows.iter().position(|r| r.old_line() == Some(l));
                 Some((row_of(s)?, row_of(e)?))
-            }
+            },
         }
     }
 
@@ -1661,7 +1679,7 @@ impl App {
             Some(l) => (Side::New, l),
             None => (Side::Old, self.old_line_at(row)?),
         };
-        let line = line as u32 + 1;
+        let line = line_number(line);
         let path = self.state.main_path();
         self.shown_threads()
             .iter()
@@ -1706,8 +1724,8 @@ impl App {
         };
         Ok(Anchor {
             path: self.state.main_path().to_string(),
-            start: s.min(e) as u32 + 1,
-            end: e as u32 + 1,
+            start: line_number(s.min(e)),
+            end: line_number(e),
             side,
         })
     }
@@ -1743,12 +1761,12 @@ impl App {
             Ok(Some(d)) => {
                 self.status = Some(("Draft restored".into(), false));
                 d
-            }
+            },
             Ok(None) => initial,
             Err(e) => {
                 self.status = Some((format!("{e:#}"), true));
                 initial
-            }
+            },
         };
         self.comment_box = Some(CommentBox::new(place, &text, &self.state.loader));
         self.state.mode = Mode::Normal;
@@ -1796,7 +1814,7 @@ impl App {
         let file_text = match self.comment_box.as_ref().map(|b| &b.place) {
             Some(Place::Lines(a)) if a.side == Side::Old => {
                 self.old_text(&a.path).unwrap_or_default()
-            }
+            },
             _ => self.base_file().text.to_string(),
         };
         let on = self.diff_context();
@@ -1813,14 +1831,16 @@ impl App {
                     true,
                 ));
                 return;
-            }
-            Place::Edit(c) if body.is_empty() => review::delete(conn, c).map(|_| "Comment deleted"),
+            },
+            Place::Edit(c) if body.is_empty() => {
+                review::delete(conn, c).map(|()| "Comment deleted")
+            },
             _ if body.is_empty() => Ok("Nothing to save"),
-            Place::Edit(c) => review::edit(conn, c, &body).map(|_| "Comment saved"),
+            Place::Edit(c) => review::edit(conn, c, &body).map(|()| "Comment saved"),
             Place::Reply(t) => review::reply(conn, t, YOU, &body).map(|_| "Reply saved"),
             Place::Review => {
                 review::comment_in(conn, id, None, YOU, &body, &on).map(|_| "Comment saved")
-            }
+            },
             Place::Lines(a) => review::comment_in(conn, id, Some((a, &file_text)), YOU, &body, &on)
                 .map(|_| "Comment saved"),
         };
@@ -1834,11 +1854,11 @@ impl App {
                 let unsent = match self.unsent {
                     n if n > 0 && msg != "Nothing to save" => {
                         format!(" · {n} unsent; ' s submits")
-                    }
+                    },
                     _ => String::new(),
                 };
                 self.status = Some((format!("{msg}{unsent}"), false));
-            }
+            },
             Err(e) => self.status = Some((format!("{e:#}"), true)),
         }
     }
@@ -1877,7 +1897,7 @@ impl App {
             Ok(()) => {
                 self.reload();
                 self.status = Some(("Comment deleted".into(), false));
-            }
+            },
             Err(e) => self.status = Some((format!("{e:#}"), true)),
         }
     }
@@ -1917,7 +1937,7 @@ impl App {
                     ),
                     false,
                 ));
-            }
+            },
             Err(e) => self.status = Some((format!("{e:#}"), true)),
         }
     }
@@ -1973,7 +1993,7 @@ impl App {
             .iter()
             .filter(|th| all || th.anchor.as_ref().is_some_and(|a| a.path == path))
             .map(|th| {
-                let unsent = th.comments.iter().any(|c| c.unsent());
+                let unsent = th.comments.iter().any(super::review::Comment::unsent);
                 let (status, style) = if unsent {
                     ("unsent", t.get("warning"))
                 } else {
@@ -1982,7 +2002,7 @@ impl App {
                 let place = th
                     .anchor
                     .as_ref()
-                    .map_or("review".into(), |a| a.to_string());
+                    .map_or("review".into(), std::string::ToString::to_string);
                 let first = th.comments.first();
                 Item {
                     tags: vec![(status.into(), style), (place, t.get("ui.text"))],
@@ -2027,10 +2047,10 @@ impl App {
             "scope_base" => self.scope != Scope::Base,
             "scope_since_review" => {
                 self.last_round.is_some() && !matches!(self.scope, Scope::SinceReview(_))
-            }
+            },
             "scope_commits" => {
                 self.state.source.git.is_some() && !matches!(self.scope, Scope::Commit(_))
-            }
+            },
             "goto_next_commit" | "goto_prev_commit" => matches!(self.scope, Scope::Commit(_)),
             _ => true,
         }
@@ -2088,7 +2108,7 @@ impl App {
                 let motion: Motion = match next {
                     NextKey::Char(f, _) => std::rc::Rc::new(move |cx| {
                         cx.count = count;
-                        f(cx, ch)
+                        f(cx, ch);
                     }),
                     NextKey::Textobject(around)
                         if glos_helix::syntax::textobject_name(ch).is_some() =>
@@ -2097,10 +2117,10 @@ impl App {
                         self.ts_object(around, ch, false);
                         self.count = None;
                         return None;
-                    }
+                    },
                     NextKey::Textobject(around) => std::rc::Rc::new(move |cx| {
                         cx.count = count;
-                        commands::select_textobject(cx, around, ch)
+                        commands::select_textobject(cx, around, ch);
                     }),
                 };
                 self.doc_command(|cx| motion(cx));
@@ -2144,14 +2164,14 @@ impl App {
                     if m.sticky {
                         sticky = Some(depth + 1);
                     }
-                }
+                },
                 Some(Node::Cmd(c)) => node = Some(*c),
                 None => {
                     // Unbound: drop the sequence (and leave a sticky menu), as Helix does.
                     self.pending.clear();
                     self.count = None;
                     return None;
-                }
+                },
             }
         }
         let Some(command) = node else {
@@ -2228,13 +2248,13 @@ impl App {
             Msg::CloseTree => {
                 self.tree = None;
                 self.layout();
-            }
+            },
             Msg::TreeSearch(forward) => {
                 if let Some(t) = &self.tree {
                     let origin = t.origin();
                     self.prompt = Some(Prompt::new(PromptKind::TreeSearch { forward, origin }));
                 }
-            }
+            },
             Msg::TreeSearchNext(forward) => match self.last_search.clone() {
                 Some(q) => self.tree_search(&q, forward),
                 None => self.status = Some(("No previous search".into(), true)),
@@ -2245,7 +2265,7 @@ impl App {
                 }
                 self.save_draft();
                 self.scroll_to_cursor(false);
-            }
+            },
             Msg::BoxMoved => self.scroll_to_cursor(false),
             Msg::BoxInsert => self.state.mode = Mode::Normal,
             Msg::SaveBox => self.save_box(),
@@ -2267,10 +2287,10 @@ impl App {
                 self.pickers = under;
                 self.pending.clear();
                 return self.execute(command);
-            }
+            },
             // Only the palette lists these; the picker it covers comes back.
             Target::Nothing if chosen.is_some_and(|p| p.palette) => self.pickers = under,
-            Target::Nothing => {}
+            Target::Nothing => {},
             t => self.open(t),
         }
         None
@@ -2347,7 +2367,7 @@ impl App {
                         Some(r) => r.0 = format!("{}, {keys}", r.0),
                         None => out.push((keys, c.doc, Some(c.name))),
                     }
-                }
+                },
                 Node::Menu(m) => self.walk_keys(m, &format!("{keys} "), out, over),
             }
         }
@@ -2391,7 +2411,7 @@ impl App {
                     self.last_motion_name = Some(command.name);
                     self.last_motion = Some(std::rc::Rc::new(move |cx: &mut Ctx| {
                         cx.count = count;
-                        f(cx)
+                        f(cx);
                     }));
                 }
                 if !(self.all_shown()
@@ -2404,15 +2424,15 @@ impl App {
                     self.open_fold_on_change();
                 }
                 None
-            }
+            },
             Action::NextChar(f) => {
                 self.next_key = Some(NextKey::Char(f, command.doc));
                 return None; // keep the count for when the character comes
-            }
+            },
             Action::Textobject(around) => {
                 self.next_key = Some(NextKey::Textobject(around));
                 return None;
-            }
+            },
             Action::App(a) => self.app_command(a),
             Action::Tree(c) => {
                 let cx = cx!(self);
@@ -2420,28 +2440,28 @@ impl App {
                     Some(Outcome::Msg(msg)) => self.apply(msg),
                     _ => None,
                 }
-            }
+            },
             Action::Picker(c) => {
                 let cx = cx!(self);
                 match self.pickers.last_mut().map(|p| p.command(c, &cx)) {
                     Some(Outcome::Msg(msg)) => self.apply(msg),
                     _ => None,
                 }
-            }
+            },
             Action::Prompt(c) => {
                 let cx = cx!(self);
                 match self.prompt.as_mut().map(|p| p.command(c, &cx)) {
                     Some(Outcome::Msg(msg)) => self.apply(msg),
                     _ => None,
                 }
-            }
+            },
             Action::Box(c) => {
                 let cx = cx!(self);
                 match self.comment_box.as_mut().map(|b| b.command(c, &cx)) {
                     Some(Outcome::Msg(msg)) => self.apply(msg),
                     _ => None,
                 }
-            }
+            },
         };
         self.count = None;
         result
@@ -2463,7 +2483,7 @@ impl App {
                 let file = self.file_mut();
                 file.sel = origin;
                 file.top = top;
-            }
+            },
             Some(Prompt {
                 kind: PromptKind::Regex { origin, .. },
                 ..
@@ -2475,8 +2495,8 @@ impl App {
                 if let Some(t) = &mut self.tree {
                     t.restore(origin);
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -2493,13 +2513,13 @@ impl App {
                     self.file_mut().sel = origin;
                     self.doc_command(|cx| commands::regex_selections(cx, action, &regex));
                 }
-            }
+            },
             PromptKind::TreeSearch { forward, .. } if line.is_empty() => {
                 match self.last_search.clone() {
                     Some(q) => self.tree_search(&q, forward),
                     None => self.status = Some(("No previous search".into(), true)),
                 }
-            }
+            },
             // The search shares the `/` register with the code's, as Helix has one.
             PromptKind::TreeSearch { .. } => match tree::search_regex(&line) {
                 Some(_) => self.last_search = Some(line),
@@ -2513,7 +2533,7 @@ impl App {
                 if commands::search_regex(self.last_search.as_deref().unwrap_or("")).is_none() {
                     self.status = Some(("Invalid regex".into(), true));
                 }
-            }
+            },
         }
     }
 
@@ -2521,7 +2541,7 @@ impl App {
     fn tree_search(&mut self, query: &str, forward: bool) {
         let Some(t) = &mut self.tree else { return };
         match tree::search_regex(query) {
-            Some(r) if t.search(&r, forward) => {}
+            Some(r) if t.search(&r, forward) => {},
             Some(_) => self.status = Some(("No matches".into(), true)),
             None => self.status = Some(("Invalid regex".into(), true)),
         }
@@ -2591,10 +2611,13 @@ impl App {
         if all.is_some() {
             return self.search_across(&line, forward, false);
         }
-        let regex = commands::search_regex(&line).expect("checked above");
+        let Some(regex) = commands::search_regex(&line) else {
+            return;
+        };
         self.doc_command(|cx| commands::search(cx, &regex, forward, false));
     }
 
+    #[expect(clippy::too_many_lines, reason = "one match arm for each app action")]
     fn app_command(&mut self, action: AppAction) -> Option<AppAction> {
         use AppAction as A;
         if self.comment_box.is_some() && blocked_in_box(action) {
@@ -2623,7 +2646,7 @@ impl App {
                     Some(c) => self.open_box(Place::Edit(c)),
                     None => self.status = Some(("No comment of yours here".into(), true)),
                 }
-            }
+            },
             A::DeleteComment => self.delete_comment(),
             A::Submit(v) => self.submit(v),
             A::ThreadPicker { all } => self.pickers = vec![self.thread_picker(all)],
@@ -2635,7 +2658,7 @@ impl App {
                 } else {
                     self.ts_object(forward, ch, true);
                 }
-            }
+            },
             A::Dashboard => match dashboard::picker(&self.conn, &self.theme) {
                 Ok(p) => self.pickers = vec![p],
                 Err(e) => self.status = Some((format!("{e:#}"), true)),
@@ -2657,7 +2680,7 @@ impl App {
                         Err(e) => self.status = Some((format!("{e:#}"), true)),
                     }
                     self.reload();
-                }
+                },
                 None => self.status = Some(("No thread here".into(), true)),
             },
             A::AllFiles(on) => self.set_all_files(on.unwrap_or(!self.all.on)),
@@ -2679,7 +2702,7 @@ impl App {
                         false,
                     ));
                 }
-            }
+            },
             A::Scope(which) => {
                 let scope = match which {
                     keymap::ScopeKey::Base => Some(Scope::Base),
@@ -2690,10 +2713,10 @@ impl App {
                     Some(s) => self.rescope(s, self.filter.clone()),
                     None => {
                         self.status =
-                            Some(("Nothing submitted yet, so no last review".into(), true))
-                    }
+                            Some(("Nothing submitted yet, so no last review".into(), true));
+                    },
                 }
-            }
+            },
             A::NextCommit(forward) => match self.scope {
                 Scope::Commit(i) => {
                     let n = self.commits.len();
@@ -2716,14 +2739,14 @@ impl App {
                     } else {
                         self.rescope(Scope::Commit(j), self.filter.clone());
                     }
-                }
+                },
                 _ => self.status = Some(("Not in the per-commit scope: ' o c".into(), true)),
             },
             A::FilterPrompt => {
                 let mut p = Prompt::new(PromptKind::Command);
                 p.line = "filter ".into();
                 self.prompt = Some(p);
-            }
+            },
             // Again, over the palette, it goes back.
             A::CommandPalette => match self.pickers.last() {
                 Some(p) if p.palette => drop(self.pickers.pop()),
@@ -2736,7 +2759,7 @@ impl App {
                     let mut t = tree::Tree::new(self.tree_entries());
                     t.select(self.state.main_path());
                     self.tree = Some(t);
-                }
+                },
             },
             A::GotoSuggestion => match self.review.suggestion.clone() {
                 Some(s) => {
@@ -2744,7 +2767,7 @@ impl App {
                     let line = s.line as usize - 1;
                     self.select_lines(line, line);
                     self.scroll_to_cursor(true);
-                }
+                },
                 None => self.status = Some(("No agent has suggested a line".into(), false)),
             },
             AppAction::SelectMode => self.state.mode = Mode::Select,
@@ -2761,11 +2784,11 @@ impl App {
                     all,
                 };
                 self.prompt = Some(Prompt::new(kind));
-            }
+            },
             AppAction::SearchNext(forward) => match self.last_search.clone() {
                 Some(q) if self.all_shown() && self.comment_box.is_none() => {
-                    self.search_across(&q, forward, true)
-                }
+                    self.search_across(&q, forward, true);
+                },
                 Some(q) => self.doc_command(|cx| commands::search_next(cx, &q, forward)),
                 None => self.status = Some(("No previous search".into(), true)),
             },
@@ -2775,7 +2798,7 @@ impl App {
                 if let Some(q) = query {
                     self.last_search = Some(q);
                 }
-            }
+            },
             AppAction::NextFile | AppAction::PrevFile => {
                 let n = self.state.files.len();
                 if n == 0 {
@@ -2791,7 +2814,7 @@ impl App {
                     Cur::Context(_) => n - 1,
                 };
                 self.open(Target::Change(i));
-            }
+            },
             AppAction::ChangedFilePicker => self.pickers = vec![self.changed_file_picker()],
             AppAction::FilePicker => self.pickers = vec![self.file_picker()],
             AppAction::ToggleCollapse => {
@@ -2814,12 +2837,15 @@ impl App {
                     file.collapsed = !file.collapsed;
                 }
                 self.refold(None);
-            }
+            },
             AppAction::Yank | AppAction::YankToClipboard { .. } => {
                 let file = self.file();
                 let text = file.text.slice(..);
-                let mut values: Vec<String> =
-                    file.sel.fragments(text).map(|f| f.into_owned()).collect();
+                let mut values: Vec<String> = file
+                    .sel
+                    .fragments(text)
+                    .map(std::borrow::Cow::into_owned)
+                    .collect();
                 if let AppAction::YankToClipboard { main_only: true } = action {
                     values = vec![file.sel.primary().fragment(text).into_owned()];
                 }
@@ -2828,7 +2854,7 @@ impl App {
                     AppAction::Yank => {
                         self.yanked = values;
                         ('"', Ok(()))
-                    }
+                    },
                     // Helix joins selections with newlines for the clipboard.
                     _ => ('+', clipboard::copy(&values.join("\n"))),
                 };
@@ -2843,18 +2869,18 @@ impl App {
                     Err(e) => (format!("{e:#}"), true),
                 });
                 self.state.mode = Mode::Normal; // as Helix, yanking leaves select mode
-            }
+            },
             AppAction::RegexPrompt(action) => {
                 let kind = PromptKind::Regex {
                     action,
                     origin: self.file().sel.clone(),
                 };
                 self.prompt = Some(Prompt::new(kind));
-            }
+            },
             AppAction::SaveSelection => {
                 let _ = self.push_jump();
                 self.status = Some(("Selection saved to jumplist".into(), false));
-            }
+            },
             AppAction::JumpBackward | AppAction::JumpForward => {
                 let count = self.count.map_or(1, NonZeroUsize::get);
                 let target = if action == AppAction::JumpForward {
@@ -2871,7 +2897,7 @@ impl App {
                 let file = self.file_mut();
                 file.sel = sel.ensure_invariants(file.text.slice(..));
                 self.scroll_to_cursor(true);
-            }
+            },
             AppAction::RepeatLastMotion => {
                 // A count repeats the motion that many times, each with its own count.
                 if let Some(m) = self.last_motion.clone() {
@@ -2890,19 +2916,18 @@ impl App {
                                     continue;
                                 }
                                 self.doc_command(|cx| m(cx));
-                            }
+                            },
                             _ => self.doc_command(|cx| m(cx)),
                         }
                     }
                 }
-            }
-            AppAction::RecordMacro => match self.recording.take() {
-                Some(mut keys) => {
+            },
+            AppAction::RecordMacro => {
+                if let Some(mut keys) = self.recording.take() {
                     keys.pop(); // the Q that stopped it
                     self.macro_keys = keys;
                     self.status = Some(("Recorded to register [@]".into(), false));
-                }
-                None => {
+                } else {
                     self.recording = Some(vec![]);
                     self.status = Some(("Recording to register [@]".into(), false));
                 }
@@ -2924,7 +2949,7 @@ impl App {
                     }
                 }
                 self.replaying = false;
-            }
+            },
             AppAction::Suspend => return Some(AppAction::Suspend),
         }
         None
@@ -2976,6 +3001,7 @@ impl App {
     ///
     /// The picker and the command line are modal, so they get every event. While the comment
     /// box is open, clicks outside it are ignored so they can't disturb the draft.
+    #[expect(clippy::too_many_lines, reason = "one match arm for each mouse event")]
     fn mouse(&mut self, m: MouseEvent) {
         use MouseEventKind as K;
         let at = |r: Rect| r.contains((m.column, m.row).into());
@@ -3013,12 +3039,12 @@ impl App {
             Outcome::Ignored
         };
         match outcome {
-            Outcome::Ignored => {}
+            Outcome::Ignored => {},
             Outcome::Consumed => return,
             Outcome::Msg(msg) => {
                 self.apply(msg);
                 return;
-            }
+            },
         }
         // With the comment box open, the wheel can still scroll the code behind it. Scrolling
         // can't change the draft, so it's safe. The box is set aside while the code handles
@@ -3052,14 +3078,14 @@ impl App {
                 K::ScrollDown | K::ScrollUp => {
                     self.all_wheel(3, m.kind == K::ScrollDown);
                     return;
-                }
+                },
                 K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
                     let drag = matches!(m.kind, K::Drag(_));
                     if !self.all_focus_at(m.column, m.row, drag) {
                         return;
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         match m.kind {
@@ -3076,7 +3102,7 @@ impl App {
                     let cursor = file.sel.primary().cursor(file.text.slice(..));
                     self.hold_left = Some(cursor);
                 }
-            }
+            },
             K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
                 let Some(pos) = self.pos_at(m.column, m.row) else {
                     return;
@@ -3100,8 +3126,8 @@ impl App {
                 if !drag && !boxed && self.fold_here().is_some() {
                     self.fold_command(folding::FoldKey::Open);
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -3138,7 +3164,7 @@ impl App {
             Some(b) => {
                 let inner = Block::default().borders(Borders::ALL).inner(self.box_area);
                 (&b.file, inner, true, TextAnnotations::default())
-            }
+            },
             None => (
                 self.main_file(),
                 self.view,
@@ -3151,9 +3177,9 @@ impl App {
         let (area, header, top) = match self.all_region_at(y) {
             Some((r, line)) if self.comment_box.is_none() && self.all_shown() => (r, 0, line),
             _ if self.comment_box.is_none() && self.all_shown() => return None,
-            _ => (area, file.notices.len() as u16, file.top),
+            _ => (area, cells(file.notices.len()), file.top),
         };
-        let gutter = file.gutter_width() as u16;
+        let gutter = cells(file.gutter_width());
         if y < area.y + header
             || y >= area.bottom()
             || x < area.x + gutter
@@ -3166,7 +3192,7 @@ impl App {
         let text = file.text.slice(..);
         let fmt = view::text_format(file, area.width.saturating_sub(gutter), wrap);
         let left = if fmt.soft_wrap { 0 } else { file.left };
-        let row = (y - area.y - header) as isize;
+        let row = to_isize(usize::from(y - area.y - header));
         let col = left + (x - area.x - gutter) as usize;
         let anchor = text.line_to_char(top.min(text.len_lines() - 1));
         let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &annotations);
@@ -3240,7 +3266,7 @@ impl App {
     fn typed_command(&mut self, line: &str) {
         let (name, args) = line.split_once(' ').unwrap_or((line, ""));
         match name {
-            "" => {}
+            "" => {},
             "q" | "quit" | "qa" if self.unsent > 0 && !self.reminded => {
                 self.reminded = true;
                 let n = self.unsent;
@@ -3252,7 +3278,7 @@ impl App {
                     ),
                     true,
                 ));
-            }
+            },
             "q" | "quit" | "q!" | "quit!" | "qa" | "qa!" => self.quit = true,
             "comment" => _ = self.app_command(AppAction::Comment),
             "dashboard" => _ = self.app_command(AppAction::Dashboard),
@@ -3270,8 +3296,8 @@ impl App {
                     self.status = Some((
                         "Submit how? :submit approve, :submit changes or :submit comment".into(),
                         true,
-                    ))
-                }
+                    ));
+                },
             },
             "all" => _ = self.app_command(AppAction::AllFiles(Some(true))),
             "one" => _ = self.app_command(AppAction::AllFiles(Some(false))),
@@ -3290,10 +3316,10 @@ impl App {
                 match key {
                     Some(k) => _ = self.app_command(AppAction::Scope(k)),
                     None => {
-                        self.status = Some(("Scope? :scope base, since or commits".into(), true))
-                    }
+                        self.status = Some(("Scope? :scope base, since or commits".into(), true));
+                    },
                 }
-            }
+            },
             "filter" => {
                 let arg = args.trim();
                 let filter = match arg {
@@ -3306,10 +3332,10 @@ impl App {
                     Ok(f) => {
                         let scope = self.scope.clone();
                         self.rescope(scope, f);
-                    }
+                    },
                     Err(e) => self.status = Some((format!("Bad glob: {e}"), true)),
                 }
-            }
+            },
             "editor" => match self.comment_box {
                 Some(_) => self.run_editor = true,
                 None => self.status = Some(("No comment box is open: ' c opens one".into(), true)),
@@ -3322,16 +3348,16 @@ impl App {
                         false,
                     ));
                     self.scroll_to_cursor(false);
-                }
+                },
                 other => self.status = Some((format!("unknown option '{other}'"), true)),
             },
             n if n.parse::<usize>().is_ok() => {
-                self.count = NonZeroUsize::new(n.parse().unwrap());
+                self.count = NonZeroUsize::new(n.parse().unwrap_or(0));
                 if !self.goto_line_number() {
                     self.doc_command(commands::goto_line);
                 }
                 self.count = None;
-            }
+            },
             other => self.status = Some((format!("no such command: '{other}'"), true)),
         }
     }
@@ -3590,15 +3616,15 @@ impl App {
             Some(_) => None,
         };
         let line = fold_line.or(file.new_line_near(line)).unwrap_or(line);
-        let sels = file.sel.len();
+        let count = file.sel.len();
         let right = format!(
-            " {which}  {sels} sel{}  {}:{} ",
-            if sels == 1 { "" } else { "s" },
+            " {which}  {count} sel{}  {}:{} ",
+            if count == 1 { "" } else { "s" },
             line + 1,
             col + 1
         );
-        let w = right.width() as u16;
-        if w + left.width() as u16 + 1 < area.width {
+        let w = cells(right.width());
+        if w + cells(left.width()) + 1 < area.width {
             buf.set_string(area.x + area.width - w, area.y, &right, base);
         }
     }
@@ -3622,7 +3648,7 @@ impl App {
             pending += &k.to_string();
         }
         if !pending.is_empty() {
-            let w = pending.width() as u16;
+            let w = cells(pending.width());
             buf.set_string(
                 area.x + area.width.saturating_sub(w + 1),
                 area.y,
@@ -3674,15 +3700,17 @@ impl App {
             .iter()
             .map(|(k, d)| format!("{k:key_w$}  {d}"))
             .collect();
-        let width = (lines
-            .iter()
-            .map(|l| l.width())
-            .max()
-            .unwrap_or(0)
-            .max(title.width())
-            + 4) as u16;
+        let width = cells(
+            lines
+                .iter()
+                .map(|l| l.width())
+                .max()
+                .unwrap_or(0)
+                .max(title.width())
+                + 4,
+        );
         let width = width.min(area.width);
-        let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+        let height = (cells(lines.len()) + 2).min(area.height.saturating_sub(2));
         let rect = Rect::new(
             area.width - width,
             area.height.saturating_sub(2 + height),
@@ -3707,7 +3735,7 @@ impl App {
         for (i, l) in lines.iter().skip(self.help_top).enumerate().take(shown) {
             f.buffer_mut().set_stringn(
                 rect.x + 2,
-                rect.y + 1 + i as u16,
+                rect.y + 1 + cells(i),
                 l,
                 width.saturating_sub(3) as usize,
                 text_style,
@@ -3719,8 +3747,11 @@ impl App {
 /// `ctrl-z`: give the terminal back, stop, and take it again on `fg`.
 fn suspend(terminal: &mut DefaultTerminal) -> Result<()> {
     ratatui::restore();
-    // SAFETY: raising a signal on ourselves; the shell resumes us with SIGCONT.
-    unsafe { libc::raise(libc::SIGTSTP) };
+    #[expect(unsafe_code, reason = "libc has no safe call to stop the process")]
+    // SAFETY: glos raises the signal on itself, and the shell resumes it with SIGCONT.
+    unsafe {
+        libc::raise(libc::SIGTSTP)
+    };
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     terminal.clear()?;
@@ -3762,4 +3793,8 @@ fn side_threads(threads: &Threads, old: bool) -> Threads {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test screens are small, so their coordinates fit in a `u16`"
+)]
 mod tests;

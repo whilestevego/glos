@@ -2,6 +2,7 @@
 //! `#[h|]#ello` notation), the view and the screen checked. Screen snapshots lock the parts that
 //! must look like Helix.
 
+use std::os::unix::fs::PermissionsExt;
 use std::{collections::HashSet, path::Path};
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -15,7 +16,7 @@ use super::{prompt::completions, *};
 struct T {
     app: App,
     term: Terminal<TestBackend>,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 const OLD: &str = "fn main() {\n    println!(\"hi\");\n}\n\nfn gone() {}\n";
@@ -64,7 +65,7 @@ impl T {
         let mut t = T {
             app,
             term: Terminal::new(TestBackend::new(w, h)).unwrap(),
-            _dir: dir,
+            dir,
         };
         t.draw();
         t
@@ -204,7 +205,6 @@ fn notices_for_kinds_of_change() {
         std::os::unix::fs::symlink("after.txt", n.join("link")).unwrap();
         std::fs::write(o.join("run.sh"), "echo\n").unwrap();
         std::fs::write(n.join("run.sh"), "echo\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(n.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
     });
     let mut seen = vec![];
@@ -1241,7 +1241,7 @@ fn a_request_from_another_process_shows_without_moving_the_view() {
     t.keys("2 0 j");
     let (sel, top) = (t.sel(), t.top());
     // An MCP server writes to the same database.
-    let other = crate::store::open(&t._dir.path().join("glos.db")).unwrap();
+    let other = crate::store::open(&t.dir.path().join("glos.db")).unwrap();
     t.app
         .review
         .request(&other, "claude", "ready: added the parser", &[])
@@ -1259,12 +1259,12 @@ fn a_request_from_another_process_shows_without_moving_the_view() {
 impl T {
     /// Another process on the same store, as an agent's MCP server is.
     fn agent(&self) -> rusqlite::Connection {
-        crate::store::open(&self._dir.path().join("glos.db")).unwrap()
+        crate::store::open(&self.dir.path().join("glos.db")).unwrap()
     }
 
     /// Writes the new side of a two-file review, as an agent editing it would.
     fn edit(&mut self, text: &str) -> &mut Self {
-        std::fs::write(self._dir.path().join("main.rs"), text).unwrap();
+        std::fs::write(self.dir.path().join("main.rs"), text).unwrap();
         self.app.files_changed();
         self.draw();
         self
@@ -1458,7 +1458,7 @@ fn files_appear_and_stop_being_changed() {
         std::fs::write(o.join("a.rs"), "1\n").unwrap();
         std::fs::write(n.join("a.rs"), "1\n2\n").unwrap();
     });
-    let new = t._dir.path().join("new");
+    let new = t.dir.path().join("new");
     std::fs::write(new.join("b.rs"), "fresh\n").unwrap();
     t.app.files_changed();
     t.draw();
@@ -1487,7 +1487,7 @@ fn threads_follow_changes_made_while_glos_was_closed() {
         .keys("ret ' c")
         .typed("x")
         .keys("esc ret");
-    let dir = t._dir.path().to_path_buf();
+    let dir = t.dir.path().to_path_buf();
     std::fs::write(dir.join("main.rs"), format!("top\n{}", lines(10))).unwrap();
     // A new glos on the same store places the thread again at start.
     let source = Source::diff(&dir.join("old.rs"), &dir.join("main.rs")).unwrap();
@@ -1846,7 +1846,7 @@ fn since_the_last_review() {
     assert!(!t.shows("Since your last review"));
     t.keys("' s a");
     // The agent changes b.rs after the review.
-    std::fs::write(t._dir.path().join("new/b.rs"), "1\n2\n3\n").unwrap();
+    std::fs::write(t.dir.path().join("new/b.rs"), "1\n2\n3\n").unwrap();
     t.app.files_changed();
     t.keys("' o r");
     assert_eq!(t.said(), "Since round 1: 1 file");
@@ -1961,7 +1961,7 @@ fn a_focused_tree_keeps_its_cursor_when_the_file_changes() {
 fn a_rebuild_keeps_closed_folders_closed() {
     let mut t = two_folder_tree();
     t.app.tree.as_mut().unwrap().collapsed.insert("b/".into());
-    let new = t._dir.path().join("new");
+    let new = t.dir.path().join("new");
     std::fs::write(new.join("b/y.rs"), "y\n").unwrap();
     t.app.files_changed();
     t.draw();
@@ -2000,7 +2000,10 @@ impl T {
 
     fn closed(&mut self, folders: &[&str]) -> &mut Self {
         let tree = self.app.tree.as_mut().unwrap();
-        tree.collapsed = folders.iter().map(|f| f.to_string()).collect();
+        tree.collapsed = folders
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         self.draw();
         self
     }
@@ -2237,7 +2240,7 @@ fn comments_on_two_revisions_keep_their_diff() {
     t.app.files_changed();
     assert_eq!(t.app.state.threads[0].anchor.as_ref().unwrap().start, 2);
     // In the branch's review of your files the same code is still there: shown, marked.
-    let repo = t._dir.path().join("repo");
+    let repo = t.dir.path().join("repo");
     let theme = Theme::load("default", ColorSupport::TrueColor).unwrap();
     let app = App::new(
         Source::git(&repo, None).unwrap(),
@@ -2249,7 +2252,7 @@ fn comments_on_two_revisions_keep_their_diff() {
     let mut b = T {
         app,
         term: Terminal::new(TestBackend::new(72, 14)).unwrap(),
-        _dir: tempfile::tempdir().unwrap(),
+        dir: tempfile::tempdir().unwrap(),
     };
     b.app.open(Target::Path("a.rs".into()));
     b.draw();
@@ -2568,7 +2571,7 @@ fn palette_in_the_tree_picker_and_prompt() {
 fn the_dashboard_lists_reviews_and_opens_another() {
     let mut t = T::files_sized(OLD, NEW, 220, 16);
     // A second review in the same store, made as another glos would.
-    let dir = t._dir.path().to_path_buf();
+    let dir = t.dir.path().to_path_buf();
     let (o, n) = (dir.join("other.old"), dir.join("other.rs"));
     std::fs::write(&o, "a\n").unwrap();
     std::fs::write(&n, "b\n").unwrap();
@@ -2833,7 +2836,7 @@ fn folds_last_until_the_file_changes() {
     t.keys("g p");
     assert!(text(&t).starts_with("line 1\n"), "{}", text(&t));
     // The file changes: folded afresh.
-    let new = t._dir.path().join("new/a.txt");
+    let new = t.dir.path().join("new/a.txt");
     std::fs::write(&new, lines(40).replace("line 20\n", "y\n")).unwrap();
     t.app.files_changed();
     t.draw();

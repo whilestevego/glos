@@ -8,6 +8,7 @@
 //! `}`. If no copy counts but the lines the diff maps the thread to are much like its text, the
 //! thread stays on them, so fixing a typo doesn't outdate it. Otherwise the thread is outdated.
 
+use crate::num::to_isize;
 use crate::{diff, diff_words};
 
 /// How far from where the thread was mapped a copy of its text may be, unless all of its context
@@ -50,7 +51,7 @@ pub fn place(a: &Anchored, new: &str) -> Option<(usize, usize)> {
     let mut touched = false;
     for h in diff::hunks(a.old, new) {
         let (bs, be) = (h.before.start as usize, h.before.end as usize);
-        let grew = h.after.len() as isize - h.before.len() as isize;
+        let grew = to_isize(h.after.len()) - to_isize(h.before.len());
         // A hunk ending at or before the first anchored line is above it (an insertion right
         // above included); one starting after the last line is below. Anything else is inside.
         if be <= a.start {
@@ -62,7 +63,7 @@ pub fn place(a: &Anchored, new: &str) -> Option<(usize, usize)> {
             break;
         }
     }
-    let mapped = (a.start as isize + shift).max(0) as usize;
+    let mapped = a.start.saturating_add_signed(shift);
     if !touched {
         return Some((mapped, mapped + (a.end - a.start)));
     }
@@ -130,9 +131,9 @@ fn map_line(hunks: &[diff::Hunk], line: usize) -> usize {
             let after = h.after.len();
             return h.after.start as usize + (line - bs).min(after.saturating_sub(1));
         }
-        shift += h.after.len() as isize - h.before.len() as isize;
+        shift += to_isize(h.after.len()) - to_isize(h.before.len());
     }
-    (line as isize + shift).max(0) as usize
+    line.saturating_add_signed(shift)
 }
 
 #[cfg(test)]

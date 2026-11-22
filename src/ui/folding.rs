@@ -46,7 +46,7 @@ impl App {
             .filter(|a| a.path == path && a.side == crate::review::Side::New)
             .map(|a| (a.start as usize - 1, a.end as usize - 1))
             .collect();
-        v.sort();
+        v.sort_unstable();
         v.dedup();
         v
     }
@@ -119,7 +119,7 @@ impl App {
         let base = self.base_file();
         let mut doc = b.doc;
         // A view has no notices of its own, and the file's say what kind of change it is.
-        doc.notices = base.notices.clone();
+        doc.notices.clone_from(&base.notices);
         let t = base.text.slice(..);
         let cursor = base.sel.primary().cursor(t);
         let line = t.char_to_line(cursor);
@@ -199,7 +199,7 @@ impl App {
         let row = to.unwrap_or_else(|| self.full_row(line));
         let col = if on_fold || to.is_some() { 0 } else { col };
         if let Some(a) = self.alt.take() {
-            self.sync_base(a);
+            self.sync_base(&a);
         }
         self.build_alt();
         self.layout();
@@ -221,6 +221,7 @@ impl App {
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "one match arm for each fold key")]
     pub(super) fn fold_command(&mut self, key: FoldKey) {
         if self.comment_box.is_some() {
             return;
@@ -235,7 +236,7 @@ impl App {
                 Some((start, n)) => {
                     self.folds.entry(k).or_default().open(start..start + n, len);
                     self.refold(Some(start));
-                }
+                },
                 None => self.status = Some(("No fold here".into(), false)),
             },
             FoldKey::Toggle => {
@@ -249,7 +250,7 @@ impl App {
                 } else {
                     self.status = Some(("No fold here".into(), false));
                 }
-            }
+            },
             FoldKey::OpenAll => {
                 let f = self.folds.entry(k).or_default();
                 f.opened = vec![true; len];
@@ -257,7 +258,7 @@ impl App {
                     h.1 = true;
                 }
                 self.refold(None);
-            }
+            },
             FoldKey::CloseAll => {
                 let f = self.folds.entry(k).or_default();
                 f.opened.clear();
@@ -265,7 +266,7 @@ impl App {
                     h.1 = false;
                 }
                 self.refold(None);
-            }
+            },
             FoldKey::Make => {
                 let f = self.main_file();
                 let t = f.text.slice(..);
@@ -292,14 +293,13 @@ impl App {
                 self.folds.entry(k).or_default().hand.extend(made);
                 self.state.mode = super::Mode::Normal;
                 self.refold(Some(first));
-            }
+            },
             FoldKey::Delete => {
-                let rows = match self.fold_here() {
-                    Some((s, n)) => s..s + n,
-                    None => {
-                        let r = self.full_row(self.cursor_line());
-                        r..r + 1
-                    }
+                let rows = if let Some((s, n)) = self.fold_here() {
+                    s..s + n
+                } else {
+                    let r = self.full_row(self.cursor_line());
+                    r..r + 1
                 };
                 let f = self.folds.entry(k).or_default();
                 let before = f.hand.len();
@@ -310,7 +310,7 @@ impl App {
                 } else {
                     self.refold(Some(rows.start));
                 }
-            }
+            },
             FoldKey::Context(more) => {
                 self.diff_context = if more {
                     self.diff_context + 1
@@ -323,7 +323,7 @@ impl App {
                     false,
                 ));
                 self.refold(None);
-            }
+            },
         }
     }
 
@@ -370,7 +370,7 @@ impl App {
                     .filter(|(_, l)| l.is_some_and(|l| start <= l && l <= end))
                     .map(|(i, _)| i)
                     .collect()
-            }
+            },
             None => return,
         };
         let (Some(&a), Some(&b)) = (rows.first(), rows.last()) else {

@@ -1,6 +1,7 @@
 //! One file as glos shows it, and drawing its text: the full-file view with Helix's gutters, and
 //! the picker's preview without them.
 
+use crate::num::{cells, to_u32};
 use std::{borrow::Cow, collections::HashMap, ops::Range};
 
 use glos_helix::{
@@ -24,6 +25,10 @@ use super::comments::Threads;
 pub const GENERATED: &str = "generated file, collapsed; enter expands";
 
 /// A file loaded for viewing: a changed file of the review, or any file opened for context.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent display setting of the file"
+)]
 pub struct File {
     pub text: Rope,
     pub hunks: Vec<Hunk>,
@@ -127,7 +132,7 @@ impl File {
                 "renamed from {}",
                 change.old_path.as_deref().unwrap_or("?")
             )),
-            Kind::ModeChanged | Kind::Modified => {}
+            Kind::ModeChanged | Kind::Modified => {},
         }
         if let (Some(a), Some(b)) = (change.old_mode, change.new_mode)
             && a != b
@@ -259,12 +264,12 @@ impl File {
             ) {
                 continue;
             }
-            let i = i as u32;
+            let i = to_u32(i);
             match hunks.last_mut() {
                 Some(h) if h.after.end == i => {
                     h.after.end = i + 1;
                     h.before.end = i + 1;
-                }
+                },
                 _ => hunks.push(Hunk {
                     before: i..i + 1,
                     after: i..i + 1,
@@ -425,7 +430,7 @@ pub fn selection_styles(t: &Theme, mode: &str) -> SelectionStyles {
 pub fn text_format(file: &File, width: u16, wrap: bool) -> TextFormat {
     TextFormat {
         soft_wrap: wrap && width > 10,
-        tab_width: file.tab_width as u16,
+        tab_width: cells(file.tab_width),
         max_wrap: 20.min(width / 4),
         max_indent_retain: 40.min(width * 2 / 5),
         wrap_indicator: "↪ ".into(),
@@ -440,7 +445,10 @@ pub fn text_format(file: &File, width: u16, wrap: bool) -> TextFormat {
 /// `DocumentFormatter`, so tabs, wide characters and soft wrap fall where Helix puts them.
 /// Threads are drawn under their lines; returns the screen row of each thread row drawn, with
 /// its thread.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an independent input of the drawing"
+)]
 pub fn draw(
     buf: &mut Buffer,
     area: Rect,
@@ -480,7 +488,14 @@ pub fn draw(
 
 /// Draws `file`'s text into `area` from line `top`, without its notices. Returns the screen row
 /// of each thread row drawn, with its thread, and the first row below what was drawn.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the loop over cells keeps its state in local variables"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an independent input of the drawing"
+)]
 pub fn draw_text(
     buf: &mut Buffer,
     area: Rect,
@@ -510,13 +525,13 @@ pub fn draw_text(
                 |st: Style, i| st.patch(theme.highlight(i)),
             );
             &computed
-        }
+        },
         (None, None) => &[],
     };
     let mut span = 0;
 
     let gutter = if main.is_some() {
-        file.gutter_width() as u16
+        cells(file.gutter_width())
     } else {
         0
     };
@@ -536,7 +551,7 @@ pub fn draw_text(
                 .iter()
                 .map(|r| text.char_to_line(r.cursor(text)))
                 .collect()
-        }
+        },
         _ => vec![],
     };
     let primary = file.sel.primary_index();
@@ -571,7 +586,7 @@ pub fn draw_text(
     let mut line = top;
     while y < bottom && line < text.len_lines() {
         // The diff sign for this line, as Helix's diff gutter picks it.
-        let l = line as u32;
+        let l = to_u32(line);
         while let Some(h) = file.hunks.get(hunk_i) {
             if h.after.end < l || (!h.after.is_empty() && l == h.after.end) {
                 hunk_i += 1;
@@ -605,7 +620,7 @@ pub fn draw_text(
                             ("▍", modified, true)
                         }
                     })
-            }
+            },
             Some(_) => None,
         };
         let mark = threads
@@ -685,7 +700,7 @@ pub fn draw_text(
                 break;
             }
             let row = g.visual_pos.row;
-            let yy = y + row as u16;
+            let yy = y + cells(row);
             if yy >= bottom {
                 break;
             }
@@ -699,7 +714,7 @@ pub fn draw_text(
                 // The wrap indicator.
                 if col >= left && col + w <= left + width as usize {
                     buf.set_string(
-                        x0 + (col - left) as u16,
+                        x0 + cells(col - left),
                         yy,
                         g.raw.to_string(),
                         text_style.patch(wrap_style),
@@ -737,27 +752,27 @@ pub fn draw_text(
                 }
             }
             if col >= left && col + w <= left + width as usize {
-                let x = x0 + (col - left) as u16;
+                let x = x0 + cells(col - left);
                 match &g.raw {
                     Grapheme::Other { g: s } => {
                         buf[(x, yy)].set_symbol(&clean(s)).set_style(style);
-                        for i in 1..w as u16 {
+                        for i in 1..cells(w) {
                             buf[(x + i, yy)].set_symbol("").set_style(style);
                         }
-                    }
+                    },
                     // Tabs and the newline (where the cursor can sit) draw as spaces.
                     _ => {
-                        for i in 0..w as u16 {
+                        for i in 0..cells(w) {
                             buf[(x + i, yy)].set_symbol(" ").set_style(style);
                         }
-                    }
+                    },
                 }
             }
             if matches!(g.raw, Grapheme::Newline) {
                 break;
             }
         }
-        y += rows as u16;
+        y += cells(rows);
         for r in threads.rows.get(&line).into_iter().flatten() {
             if y >= bottom {
                 break;
@@ -817,7 +832,7 @@ pub fn clean(s: &str) -> Cow<'_, str> {
     }
     s.chars()
         .map(|c| match c as u32 {
-            0..=0x1f => char::from_u32(0x2400 + c as u32).unwrap(),
+            0..=0x1f => char::from_u32(0x2400 + c as u32).unwrap_or(char::REPLACEMENT_CHARACTER),
             0x7f => '␡',
             _ if c.is_control() => '�',
             _ => c,

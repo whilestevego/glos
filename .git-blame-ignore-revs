@@ -1,0 +1,5 @@
+# Commits that only reformat code. Run this once to make git blame skip them:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore(fmt): add rustfmt.toml and reformat
+02b3427c2718996d61205912999cbd993b7f4106

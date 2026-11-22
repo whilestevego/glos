@@ -2,6 +2,8 @@
 //! session. It serves the review of the folder it was started in. A submitted review reaches the
 //! agent as the answer to `wait_for_review`: the server watches the store for the submit.
 
+use crate::launch::{self, Launch};
+use crate::num::to_u32;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -89,18 +91,18 @@ impl Agent {
     }
 
     /// The review with this id (or the start of it), or what to tell the agent.
-    fn named(&self, id: &str) -> Result<std::result::Result<Review, String>> {
+    fn named(&self, id: &str) -> std::result::Result<Review, String> {
         let found = match Review::get(&self.conn, id.trim()) {
             Ok(r) => r,
-            Err(e) => return Ok(Err(format!("{e:#}"))),
+            Err(e) => return Err(format!("{e:#}")),
         };
-        Ok(found.ok_or_else(|| {
+        found.ok_or_else(|| {
             format!("No review {id}. open_review names what to review and gives its id.")
-        }))
+        })
     }
 
     /// `open_review`: the review of exactly `target`, made if there's none yet. It doesn't
-    /// tell the user anything: request_review does.
+    /// tell the user anything: `request_review` does.
     pub fn open_review(&mut self, target: &Target) -> Result<Outcome> {
         Ok(self.open_target(target)?.map(|(r, files)| {
             format!(
@@ -140,7 +142,9 @@ impl Agent {
                     Ok(s) => s,
                     Err(e) => return Ok(Err(format!("{}: {e:#}", folder.display()))),
                 };
-                let g = source.git.as_ref().expect("a git source");
+                let Some(g) = source.git.as_ref() else {
+                    return Ok(Err(format!("{} is not a git repository", folder.display())));
+                };
                 let on = g.branch.as_deref().unwrap_or("a detached HEAD");
                 if on != branch {
                     return Ok(Err(format!(
@@ -150,7 +154,7 @@ impl Agent {
                     )));
                 }
                 source
-            }
+            },
             Target::Diff { old, new } => {
                 let (old, new) = match (absolute(old, "old"), absolute(new, "new")) {
                     (Ok(o), Ok(n)) => (o, n),
@@ -160,7 +164,7 @@ impl Agent {
                     Ok(s) => s,
                     Err(e) => return Ok(Err(format!("{e:#}"))),
                 }
-            }
+            },
         };
         let r = Review::open(&self.conn, &source)?;
         self.touch();
@@ -208,7 +212,7 @@ impl Agent {
     /// `get_review`: a summary, or one thread in full. Only what the agent may see: comments
     /// you've submitted, and the agents' own.
     pub fn get_review(&mut self, id: &str, thread: Option<&str>) -> Result<String> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(msg),
         };
@@ -219,62 +223,61 @@ impl Agent {
                 .iter()
                 .any(|c| c.author == YOU && seen.as_ref().is_none_or(|s| &c.created_at > s))
         };
-        let out = match thread {
-            Some(id) => match threads.iter().find(|t| t.id == id) {
+        let out = if let Some(id) = thread {
+            match threads.iter().find(|t| t.id == id) {
                 Some(t) => full_thread(t, &self.now(&r, t)),
                 None => format!("No thread {id} in this review."),
-            },
-            None => {
-                let mut out = format!("Review {} of {} ({}).\n", r.id, r.describe(), r.status);
-                match review::rounds(&self.conn, &r.id)?.last() {
-                    Some(round) => {
-                        out += &format!(
-                            "Last submitted round: {}, {}, with {} comment{}.\n",
-                            round.n,
-                            round.verdict.describe(),
-                            round.comments,
-                            plural(round.comments)
-                        )
-                    }
-                    None => out += "Nothing submitted yet.\n",
-                }
-                if let Some(at) = &r.requested_at {
-                    out += &format!(
-                        "Review requested by {} at {at}; the user hasn't submitted since.\n",
-                        r.requested_by.as_deref().unwrap_or("an agent")
-                    );
-                }
-                match r.source() {
-                    Ok(s) => {
-                        out += &format!("Files changed ({}):\n", s.changes.len());
-                        for c in &s.changes {
-                            out += &format!("- {} ({:?})\n", c.path, c.kind());
-                        }
-                    }
-                    Err(e) => out += &format!("Files: can't read them ({e:#}).\n"),
-                }
-                let open: Vec<&Thread> = threads.iter().filter(|t| t.status == "open").collect();
-                out += &format!("Open threads ({}):\n", open.len());
-                for t in open {
-                    let first = &t.comments[0];
-                    let on = match &t.on.new_rev {
-                        Some(c) => format!(" [on commit {}]", &c[..c.len().min(7)]),
-                        None => String::new(),
-                    };
-                    out += &format!(
-                        "- {} {}{on} {}: {} ({} comment{}{})\n",
-                        t.id,
-                        place(t),
-                        first.author,
-                        first.body.lines().next().unwrap_or(""),
-                        t.comments.len(),
-                        plural(t.comments.len()),
-                        if is_new(t) { ", new" } else { "" }
-                    );
-                }
-                out += "Call get_review with a thread_id for a whole thread.";
-                out
             }
+        } else {
+            let mut out = format!("Review {} of {} ({}).\n", r.id, r.describe(), r.status);
+            match review::rounds(&self.conn, &r.id)?.last() {
+                Some(round) => {
+                    out += &format!(
+                        "Last submitted round: {}, {}, with {} comment{}.\n",
+                        round.n,
+                        round.verdict.describe(),
+                        round.comments,
+                        plural(round.comments)
+                    );
+                },
+                None => out += "Nothing submitted yet.\n",
+            }
+            if let Some(at) = &r.requested_at {
+                out += &format!(
+                    "Review requested by {} at {at}; the user hasn't submitted since.\n",
+                    r.requested_by.as_deref().unwrap_or("an agent")
+                );
+            }
+            match r.source() {
+                Ok(s) => {
+                    out += &format!("Files changed ({}):\n", s.changes.len());
+                    for c in &s.changes {
+                        out += &format!("- {} ({:?})\n", c.path, c.kind());
+                    }
+                },
+                Err(e) => out += &format!("Files: can't read them ({e:#}).\n"),
+            }
+            let open: Vec<&Thread> = threads.iter().filter(|t| t.status == "open").collect();
+            out += &format!("Open threads ({}):\n", open.len());
+            for t in open {
+                let first = &t.comments[0];
+                let on = match &t.on.new_rev {
+                    Some(c) => format!(" [on commit {}]", &c[..c.len().min(7)]),
+                    None => String::new(),
+                };
+                out += &format!(
+                    "- {} {}{on} {}: {} ({} comment{}{})\n",
+                    t.id,
+                    place(t),
+                    first.author,
+                    first.body.lines().next().unwrap_or(""),
+                    t.comments.len(),
+                    plural(t.comments.len()),
+                    if is_new(t) { ", new" } else { "" }
+                );
+            }
+            out += "Call get_review with a thread_id for a whole thread.";
+            out
         };
         self.touch();
         Ok(out)
@@ -288,7 +291,7 @@ impl Agent {
         note: &str,
         files: &[String],
     ) -> Result<String> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(msg),
         };
@@ -300,7 +303,6 @@ impl Agent {
         }
         r.request(&self.conn, name, note, files)?;
         self.touch();
-        use crate::launch::{self, Launch};
         let ask = format!("ask the user to run {}", launch::by_hand(&r));
         let db = self.db.clone().unwrap_or_default();
         let shown = match launch::launch(&self.conn, &r, self.open_command.as_deref(), &db) {
@@ -325,7 +327,7 @@ impl Agent {
 
     /// `reply`: an answer on a thread, shown to the user at once, marked unread.
     pub fn reply(&mut self, name: &str, id: &str, thread: &str, body: &str) -> Result<Outcome> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -349,7 +351,7 @@ impl Agent {
         open: bool,
         note: &str,
     ) -> Result<Outcome> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -367,7 +369,7 @@ impl Agent {
 
     /// A file of the review by its path relative to the review's folder, read from disk (the
     /// new side), refusing paths that lead out of it.
-    fn file(&self, r: &Review, path: &str) -> std::result::Result<String, String> {
+    fn file(r: &Review, path: &str) -> std::result::Result<String, String> {
         let root = PathBuf::from(&r.folder);
         let full = root
             .join(path)
@@ -382,6 +384,10 @@ impl Agent {
     }
 
     /// `annotate`: an agent's note on lines of its change, before the user reviews.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "every agent tool returns `Result<Outcome>`, so callers handle them the same way"
+    )]
     pub fn annotate(
         &mut self,
         name: &str,
@@ -391,11 +397,11 @@ impl Agent {
         end: Option<u32>,
         body: &str,
     ) -> Result<Outcome> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
-        let file = match self.file(&r, path) {
+        let file = match Self::file(&r, path) {
             Ok(f) => f,
             Err(msg) => return Ok(Err(msg)),
         };
@@ -425,15 +431,15 @@ impl Agent {
         line: u32,
         note: &str,
     ) -> Result<Outcome> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(Err(msg)),
         };
-        let file = match self.file(&r, path) {
+        let file = match Self::file(&r, path) {
             Ok(f) => f,
             Err(msg) => return Ok(Err(msg)),
         };
-        let lines = file.split_inclusive('\n').count().max(1) as u32;
+        let lines = to_u32(file.split_inclusive('\n').count().max(1));
         if line == 0 || line > lines {
             return Ok(Err(format!("{path} has {lines} lines.")));
         }
@@ -448,7 +454,7 @@ impl Agent {
     /// One look for a submitted round of review `id` nobody has received yet: the review as
     /// the answer. A review that isn't there is the answer too.
     pub fn try_take(&mut self, id: &str, name: &str) -> Result<Option<String>> {
-        let r = match self.named(id)? {
+        let r = match self.named(id) {
             Ok(r) => r,
             Err(msg) => return Ok(Some(msg)),
         };
@@ -494,7 +500,7 @@ impl Agent {
         match review::place(&self.conn, &t.id, &text) {
             Ok(Some((s, e))) if t.on.new_rev.is_none() && (s, e) == (a.start, a.end) => {
                 String::new() // where it says: nothing to add
-            }
+            },
             Ok(Some((s, e))) => {
                 let at = Anchor {
                     path: a.path.clone(),
@@ -503,7 +509,7 @@ impl Agent {
                     side: a.side,
                 };
                 format!("Now: the same code is at {at} in your files.\n")
-            }
+            },
             _ => format!(
                 "Now: that code isn't in {} as it is in your files: it has changed since.\n",
                 a.path
@@ -633,16 +639,16 @@ fn delivery(
             "Changes are requested: address every comment, reply on each thread (resolve the \
              ones you've addressed, with a note), then call request_review and wait_for_review \
              again."
-        }
+        },
         Verdict::Comment => {
             "These are comments without a verdict: answer them or take them into account, then \
              call request_review when you want another look."
-        }
+        },
     };
     out
 }
 
-/// Every tool but open_review names its review.
+/// Every tool but `open_review` names its review.
 const REVIEW_ID: &str = "The review's id, from open_review.";
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -734,6 +740,15 @@ struct Server {
     agent: Arc<Mutex<Agent>>,
 }
 
+impl Server {
+    /// The agent. A tool call that panicked leaves the lock poisoned, and the next call goes on.
+    fn agent(&self) -> std::sync::MutexGuard<'_, Agent> {
+        self.agent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The agent's name, from the `clientInfo` its MCP client sent.
 fn client_name(ctx: &RequestContext<RoleServer>) -> String {
     ctx.peer
@@ -746,6 +761,10 @@ fn said(o: Outcome) -> String {
     o.unwrap_or_else(|e| e)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "callers pass it to `map_err`, which gives the error by value"
+)]
 fn internal(e: anyhow::Error) -> ErrorData {
     tracing::error!("{e:#}");
     ErrorData::internal_error(format!("{e:#}"), None)
@@ -760,7 +779,7 @@ impl Server {
         &self,
         Parameters(p): Parameters<OpenReview>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.open_review(&p.target).map(said).map_err(internal)
     }
 
@@ -768,7 +787,7 @@ impl Server {
         description = "The user's review: the last verdict, the files, and the open threads (comments the user has submitted, with what's new since your last call). Pass thread_id for one whole thread."
     )]
     async fn get_review(&self, Parameters(p): Parameters<GetReview>) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.get_review(&p.review_id, p.thread_id.as_deref())
             .map_err(internal)
     }
@@ -781,7 +800,7 @@ impl Server {
         Parameters(p): Parameters<RequestReview>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.request_review(
             &client_name(&ctx),
             &p.review_id,
@@ -799,7 +818,7 @@ impl Server {
         Parameters(p): Parameters<Reply>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.reply(&client_name(&ctx), &p.review_id, &p.thread_id, &p.body)
             .map(said)
             .map_err(internal)
@@ -811,7 +830,7 @@ impl Server {
         Parameters(p): Parameters<Resolve>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.set_status(
             &client_name(&ctx),
             &p.review_id,
@@ -829,7 +848,7 @@ impl Server {
         Parameters(p): Parameters<Reopen>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.set_status(
             &client_name(&ctx),
             &p.review_id,
@@ -849,7 +868,7 @@ impl Server {
         Parameters(p): Parameters<Annotate>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.annotate(
             &client_name(&ctx),
             &p.review_id,
@@ -870,7 +889,7 @@ impl Server {
         Parameters(p): Parameters<Suggest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<String, ErrorData> {
-        let mut a = self.agent.lock().unwrap();
+        let mut a = self.agent();
         a.suggest(
             &client_name(&ctx),
             &p.review_id,
@@ -898,9 +917,7 @@ impl Server {
         loop {
             // The store is checked about twice a second; the lock isn't held while sleeping.
             if let Some(answer) = self
-                .agent
-                .lock()
-                .unwrap()
+                .agent()
                 .try_take(&p.review_id, &name)
                 .map_err(internal)?
             {
@@ -930,7 +947,7 @@ impl ServerHandler for Server {
             .peer
             .peer_info()
             .map_or("agent".into(), |i| i.client_info.name.clone());
-        if let Err(e) = self.agent.lock().unwrap().register(&name) {
+        if let Err(e) = self.agent().register(&name) {
             tracing::error!("registering the session: {e:#}");
         }
     }
@@ -955,7 +972,10 @@ pub fn run(conn: Connection, db: &std::path::Path, open_command: Option<String>)
         server.waiting().await?;
         anyhow::Ok(())
     });
-    agent.lock().unwrap().unregister();
+    agent
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unregister();
     result
 }
 

@@ -1,3 +1,7 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "the helpers of an integration test fail it by panicking"
+)]
 //! `glos diff` from the shell: how it takes files, folders and revisions, without the UI.
 
 use std::{path::Path, process::Command};

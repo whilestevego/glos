@@ -44,3 +44,13 @@ pub mod layout {
 pub mod test {
     pub use helix_core::test::{plain, print};
 }
+
+/// `n` as a `u32`, or `u32::MAX` past it.
+pub(crate) fn to_u32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// `n` as an `isize`, or `isize::MAX` past it.
+pub(crate) fn to_isize(n: usize) -> isize {
+    isize::try_from(n).unwrap_or(isize::MAX)
+}

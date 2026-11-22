@@ -3,9 +3,23 @@
 //! - `fetch-helix [lang …]`: vendors what glos takes from the pinned Helix release into
 //!   `crates/glos-helix` (rerun to move to a new release).
 //! - `keymap [default.rs]`: writes `plans/KEYMAP.md`, the keymap checklist.
+//! - `prose [base]`: runs Vale on the lines that this branch adds since it left `base` (`main`).
+//! - `prose-test`: checks that each Vale rule fires on its fixture.
+//! - `setup`: installs the git hooks in `.githooks/`.
+//! - `pre-commit` and `commit-msg <file>`: the checks that the hooks run.
+//! - `ci [base]`: everything CI runs, with the prose lint against `base` (`main`).
 
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "xtask is a command-line tool, and the terminal is its interface"
+)]
+
+mod check;
 mod fetch_helix;
 mod keymap;
+mod prose;
+mod vale;
 
 use std::path::PathBuf;
 
@@ -16,25 +30,44 @@ use anyhow::{Result, bail};
 pub const HELIX_TAG: &str = "25.07.1";
 
 /// The workspace root.
+#[must_use]
 pub fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
 }
+
+const USAGE: &str = "\
+fetch-helix [lang …]   vendor the pinned Helix release into crates/glos-helix
+keymap [default.rs]    write plans/KEYMAP.md
+prose [base]           lint the prose on lines added since base (default main)
+prose-test             check that each prose rule fires on its fixture
+setup                  install the git hooks in .githooks/
+pre-commit             the format check and clippy
+commit-msg <file>      check the subject and the prose of a commit message
+ci [base]              format check, clippy, tests, prose lint and prose self-test";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("fetch-helix") => fetch_helix::run(&args[1..]),
         Some("keymap") => keymap::run(args.get(1).map(PathBuf::from)),
-        _ => bail!(
-            "usage: cargo xtask fetch-helix [lang …]\n       cargo xtask keymap [path/to/helix-term/src/keymap/default.rs]"
-        ),
+        Some("prose") => prose::run(args.get(1).map_or("main", String::as_str)),
+        Some("prose-test") => prose::self_test(),
+        Some("setup") => check::setup(),
+        Some("pre-commit") => check::pre_commit(),
+        Some("ci") => check::ci(args.get(1).map_or("main", String::as_str)),
+        Some("commit-msg") => match args.get(1) {
+            Some(path) => check::commit_msg(path),
+            None => bail!("usage: cargo xtask commit-msg <file>"),
+        },
+        _ => bail!("usage: cargo xtask <task>\n\n{USAGE}"),
     }
 }
 
 /// The body of a URL.
+///
+/// # Errors
+///
+/// Fails when the request fails or the body cannot be read.
 pub fn fetch(url: &str) -> Result<Vec<u8>> {
     eprintln!("fetch {url}");
     Ok(ureq::get(url)

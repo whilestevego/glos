@@ -1,6 +1,7 @@
 //! Helix's picker: a fuzzy-filtered list (nucleo, Helix's matcher) on the left and a preview on
 //! the right, in an overlay of 90% of the screen.
 
+use crate::num::{cells, to_isize, to_u32};
 use std::borrow::Cow;
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -115,7 +116,7 @@ impl Picker {
     pub fn new(columns: Vec<&'static str>, items: Vec<Item>) -> Picker {
         let mut p = Picker {
             columns,
-            matched: (0..items.len() as u32).collect(),
+            matched: (0..to_u32(items.len())).collect(),
             items,
             query: String::new(),
             cursor: 0,
@@ -131,7 +132,7 @@ impl Picker {
 
     fn refilter(&mut self) {
         if self.query.is_empty() {
-            self.matched = (0..self.items.len() as u32).collect();
+            self.matched = (0..to_u32(self.items.len())).collect();
         } else {
             let pattern = Pattern::parse(&self.query, CaseMatching::Smart, Normalization::Smart);
             let mut buf = vec![];
@@ -142,7 +143,7 @@ impl Picker {
                 .filter_map(|(i, item)| {
                     let s =
                         pattern.score(Utf32Str::new(&item.text, &mut buf), &mut self.matcher)?;
-                    Some((i as u32, s))
+                    Some((to_u32(i), s))
                 })
                 .collect();
             // As nucleo's worker sorts them: best score, then the shorter text, then list order.
@@ -178,7 +179,7 @@ impl Picker {
             PickerCmd::Close => return Outcome::Msg(Msg::Close),
             PickerCmd::Choose => {
                 return Outcome::Msg(self.selected().cloned().map_or(Msg::Close, Msg::Open));
-            }
+            },
             PickerCmd::Prev => self.cursor = (self.cursor + n - 1) % n,
             PickerCmd::Next => self.cursor = (self.cursor + 1) % n,
             PickerCmd::PageDown => self.cursor = (self.cursor + page).min(last),
@@ -188,7 +189,7 @@ impl Picker {
             PickerCmd::DeleteChar => {
                 self.query.pop();
                 self.refilter();
-            }
+            },
         }
         Outcome::Consumed
     }
@@ -260,7 +261,7 @@ impl Picker {
 
     /// The item drawn at a screen cell, for mouse clicks.
     pub fn target_at(&self, area: Rect, x: u16, y: u16) -> Option<Target> {
-        let header = (self.columns.len() > 1) as u16;
+        let header = u16::from(self.columns.len() > 1);
         let first = area.y + 1 + 2 + header;
         if x <= area.x || x + 1 >= area.right() || y < first || y + 1 >= area.bottom() {
             return None;
@@ -273,10 +274,14 @@ impl Picker {
 
     /// Rows of items that fit, for paging.
     pub fn page(&self, area: Rect) -> usize {
-        let header = (self.columns.len() > 1) as u16;
+        let header = u16::from(self.columns.len() > 1);
         area.height.saturating_sub(2 + 2 + header).max(1) as usize
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the columns, the highlights and the scroll bar share one layout"
+    )]
     fn render_list(&mut self, buf: &mut Buffer, area: Rect, theme: &Theme) {
         let text_style = theme.get("ui.text");
         let selected = theme.get("ui.text.focus");
@@ -305,14 +310,14 @@ impl Picker {
             height: 1,
             ..inner
         };
-        let room = line.width.saturating_sub(count.len() as u16 + 1) as usize;
+        let room = line.width.saturating_sub(cells(count.len()) + 1) as usize;
         buf.set_stringn(line.x, line.y, clean(&self.query), room, text_style);
-        let cx = line.x + self.query.width().min(room) as u16;
+        let cx = line.x + cells(self.query.width().min(room));
         if cx < line.right() {
             buf[(cx, line.y)].set_style(text_style.add_modifier(Modifier::REVERSED));
         }
         buf.set_stringn(
-            line.right().saturating_sub(count.len() as u16 + 1),
+            line.right().saturating_sub(cells(count.len()) + 1),
             line.y,
             &count,
             count.len(),
@@ -356,7 +361,7 @@ impl Picker {
                     inner.right().saturating_sub(x) as usize,
                     col_style,
                 );
-                x += widths.get(c).copied().unwrap_or(0) as u16 + 1;
+                x += cells(widths.get(c).copied().unwrap_or(0)) + 1;
             }
             y += 1;
         }
@@ -386,7 +391,7 @@ impl Picker {
                     right.saturating_sub(x) as usize,
                     row_style.patch(*s),
                 );
-                x += widths[c] as u16 + 1;
+                x += cells(widths[c]) + 1;
             }
             // The filtered column, with matched characters highlighted as Helix does.
             indices.clear();
@@ -403,7 +408,7 @@ impl Picker {
                 if x >= right {
                     break;
                 }
-                let hit = next.peek().is_some_and(|n| **n == gi as u32);
+                let hit = next.peek().is_some_and(|n| **n == to_u32(gi));
                 if hit {
                     next.next();
                 }
@@ -414,7 +419,7 @@ impl Picker {
                     row_style
                 };
                 buf[(x, y)].set_symbol(&s).set_style(style);
-                x += s.width().max(1) as u16;
+                x += cells(s.width().max(1));
             }
             y += 1;
         }
@@ -457,7 +462,7 @@ impl Component for Picker {
                     Some(t) => Outcome::Msg(Msg::Open(t)),
                     None => Outcome::Consumed,
                 }
-            }
+            },
             _ => Outcome::Consumed,
         }
     }
@@ -477,14 +482,14 @@ impl Component for Picker {
             return;
         };
         let line = line.or(file.hunks.first().map(|h| h.after.start as usize));
-        let centred = line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3)) as isize;
+        let centred = to_isize(line.map_or(0, |l| l.saturating_sub(inner.height as usize / 3)));
         let off = self.preview_scroll.1;
-        let last = file.text.len_lines().saturating_sub(1) as isize;
-        let top = (centred + off).clamp(0, last.max(0));
+        let end = to_isize(file.text.len_lines().saturating_sub(1));
+        let top = (centred + off).clamp(0, end.max(0));
         // Don't let the offset grow past either end of the file. Otherwise, after scrolling
         // too far, it would take several turns of the wheel before the preview moved back.
         self.preview_scroll.1 = top - centred;
-        let top = top as usize;
+        let top = top.unsigned_abs();
         view::draw(
             buf,
             inner,

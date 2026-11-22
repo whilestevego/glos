@@ -1,3 +1,7 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "the helpers of an integration test fail it by panicking"
+)]
 //! The MCP server end to end, as an agent host drives it: `glos mcp` speaking JSON-RPC over
 //! stdio in a git repo, with the user's submit made through the CLI in between.
 
@@ -30,6 +34,10 @@ fn glos(dir: &Path, repo: &Path) -> Command {
     c
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario from start to end over a real MCP session"
+)]
 #[test]
 fn request_submit_and_wait() {
     let dir = tempfile::tempdir().unwrap();
@@ -97,7 +105,7 @@ fn request_submit_and_wait() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    names.sort();
+    names.sort_unstable();
     assert_eq!(
         names,
         [

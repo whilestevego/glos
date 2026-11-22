@@ -1,0 +1,7 @@
+extends: existence
+message: "Use a comma, a semicolon, a colon or parentheses in place of '%s'."
+level: error
+nonword: true
+tokens:
+  - '—'
+  - '–'

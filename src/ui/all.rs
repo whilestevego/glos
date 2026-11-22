@@ -6,6 +6,7 @@
 //! line of a file moves the cursor into the next one. Only the files near the screen are read
 //! and highlighted.
 
+use crate::num::{cells, to_u32};
 use std::collections::HashMap;
 
 use glos_helix::{
@@ -76,6 +77,7 @@ impl App {
     }
 
     /// Reads file `i` if it isn't loaded, and builds its view unless the cursor is in it.
+    #[expect(clippy::expect_used, reason = "the file is loaded just above")]
     fn prepare(&mut self, i: usize) {
         let built = (self.generation, self.diff_context, Some(self.view_kind));
         if built != self.all.built {
@@ -100,6 +102,10 @@ impl App {
 
     /// The view of the file the cursor just went into, if it was built to draw that file and
     /// nothing it was built from has changed since.
+    #[expect(
+        clippy::option_option,
+        reason = "`None` means the built views are stale, and `Some(None)` means they are current and have no view for this file"
+    )]
     pub(super) fn take_built(&mut self) -> Option<Option<Built>> {
         let built = (self.generation, self.diff_context, Some(self.view_kind));
         if !self.all_shown() || built != self.all.built {
@@ -109,6 +115,10 @@ impl App {
     }
 
     /// File `i` as it's drawn. It must be prepared.
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn section_file(&self, i: usize) -> &File {
         if i == self.cur_index() {
             return self.main_file();
@@ -135,6 +145,10 @@ impl App {
         self.state.wrap && self.left_view.width == 0
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn section_threads(&self, i: usize) -> Threads {
         if i == self.cur_index() {
             return self.main_threads();
@@ -169,6 +183,10 @@ impl App {
 
     /// File `i`'s notices. The one a generated file has says how to expand it, which its
     /// summary says instead.
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn notices(&self, i: usize) -> impl Iterator<Item = &String> {
         // From the file itself, as the unified and side-by-side views have none of their own.
         let f = self.state.files[i].as_ref().expect("prepared");
@@ -211,7 +229,7 @@ impl App {
         let f = self.section_file(i);
         if !(f.collapsed || f.binary) {
             let t = threads.entry(i).or_insert_with(|| self.section_threads(i));
-            let width = self.view.width.saturating_sub(f.gutter_width() as u16);
+            let width = self.view.width.saturating_sub(cells(f.gutter_width()));
             let fmt = view::text_format(f, width, self.all_wrap());
             rows += view::line_rows(f, line, &fmt, t);
         }
@@ -301,6 +319,10 @@ impl App {
 
     /// Draws the files from the top of the screen down, and returns the screen row of each
     /// thread row drawn, with its thread.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "draws every file in one pass, and the steps share the scroll position"
+    )]
     pub(super) fn draw_all(
         &mut self,
         buf: &mut Buffer,
@@ -378,7 +400,7 @@ impl App {
                         break;
                     }
                     let header = if l == 0 { self.header_rows(i) } else { 0 };
-                    height += (self.rows_at((i, l), &mut threads) - header) as u16;
+                    height += cells(self.rows_at((i, l), &mut threads) - header);
                 }
                 let height = height.min(area.bottom() - y);
                 let f = self.section_file(i);
@@ -455,11 +477,15 @@ impl App {
     }
 
     /// A file's header: its path, the lines added and removed, and its open threads.
+    #[expect(
+        clippy::expect_used,
+        reason = "callers prepare a file before they draw it"
+    )]
     fn header(&self, i: usize) -> (String, String, String, String) {
         let path = &self.state.source.changes[i].path;
         let base = self.state.files[i].as_ref().expect("prepared");
-        let added: u32 = base.hunks.iter().map(|h| h.after.len() as u32).sum();
-        let removed: u32 = base.hunks.iter().map(|h| h.before.len() as u32).sum();
+        let added: u32 = base.hunks.iter().map(|h| to_u32(h.after.len())).sum();
+        let removed: u32 = base.hunks.iter().map(|h| to_u32(h.before.len())).sum();
         let mut s = String::new();
         let open = self
             .state
@@ -468,7 +494,7 @@ impl App {
             .filter(|t| t.status == "open" && t.anchor.as_ref().is_some_and(|a| &a.path == path))
             .count();
         match open {
-            0 => {}
+            0 => {},
             1 => s += "  1 thread",
             n => s += &format!("  {n} threads"),
         }
@@ -528,26 +554,26 @@ impl App {
         let (i, line) = self.cursor_pos();
         self.prepare(i);
         let last = self.section_lines(i) - 1;
-        let count = self.count.map_or(1, |c| c.get());
+        let count = self.count.map_or(1, std::num::NonZero::get);
         let height = self.view.height as usize;
         let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
         match name {
             // A count that goes past the file carries on into the next one.
             "move_visual_line_down" | "move_line_down" if line + count > last && i + 1 < n => {
-                self.move_lines(count, true)
-            }
+                self.move_lines(count, true);
+            },
             "move_visual_line_up" | "move_line_up" if count > line && i > 0 => {
-                self.move_lines(count, false)
-            }
+                self.move_lines(count, false);
+            },
             "scroll_down" | "scroll_up" => self.all_wheel(count, name == "scroll_down"),
             "align_view_center" => {
                 self.all.top = self.back_rows(self.cursor_pos(), height / 2);
-            }
+            },
             "align_view_top" => self.all.top = self.back_rows(self.cursor_pos(), so),
             "align_view_bottom" => {
                 let rows = height.saturating_sub(so + 1);
                 self.all.top = self.back_rows(self.cursor_pos(), rows);
-            }
+            },
             "goto_window_top" | "goto_window_center" | "goto_window_bottom" => {
                 let (first, middle, last) = self.on_screen();
                 let to = match name {
@@ -559,11 +585,11 @@ impl App {
                     self.enter_file(to.0, false);
                 }
                 self.cursor_to_line(to.1);
-            }
+            },
             "goto_file_start" if self.count.is_none() => {
                 self.enter_file(0, false);
                 self.all.top = (0, 0);
-            }
+            },
             "goto_line" if self.count.is_none() => self.enter_file(n - 1, true),
             "page_down" | "page_up" | "page_cursor_half_down" | "page_cursor_half_up" => {
                 let rows = self.view.height as usize;
@@ -573,7 +599,7 @@ impl App {
                     rows
                 };
                 self.page(rows.max(1), name.ends_with("down"));
-            }
+            },
             _ => return false,
         }
         true
@@ -746,6 +772,7 @@ impl App {
 
     /// Collapses file `i` to its header, or expands it. Its folds stay as they were, and so
     /// does the cursor in it.
+    #[expect(clippy::expect_used, reason = "the file is loaded just above")]
     pub(super) fn toggle_file(&mut self, i: usize) {
         self.load(i);
         let f = self.state.files[i].as_mut().expect("loaded above");
@@ -847,7 +874,7 @@ impl App {
         let Some(regex) = commands::search_regex(query) else {
             return;
         };
-        for _ in 0..self.count.map_or(1, |c| c.get()) {
+        for _ in 0..self.count.map_or(1, std::num::NonZero::get) {
             let found = self.jump_across(
                 forward,
                 true,
@@ -871,12 +898,12 @@ impl App {
     /// because opening every file of a big review to search it takes seconds. A collapsed or
     /// binary file can't show a match.
     fn may_match(&self, j: usize, regex: &glos_helix::text::Regex) -> bool {
+        use crate::source::Content;
         use glos_helix::text::{Rope, RopeSliceExt};
         if let Some(f) = &self.state.files[j] {
             return !(f.collapsed || f.binary)
                 && regex.find(f.text.slice(..).regex_input()).is_some();
         }
-        use crate::source::Content;
         let (source, change) = (&self.state.source, &self.state.source.changes[j]);
         if source.collapsed(change) {
             return false;
@@ -936,14 +963,14 @@ impl App {
     pub(super) fn jump_across_files(&mut self, name: &str, f: fn(&mut commands::Ctx)) -> bool {
         match name {
             "goto_next_change" | "goto_prev_change" => {
-                self.change_across(name == "goto_next_change", f)
-            }
+                self.change_across(name == "goto_next_change", f);
+            },
             "goto_next_paragraph" | "goto_prev_paragraph" => {
-                self.paragraph_across(name == "goto_next_paragraph", f)
-            }
+                self.paragraph_across(name == "goto_next_paragraph", f);
+            },
             "goto_last_change" | "goto_first_change" => {
-                self.edge_change(name == "goto_last_change", f)
-            }
+                self.edge_change(name == "goto_last_change", f);
+            },
             _ => return false,
         }
         true

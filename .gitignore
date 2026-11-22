@@ -1,1 +1,4 @@
 /target
+
+# Vale grammars, downloaded by `vale sync`.
+/.vale/styles/config/
