@@ -353,7 +353,7 @@ pub fn layout(
                     style,
                     thread: i,
                     old: side == Side::Old,
-                })
+                });
             }
         };
         let mut row = |text: String, style: Style| wrapped(text, style, usize::MAX);
@@ -672,7 +672,7 @@ mod tests {
             created_round: 1,
             anchor_text: None,
             last_seen_at: None,
-            on: Default::default(),
+            on: crate::review::DiffContext::default(),
             comments: bodies
                 .iter()
                 .map(|(author, body)| crate::review::Comment {
@@ -832,10 +832,10 @@ mod tests {
 
     #[test]
     fn external_editor_round_trip() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("ed");
         std::fs::write(&script, "#!/bin/sh\nprintf ' world\\n' >> \"$1\"\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let ed = script.to_string_lossy();
         assert_eq!(external_edit(&ed, "hello").unwrap(), "hello world");

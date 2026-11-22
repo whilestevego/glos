@@ -5,6 +5,9 @@ edition = "2024"
 description = "glos's maintenance tasks: cargo xtask fetch-helix, cargo xtask keymap"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.104"
 flate2 = "1.1.10"

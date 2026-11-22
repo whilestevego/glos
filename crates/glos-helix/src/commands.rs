@@ -103,16 +103,16 @@ fn move_impl(cx: &mut Ctx, f: MoveFn, dir: Direction) {
 }
 
 pub fn move_char_left(cx: &mut Ctx) {
-    move_impl(cx, movement::move_horizontally, Direction::Backward)
+    move_impl(cx, movement::move_horizontally, Direction::Backward);
 }
 pub fn move_char_right(cx: &mut Ctx) {
-    move_impl(cx, movement::move_horizontally, Direction::Forward)
+    move_impl(cx, movement::move_horizontally, Direction::Forward);
 }
 pub fn move_visual_line_up(cx: &mut Ctx) {
-    move_impl(cx, movement::move_vertically_visual, Direction::Backward)
+    move_impl(cx, movement::move_vertically_visual, Direction::Backward);
 }
 pub fn move_visual_line_down(cx: &mut Ctx) {
-    move_impl(cx, movement::move_vertically_visual, Direction::Forward)
+    move_impl(cx, movement::move_vertically_visual, Direction::Forward);
 }
 
 fn word_impl(cx: &mut Ctx, f: fn(helix_core::RopeSlice, Range, usize) -> Range) {
@@ -128,22 +128,22 @@ fn word_impl(cx: &mut Ctx, f: fn(helix_core::RopeSlice, Range, usize) -> Range) 
 }
 
 pub fn move_next_word_start(cx: &mut Ctx) {
-    word_impl(cx, movement::move_next_word_start)
+    word_impl(cx, movement::move_next_word_start);
 }
 pub fn move_prev_word_start(cx: &mut Ctx) {
-    word_impl(cx, movement::move_prev_word_start)
+    word_impl(cx, movement::move_prev_word_start);
 }
 pub fn move_next_word_end(cx: &mut Ctx) {
-    word_impl(cx, movement::move_next_word_end)
+    word_impl(cx, movement::move_next_word_end);
 }
 pub fn move_next_long_word_start(cx: &mut Ctx) {
-    word_impl(cx, movement::move_next_long_word_start)
+    word_impl(cx, movement::move_next_long_word_start);
 }
 pub fn move_prev_long_word_start(cx: &mut Ctx) {
-    word_impl(cx, movement::move_prev_long_word_start)
+    word_impl(cx, movement::move_prev_long_word_start);
 }
 pub fn move_next_long_word_end(cx: &mut Ctx) {
-    word_impl(cx, movement::move_next_long_word_end)
+    word_impl(cx, movement::move_next_long_word_end);
 }
 
 pub fn goto_line_start(cx: &mut Ctx) {
@@ -227,13 +227,13 @@ fn goto_window(cx: &mut Ctx, align: Align) {
 }
 
 pub fn goto_window_top(cx: &mut Ctx) {
-    goto_window(cx, Align::Top)
+    goto_window(cx, Align::Top);
 }
 pub fn goto_window_center(cx: &mut Ctx) {
-    goto_window(cx, Align::Center)
+    goto_window(cx, Align::Center);
 }
 pub fn goto_window_bottom(cx: &mut Ctx) {
-    goto_window(cx, Align::Bottom)
+    goto_window(cx, Align::Bottom);
 }
 
 /// Scrolls the view by `offset` lines; with `sync_cursor` the cursor moves as far, otherwise it
@@ -273,19 +273,19 @@ fn scroll(cx: &mut Ctx, offset: usize, dir: Direction, sync_cursor: bool) {
             let (head, off) = helix_core::char_idx_at_visual_offset(
                 text,
                 anchor,
-                scrolloff as isize,
+                crate::to_isize(scrolloff),
                 0,
                 &cx.fmt,
                 &annotations,
             );
-            let head = head + (off != 0) as usize;
+            let head = head + usize::from(off != 0);
             if head <= cursor {
                 return;
             }
             head
         },
         Direction::Backward => {
-            let row = cx.height.saturating_sub(scrolloff + 1) as isize;
+            let row = crate::to_isize(cx.height.saturating_sub(scrolloff + 1));
             let (head, _) =
                 helix_core::char_idx_at_visual_offset(text, anchor, row, 0, &cx.fmt, &annotations);
             if head >= cursor {
@@ -308,20 +308,20 @@ pub fn scroll_lines(cx: &mut Ctx, lines: usize, down: bool) {
     } else {
         Direction::Backward
     };
-    scroll(cx, lines, dir, false)
+    scroll(cx, lines, dir, false);
 }
 
 pub fn page_down(cx: &mut Ctx) {
-    scroll(cx, cx.height, Direction::Forward, false)
+    scroll(cx, cx.height, Direction::Forward, false);
 }
 pub fn page_up(cx: &mut Ctx) {
-    scroll(cx, cx.height, Direction::Backward, false)
+    scroll(cx, cx.height, Direction::Backward, false);
 }
 pub fn page_cursor_half_down(cx: &mut Ctx) {
-    scroll(cx, cx.height / 2, Direction::Forward, true)
+    scroll(cx, cx.height / 2, Direction::Forward, true);
 }
 pub fn page_cursor_half_up(cx: &mut Ctx) {
-    scroll(cx, cx.height / 2, Direction::Backward, true)
+    scroll(cx, cx.height / 2, Direction::Backward, true);
 }
 
 pub fn extend_line_below(cx: &mut Ctx) {
@@ -400,7 +400,7 @@ pub fn select_textobject(cx: &mut Ctx, around: bool, ch: char) {
         'p' => textobject::textobject_paragraph(text, r, objtype, count),
         'm' => textobject::textobject_pair_surround_closest(None, text, r, objtype, count),
         'g' => {
-            let line = r.cursor_line(text) as u32;
+            let line = crate::to_u32(r.cursor_line(text));
             match hunks
                 .iter()
                 .find(|h| h.after.start <= line && line < h.after.end.max(h.after.start + 1))
@@ -476,16 +476,16 @@ fn find_char_impl(cx: &mut Ctx, ch: char, forward: bool, inclusive: bool) {
 }
 
 pub fn find_next_char(cx: &mut Ctx, ch: char) {
-    find_char_impl(cx, ch, true, true)
+    find_char_impl(cx, ch, true, true);
 }
 pub fn find_till_char(cx: &mut Ctx, ch: char) {
-    find_char_impl(cx, ch, true, false)
+    find_char_impl(cx, ch, true, false);
 }
 pub fn find_prev_char(cx: &mut Ctx, ch: char) {
-    find_char_impl(cx, ch, false, true)
+    find_char_impl(cx, ch, false, true);
 }
 pub fn till_prev_char(cx: &mut Ctx, ch: char) {
-    find_char_impl(cx, ch, false, false)
+    find_char_impl(cx, ch, false, false);
 }
 
 /// The hunk after `line` (helix-vcs `next_hunk`).
@@ -524,7 +524,7 @@ fn goto_change(cx: &mut Ctx, dir: Direction) {
     }
     let (text, extra, hunks, extend) = (cx.text.slice(..), cx.count() - 1, cx.hunks, cx.extend);
     cx.transform(|r| {
-        let line = r.cursor_line(text) as u32;
+        let line = crate::to_u32(r.cursor_line(text));
         let idx = match dir {
             Direction::Forward => next_hunk(hunks, line).map(|i| (i + extra).min(hunks.len() - 1)),
             Direction::Backward => prev_hunk(hunks, line).map(|i| i.saturating_sub(extra)),
@@ -545,10 +545,10 @@ fn goto_change(cx: &mut Ctx, dir: Direction) {
 }
 
 pub fn goto_next_change(cx: &mut Ctx) {
-    goto_change(cx, Direction::Forward)
+    goto_change(cx, Direction::Forward);
 }
 pub fn goto_prev_change(cx: &mut Ctx) {
-    goto_change(cx, Direction::Backward)
+    goto_change(cx, Direction::Backward);
 }
 
 fn goto_nth_change(cx: &mut Ctx, idx: usize) {
@@ -561,17 +561,17 @@ fn goto_nth_change(cx: &mut Ctx, idx: usize) {
 }
 
 pub fn goto_first_change(cx: &mut Ctx) {
-    goto_nth_change(cx, 0)
+    goto_nth_change(cx, 0);
 }
 pub fn goto_last_change(cx: &mut Ctx) {
-    goto_nth_change(cx, usize::MAX)
+    goto_nth_change(cx, usize::MAX);
 }
 
 pub fn move_line_up(cx: &mut Ctx) {
-    move_impl(cx, movement::move_vertically, Direction::Backward)
+    move_impl(cx, movement::move_vertically, Direction::Backward);
 }
 pub fn move_line_down(cx: &mut Ctx) {
-    move_impl(cx, movement::move_vertically, Direction::Forward)
+    move_impl(cx, movement::move_vertically, Direction::Forward);
 }
 
 /// `g|`: column `count` on the line.
@@ -591,22 +591,24 @@ fn para_impl(cx: &mut Ctx, f: fn(helix_core::RopeSlice, Range, usize, Movement) 
     cx.transform(|r| f(text, r, count, behaviour));
 }
 pub fn goto_next_paragraph(cx: &mut Ctx) {
-    para_impl(cx, movement::move_next_paragraph)
+    para_impl(cx, movement::move_next_paragraph);
 }
 pub fn goto_prev_paragraph(cx: &mut Ctx) {
-    para_impl(cx, movement::move_prev_paragraph)
+    para_impl(cx, movement::move_prev_paragraph);
 }
 
-/// `C` / `A-C`: copies each selection to the next (or previous) line where it fits. Helix
-/// itself still uses these deprecated column helpers here.
-#[allow(deprecated)]
+/// `C` / `A-C`: copies each selection to the next (or previous) line where it fits.
+#[expect(
+    deprecated,
+    reason = "Helix itself still uses these deprecated column helpers here"
+)]
 fn copy_selection_on_line(cx: &mut Ctx, dir: Direction) {
     use helix_core::{Position, pos_at_visual_coords, visual_coords_at_pos};
     let (text, count, tab) = (cx.text.slice(..), cx.count(), cx.fmt.tab_width as usize);
     let sel = &cx.sel;
     let mut ranges: Vec<Range> = sel.ranges().to_vec();
     let mut primary_index = 0;
-    for range in sel.iter() {
+    for range in sel {
         let is_primary = *range == sel.primary();
         // The range is always head exclusive.
         let (head, anchor) = if range.anchor < range.head {
@@ -659,10 +661,10 @@ fn copy_selection_on_line(cx: &mut Ctx, dir: Direction) {
     cx.sel = Selection::new(ranges.into(), primary_index);
 }
 pub fn copy_selection_on_next_line(cx: &mut Ctx) {
-    copy_selection_on_line(cx, Direction::Forward)
+    copy_selection_on_line(cx, Direction::Forward);
 }
 pub fn copy_selection_on_prev_line(cx: &mut Ctx) {
-    copy_selection_on_line(cx, Direction::Backward)
+    copy_selection_on_line(cx, Direction::Backward);
 }
 
 pub fn trim_selections(cx: &mut Ctx) {
@@ -675,9 +677,9 @@ pub fn trim_selections(cx: &mut Ctx) {
                 return None;
             }
             let start =
-                movement::skip_while(text, r.from(), |c| c.is_whitespace()).unwrap_or(r.from());
-            let end = movement::backwards_skip_while(text, r.to(), |c| c.is_whitespace())
-                .unwrap_or(r.to());
+                movement::skip_while(text, r.from(), char::is_whitespace).unwrap_or(r.from());
+            let end =
+                movement::backwards_skip_while(text, r.to(), char::is_whitespace).unwrap_or(r.to());
             Some(Range::new(start, end).with_direction(r.direction()))
         })
         .collect();
@@ -702,10 +704,10 @@ fn rotate_selections(cx: &mut Ctx, dir: Direction) {
     });
 }
 pub fn rotate_selections_forward(cx: &mut Ctx) {
-    rotate_selections(cx, Direction::Forward)
+    rotate_selections(cx, Direction::Forward);
 }
 pub fn rotate_selections_backward(cx: &mut Ctx) {
-    rotate_selections(cx, Direction::Backward)
+    rotate_selections(cx, Direction::Backward);
 }
 
 pub fn merge_selections(cx: &mut Ctx) {
@@ -760,6 +762,7 @@ pub enum RegexAction {
 }
 
 impl RegexAction {
+    #[must_use]
     pub fn prompt(self) -> &'static str {
         match self {
             RegexAction::Select => "select:",
@@ -803,7 +806,7 @@ fn align_view(cx: &mut Ctx, align: Align) {
     let (anchor, _) = helix_core::char_idx_at_visual_offset(
         text,
         cursor,
-        -(relative as isize),
+        -crate::to_isize(relative),
         0,
         &cx.fmt,
         &TextAnnotations::default(),
@@ -827,21 +830,21 @@ pub fn align_view_middle(cx: &mut Ctx) {
 }
 
 pub fn align_view_center(cx: &mut Ctx) {
-    align_view(cx, Align::Center)
+    align_view(cx, Align::Center);
 }
 pub fn align_view_top(cx: &mut Ctx) {
-    align_view(cx, Align::Top)
+    align_view(cx, Align::Top);
 }
 pub fn align_view_bottom(cx: &mut Ctx) {
-    align_view(cx, Align::Bottom)
+    align_view(cx, Align::Bottom);
 }
 
 /// `zk` / `zj`: scroll by `count` lines, keeping the cursor in view.
 pub fn scroll_up(cx: &mut Ctx) {
-    scroll(cx, cx.count(), Direction::Backward, false)
+    scroll(cx, cx.count(), Direction::Backward, false);
 }
 pub fn scroll_down(cx: &mut Ctx) {
-    scroll(cx, cx.count(), Direction::Forward, false)
+    scroll(cx, cx.count(), Direction::Forward, false);
 }
 
 /// The search regex for `query`, with Helix's smart case: case-insensitive unless the query has

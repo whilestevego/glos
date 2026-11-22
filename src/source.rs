@@ -250,7 +250,7 @@ impl Source {
         }
         for path in added {
             let content = read_side(&new.join(&path))?;
-            let from = by_content.get_mut(&content).and_then(|v| v.pop());
+            let from = by_content.get_mut(&content).and_then(std::vec::Vec::pop);
             if let Some(from) = &from {
                 deleted.retain(|d| d != from);
             }
@@ -326,7 +326,12 @@ impl Source {
         Ok(s)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one pass over git status builds the whole source, and its steps share many locals"
+    )]
     fn git_against(path: &Path, base: Option<&str>, against: Option<&str>) -> Result<Source> {
+        use gix::status::{Item, index_worktree};
         let repo = gix::discover(path).context("not in a git repository")?;
         let worktree = repo
             .workdir()
@@ -337,29 +342,24 @@ impl Source {
             .context("the repository has no commits")?
             .id;
         let branch = repo.head_name()?.map(|n| n.shorten().to_string());
-        let (base, merge_base) = match against {
-            // Against a revision: the review is still the branch's (its base found as usual,
-            // if there is one), but the old side is that revision.
-            Some(rev) => {
-                let id = repo
-                    .rev_parse_single(rev)
-                    .with_context(|| {
-                        format!("`{rev}` is neither a file or folder nor a git revision")
-                    })?
-                    .object()?
-                    .peel_to_commit()?
-                    .id;
-                let base = find_base(&repo, base).map_or(rev.to_string(), |(b, _)| b);
-                (base, id)
-            },
-            None => {
-                let (base, base_id) = find_base(&repo, base)?;
-                let mb = repo
-                    .merge_base(head, base_id)?
-                    .with_context(|| format!("this branch shares no history with {base}"))?
-                    .detach();
-                (base, mb)
-            },
+        // Against a revision: the review is still the branch's (its base found as usual, if
+        // there is one), but the old side is that revision.
+        let (base, merge_base) = if let Some(rev) = against {
+            let id = repo
+                .rev_parse_single(rev)
+                .with_context(|| format!("`{rev}` is neither a file or folder nor a git revision"))?
+                .object()?
+                .peel_to_commit()?
+                .id;
+            let base = find_base(&repo, base).map_or(rev.to_string(), |(b, _)| b);
+            (base, id)
+        } else {
+            let (base, base_id) = find_base(&repo, base)?;
+            let mb = repo
+                .merge_base(head, base_id)?
+                .with_context(|| format!("this branch shares no history with {base}"))?
+                .detach();
+            (base, mb)
         };
         let base_tree = repo.find_commit(merge_base)?.tree()?;
 
@@ -370,9 +370,8 @@ impl Source {
             .status(gix::progress::Discard)?
             .head_tree(base_tree.id)
             .untracked_files(gix::status::UntrackedFiles::Files)
-            .index_worktree_rewrites(Some(Default::default()))
+            .index_worktree_rewrites(Some(gix::diff::Rewrites::default()))
             .tree_index_track_renames(gix::status::tree_index::TrackRenames::AsConfigured);
-        use gix::status::{Item, index_worktree};
         for item in status.into_iter(Vec::<gix::bstr::BString>::new())? {
             match item? {
                 Item::TreeIndex(gix::diff::index::Change::Rewrite {
@@ -514,7 +513,7 @@ impl Source {
         let repo = g.repo.to_thread_local();
         let commit = repo.find_commit(id)?;
         let tree = commit.tree()?;
-        let parent_id = commit.parent_ids().next().map(|p| p.detach());
+        let parent_id = commit.parent_ids().next().map(gix::Id::detach);
         let parent = match parent_id {
             Some(p) => Some(repo.find_commit(p)?.tree()?),
             None => None,
@@ -673,17 +672,16 @@ fn tree_changes(
 
 fn find_base(repo: &gix::Repository, given: Option<&str>) -> Result<(String, gix::ObjectId)> {
     let mut candidates: Vec<String> = vec![];
-    match given {
-        Some(r) => candidates.push(r.into()),
-        None => {
-            // origin/HEAD points at origin's default branch.
-            if let Ok(Some(r)) = repo.try_find_reference("refs/remotes/origin/HEAD")
-                && let Some(name) = r.target().try_name()
-            {
-                candidates.push(name.shorten().to_string());
-            }
-            candidates.extend(["main", "master", "origin/main", "origin/master"].map(String::from));
-        },
+    if let Some(r) = given {
+        candidates.push(r.into());
+    } else {
+        // origin/HEAD points at origin's default branch.
+        if let Ok(Some(r)) = repo.try_find_reference("refs/remotes/origin/HEAD")
+            && let Some(name) = r.target().try_name()
+        {
+            candidates.push(name.shorten().to_string());
+        }
+        candidates.extend(["main", "master", "origin/main", "origin/master"].map(String::from));
     }
     for c in &candidates {
         if let Ok(id) = repo.rev_parse_single(c.as_str()) {

@@ -396,16 +396,15 @@ impl Key {
                 break;
             }
         }
-        let code = match NAMED.iter().find(|(n, _)| *n == rest) {
-            Some((_, c)) => *c,
-            None => {
-                let mut chars = rest.chars();
-                let ch = chars.next()?;
-                if chars.next().is_some() {
-                    return None;
-                }
-                KeyCode::Char(ch)
-            },
+        let code = if let Some((_, c)) = NAMED.iter().find(|(n, _)| *n == rest) {
+            *c
+        } else {
+            let mut chars = rest.chars();
+            let ch = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            KeyCode::Char(ch)
         };
         Some(Key { code, mods })
     }
@@ -462,8 +461,12 @@ impl Menu {
         let mut rows: Vec<(String, &'static str, Option<&'static str>, *const ())> = vec![];
         for (key, node) in &self.keys {
             let (doc, name, id) = match node {
-                Node::Cmd(c) => (c.doc, Some(c.name), *c as *const Command as *const ()),
-                Node::Menu(m) => (m.name, None, m as *const Menu as *const ()),
+                Node::Cmd(c) => (
+                    c.doc,
+                    Some(c.name),
+                    std::ptr::from_ref::<Command>(*c).cast::<()>(),
+                ),
+                Node::Menu(m) => (m.name, None, std::ptr::from_ref::<Menu>(m).cast::<()>()),
             };
             match rows.iter_mut().find(|r| r.3 == id) {
                 Some(r) => r.0 = format!("{}, {key}", r.0),
@@ -522,6 +525,10 @@ fn build(name: &'static str, sticky: bool, defs: Vec<Def>) -> Menu {
 }
 
 /// Helix's default normal-mode keys that apply to a read-only review (keymap/default.rs).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the table of normal-mode bindings reads best as one list"
+)]
 fn normal_defs() -> Vec<Def> {
     vec![
         cmd("h|left", "move_char_left"),

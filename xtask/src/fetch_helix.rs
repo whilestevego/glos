@@ -80,51 +80,11 @@ fn write(dest: &Path, rel: &str, content: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the vendoring steps run in order and share the downloaded files"
+)]
 pub fn run(langs: &[String]) -> Result<()> {
-    let langs: Vec<&str> = if langs.is_empty() {
-        LANGS.to_vec()
-    } else {
-        langs.iter().map(String::as_str).collect()
-    };
-    let crate_dir = root().join("crates/glos-helix");
-    let (out_helix, out_vendor) = (crate_dir.join("helix"), crate_dir.join("vendor/grammars"));
-
-    let helix = tarball("https://github.com/helix-editor/helix", HELIX_TAG)?;
-    let _ = fs::remove_dir_all(&out_helix);
-    let file = |rel: &str| helix.get(rel).with_context(|| format!("no {rel} in Helix"));
-    write(
-        &out_helix.join("languages.toml"),
-        "languages.toml",
-        file("languages.toml")?,
-    )?;
-    write(
-        &out_helix.join("themes/default.toml"),
-        "theme.toml",
-        file("theme.toml")?,
-    )?;
-    write(&out_helix.join("LICENSE"), "LICENSE", file("LICENSE")?)?;
-    // Every theme Helix ships.
-    for (rel, content) in &helix {
-        if let Some(name) = rel.strip_prefix("runtime/themes/")
-            && rel.ends_with(".toml")
-        {
-            write(&out_helix.join("themes").join(name), rel, content)?;
-        }
-    }
-
-    let config: toml::Table = toml::from_str(&String::from_utf8_lossy(file("languages.toml")?))?;
-    let table = |key: &str| -> Result<BTreeMap<String, toml::Table>> {
-        let list = config[key].as_array().context(key.to_string())?;
-        Ok(list
-            .iter()
-            .filter_map(|v| {
-                let t = v.as_table()?;
-                Some((t.get("name")?.as_str()?.to_string(), t.clone()))
-            })
-            .collect())
-    };
-    let (languages, grammars) = (table("language")?, table("grammar")?);
-
     // Queries, following `; inherits:` so every query a language needs is vendored.
     fn queries(
         lang: &str,
@@ -153,6 +113,50 @@ pub fn run(langs: &[String]) -> Result<()> {
         }
         Ok(())
     }
+
+    let langs: Vec<&str> = if langs.is_empty() {
+        LANGS.to_vec()
+    } else {
+        langs.iter().map(String::as_str).collect()
+    };
+    let crate_dir = root().join("crates/glos-helix");
+    let (out_helix, out_vendor) = (crate_dir.join("helix"), crate_dir.join("vendor/grammars"));
+
+    let helix = tarball("https://github.com/helix-editor/helix", HELIX_TAG)?;
+    let _ = fs::remove_dir_all(&out_helix);
+    let file = |rel: &str| helix.get(rel).with_context(|| format!("no {rel} in Helix"));
+    write(
+        &out_helix.join("languages.toml"),
+        "languages.toml",
+        file("languages.toml")?,
+    )?;
+    write(
+        &out_helix.join("themes/default.toml"),
+        "theme.toml",
+        file("theme.toml")?,
+    )?;
+    write(&out_helix.join("LICENSE"), "LICENSE", file("LICENSE")?)?;
+    // Every theme Helix ships.
+    for (rel, content) in &helix {
+        if let Some(name) = rel.strip_prefix("runtime/themes/")
+            && Path::new(rel).extension().is_some_and(|e| e == "toml")
+        {
+            write(&out_helix.join("themes").join(name), rel, content)?;
+        }
+    }
+
+    let config: toml::Table = toml::from_str(&String::from_utf8_lossy(file("languages.toml")?))?;
+    let table = |key: &str| -> Result<BTreeMap<String, toml::Table>> {
+        let list = config[key].as_array().context(key.to_string())?;
+        Ok(list
+            .iter()
+            .filter_map(|v| {
+                let t = v.as_table()?;
+                Some((t.get("name")?.as_str()?.to_string(), t.clone()))
+            })
+            .collect())
+    };
+    let (languages, grammars) = (table("language")?, table("grammar")?);
     let mut seen = HashSet::new();
     for lang in &langs {
         queries(lang, &mut seen, &helix, &out_helix)?;

@@ -1,4 +1,4 @@
-//! The SQLite database every glos process shares: the UI, MCP servers and the CLI.
+//! The `SQLite` database every glos process shares: the UI, MCP servers and the CLI.
 //!
 //! Every action is its own transaction, written at once. WAL mode and a busy timeout let several
 //! processes write without overwriting each other. The schema is versioned with
@@ -12,7 +12,7 @@ use rusqlite::Connection;
 /// Each entry moves the schema up one version. Never edit a released entry; add a new one.
 const MIGRATIONS: &[&str] = &[
     // v1
-    r#"
+    r"
     CREATE TABLE reviews (
         id          TEXT PRIMARY KEY,
         -- 'files' | 'folders' | 'git'
@@ -114,9 +114,9 @@ const MIGRATIONS: &[&str] = &[
         attached_at TEXT NOT NULL,
         last_seen  TEXT NOT NULL
     );
-    "#,
+    ",
     // v2: delivering submitted rounds to agents, and agents asking for review.
-    r#"
+    r"
     -- When an agent's wait_for_review took the round, and which agent.
     ALTER TABLE rounds ADD COLUMN delivered_at TEXT;
     ALTER TABLE rounds ADD COLUMN delivered_to TEXT;
@@ -125,15 +125,15 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE reviews ADD COLUMN requested_by TEXT;
     ALTER TABLE reviews ADD COLUMN request_note TEXT;
     ALTER TABLE reviews ADD COLUMN request_files TEXT;
-    "#,
+    ",
     // v3: an agent's suggestion of a line for you to look at (one per review, the latest).
-    r#"
+    r"
     ALTER TABLE reviews ADD COLUMN suggested_at TEXT;
     ALTER TABLE reviews ADD COLUMN suggested_by TEXT;
     ALTER TABLE reviews ADD COLUMN suggested_path TEXT;
     ALTER TABLE reviews ADD COLUMN suggested_line INTEGER;
     ALTER TABLE reviews ADD COLUMN suggested_note TEXT;
-    "#,
+    ",
     // v4: the diff each thread was made on, so an agent knows what code a comment is about.
     r#"
     -- The commits on each side (NULL for the files on disk, or a non-git side).
@@ -143,18 +143,18 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE threads ADD COLUMN diff TEXT;
     "#,
     // v5: which running glos shows which review, so a review request doesn't open a second one.
-    r#"
+    r"
     CREATE TABLE viewers (
         pid        INTEGER PRIMARY KEY,
         review_id  TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
         started_at TEXT NOT NULL
     );
-    "#,
+    ",
     // v6: threads on removed lines. Their lines count lines of the old side.
-    r#"
+    r"
     -- 'new' | 'old'
     ALTER TABLE threads ADD COLUMN side TEXT NOT NULL DEFAULT 'new';
-    "#,
+    ",
 ];
 
 /// Opens (creating if needed) the database at `path` and brings its schema up to date.
@@ -193,7 +193,7 @@ fn migrate(conn: &mut Connection, path: &Path, migrations: &[&str]) -> Result<()
         tx.execute_batch(sql)
             .with_context(|| format!("migrating to v{}", i + 1))?;
     }
-    tx.pragma_update(None, "user_version", migrations.len() as u32)?;
+    tx.pragma_update(None, "user_version", crate::num::to_u32(migrations.len()))?;
     tx.commit()?;
     Ok(())
 }

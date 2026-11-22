@@ -30,6 +30,10 @@ fn glos(dir: &Path, repo: &Path) -> Command {
     c
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario from start to end over a real MCP session"
+)]
 #[test]
 fn request_submit_and_wait() {
     let dir = tempfile::tempdir().unwrap();
@@ -97,7 +101,7 @@ fn request_submit_and_wait() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    names.sort();
+    names.sort_unstable();
     assert_eq!(
         names,
         [

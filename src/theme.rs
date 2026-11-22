@@ -355,7 +355,7 @@ fn rgb_color((r, g, b): Rgb) -> Color {
     Color::Rgb(r, g, b)
 }
 
-/// `from` moved `amount` of the way toward `to`, in OKLab. OKLab is perceptual, so the same
+/// `from` moved `amount` of the way toward `to`, in `OKLab`. `OKLab` is perceptual, so the same
 /// amount looks about as strong on a dark theme as on a light one, and mid-tones don't go muddy
 /// as they do when RGB is mixed directly.
 pub fn mix(from: Rgb, to: Rgb, amount: f32) -> Rgb {
@@ -399,7 +399,7 @@ fn tint_256(from: Rgb, to: Rgb, amount: f32, avoid: &[u8]) -> u8 {
     }
 }
 
-/// The least colour a 256-colour tint has, in OKLab chroma, so that it reads as green or red
+/// The least colour a 256-colour tint has, in `OKLab` chroma, so that it reads as green or red
 /// rather than grey.
 const TINT_CHROMA: f32 = 0.09;
 
@@ -412,7 +412,7 @@ fn cube_rgb(i: u8) -> Rgb {
 
 fn oklab((r, g, b): Rgb) -> [f32; 3] {
     let lin = |c: u8| {
-        let c = c as f32 / 255.0;
+        let c = f32::from(c) / 255.0;
         if c <= 0.04045 {
             c / 12.92
         } else {
@@ -430,6 +430,11 @@ fn oklab((r, g, b): Rgb) -> [f32; 3] {
     ]
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "each channel is clamped to 0..=255 before the cast"
+)]
 fn from_oklab([l, a, b]: [f32; 3]) -> Rgb {
     let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
     let m_ = (l - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
@@ -449,23 +454,27 @@ fn from_oklab([l, a, b]: [f32; 3]) -> Rgb {
 }
 
 /// The nearest xterm-256 colour: the 6×6×6 cube or the 24-step grey ramp.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "`ri`, `gi` and `bi` index the six `STEPS`, so they fit in a `u8`"
+)]
 pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
     const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
     let level = |v: u8| {
         STEPS
             .iter()
             .enumerate()
-            .min_by_key(|(_, s)| (**s as i32 - v as i32).abs())
+            .min_by_key(|(_, s)| (i32::from(**s) - i32::from(v)).abs())
             .unwrap()
             .0
     };
     let (ri, gi, bi) = (level(r), level(g), level(b));
     let cube = (STEPS[ri], STEPS[gi], STEPS[bi]);
-    let avg = (r as u32 + g as u32 + b as u32) / 3;
+    let avg = (u32::from(r) + u32::from(g) + u32::from(b)) / 3;
     let gi_ = ((avg.saturating_sub(8)) / 10).min(23) as u8;
     let grey = 8 + 10 * gi_;
     let dist = |(x, y, z): (u8, u8, u8)| {
-        let d = |a: u8, b: u8| (a as i32 - b as i32).pow(2);
+        let d = |a: u8, b: u8| (i32::from(a) - i32::from(b)).pow(2);
         d(x, r) + d(y, g) + d(z, b)
     };
     if dist((grey, grey, grey)) < dist(cube) {

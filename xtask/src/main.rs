@@ -16,11 +16,9 @@ use anyhow::{Result, bail};
 pub const HELIX_TAG: &str = "25.07.1";
 
 /// The workspace root.
+#[must_use]
 pub fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
 }
 
 fn main() -> Result<()> {
@@ -35,6 +33,10 @@ fn main() -> Result<()> {
 }
 
 /// The body of a URL.
+///
+/// # Errors
+///
+/// Fails when the request fails or the body cannot be read.
 pub fn fetch(url: &str) -> Result<Vec<u8>> {
     eprintln!("fetch {url}");
     Ok(ureq::get(url)

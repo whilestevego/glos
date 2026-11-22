@@ -49,6 +49,10 @@ pub struct Loader {
 
 impl Loader {
     /// `scopes` are the theme's, in the order [`Loader::highlights`] numbers them.
+    ///
+    /// # Errors
+    ///
+    /// Fails when Helix's `languages.toml` or a query does not parse.
     pub fn new(scopes: &[String]) -> Result<Loader> {
         let config: Configuration = toml::from_str(embedded::LANGUAGES_TOML)?;
         let mut loader = Loader {
@@ -61,7 +65,7 @@ impl Loader {
         };
         let mut globs = globset::GlobSetBuilder::new();
         for config in config.language {
-            let lang = Language::new(loader.langs.len() as u32);
+            let lang = Language::new(crate::to_u32(loader.langs.len()));
             for ft in &config.file_types {
                 match ft {
                     FileType::Extension(e) => {
@@ -99,6 +103,7 @@ impl Loader {
     }
 
     /// The language for a file, by path (globs, then extension) and then by shebang.
+    #[must_use]
     pub fn language_for(&self, path: &Path, text: RopeSlice) -> Option<Language> {
         self.language_for_path(path)
             .or_else(|| self.language_for_shebang(text))
@@ -132,11 +137,12 @@ impl Loader {
             .langs
             .iter()
             .position(|l| l.config.language_id == name)?;
-        Some(Language::new(i as u32))
+        Some(Language::new(crate::to_u32(i)))
     }
 
     /// Each language with a compiled grammar, and whether its highlight query compiles: for
     /// `glos doctor`, like `hx --health`.
+    #[must_use]
     pub fn health(&self) -> Vec<(&str, bool)> {
         self.langs
             .iter()
@@ -145,23 +151,26 @@ impl Loader {
             .map(|(i, l)| {
                 (
                     l.config.language_id.as_str(),
-                    self.get_config(Language::new(i as u32)).is_some(),
+                    self.get_config(Language::new(crate::to_u32(i))).is_some(),
                 )
             })
             .collect()
     }
 
     #[cfg(test)]
+    #[must_use]
     pub fn name(&self, lang: Language) -> &str {
         &self.langs[lang.idx()].config.language_id
     }
 
     /// The language's tab width (`indent.tab-width`), 4 if it sets none, as Helix.
+    #[must_use]
     pub fn tab_width(&self, lang: Option<Language>) -> usize {
         lang.and_then(|l| self.langs[l.idx()].config.indent.as_ref())
             .map_or(4, |i| i.tab_width)
     }
 
+    #[must_use]
     pub fn parse(&self, text: RopeSlice, lang: Language) -> Option<Syntax> {
         self.get_config(lang)?;
         Syntax::new(text, lang, PARSE_TIMEOUT, self).ok()
@@ -177,8 +186,8 @@ impl Loader {
         bytes: Range<usize>,
         patch: impl Fn(S, usize) -> S,
     ) -> Vec<(usize, S)> {
-        let end = bytes.end as u32;
-        let mut hl = Highlighter::new(syntax, text, self, bytes.start as u32..end);
+        let end = crate::to_u32(bytes.end);
+        let mut hl = Highlighter::new(syntax, text, self, crate::to_u32(bytes.start)..end);
         let mut out = vec![(bytes.start, S::default())];
         let mut style = S::default();
         loop {
@@ -201,6 +210,7 @@ impl Loader {
 
 /// Helix's tree-sitter text objects (`mif`, `mac`, `]f`…), by the letter Helix gives each:
 /// the capture names in `textobjects.scm`.
+#[must_use]
 pub fn textobject_name(ch: char) -> Option<&'static str> {
     Some(match ch {
         'f' => "function",
@@ -235,6 +245,7 @@ impl Loader {
     /// `mi<ch>` / `ma<ch>` for a tree-sitter object: the smallest `object.inside` (or
     /// `.around`) holding the cursor, or `range` if there's none. helix-core's
     /// `textobject_treesitter`.
+    #[must_use]
     pub fn textobject(
         &self,
         syntax: &Syntax,
@@ -270,6 +281,7 @@ impl Loader {
 
     /// `]f`, `[f` and the like: the `count`th next (or previous) object, selected; `range` if
     /// there's none. helix-core's `goto_treesitter_object`.
+    #[must_use]
     pub fn goto_object(
         &self,
         syntax: &Syntax,
@@ -345,7 +357,7 @@ impl LanguageLoader for Loader {
                             Some((m.end() - m.start(), i))
                         })
                         .max_by_key(|(len, _)| *len)
-                        .map(|(_, i)| Language::new(i as u32))
+                        .map(|(_, i)| Language::new(crate::to_u32(i)))
                 })
             },
             InjectionLanguageMarker::Filename(text) => {
@@ -411,7 +423,7 @@ fn configure(config: &LanguageConfig, scopes: &[String]) {
                 best_len = s.len();
             }
         }
-        best.map(|i| Highlight::new(i as u32))
+        best.map(|i| Highlight::new(crate::to_u32(i)))
     });
 }
 
@@ -446,18 +458,29 @@ mod tests {
     struct Theme;
 
     impl Theme {
+        #[expect(
+            clippy::unused_self,
+            reason = "it has the shape of glos's theme lookup"
+        )]
         fn index(&self, scope: &str) -> Option<usize> {
             SCOPES.iter().position(|s| *s == scope)
         }
     }
 
     fn loader() -> (Loader, Theme) {
-        let scopes: Vec<String> = SCOPES.iter().map(|s| s.to_string()).collect();
+        let scopes: Vec<String> = SCOPES
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         (Loader::new(&scopes).unwrap(), Theme)
     }
 
     type Style = Option<usize>;
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the highlighter takes a function that returns the style"
+    )]
     fn innermost(_: Style, scope: usize) -> Style {
         Some(scope)
     }
@@ -509,7 +532,7 @@ mod tests {
         assert_eq!(at_fn, theme.index("keyword.function"));
     }
 
-    /// Every language glos supports (`LANGS` in xtask/src/fetch_helix.rs) is found by file name and highlights something.
+    /// Every language glos supports (`LANGS` in `xtask/src/fetch_helix.rs`) is found by file name and highlights something.
     #[test]
     fn every_language_highlights() {
         let (l, _) = loader();

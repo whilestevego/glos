@@ -1,6 +1,7 @@
 //! The review model over the store: reviews, threads, comments, drafts, rounds and snapshots.
 //! Every change is one transaction, written the moment it happens.
 
+use crate::num::{line_number, to_u32, to_usize};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -307,7 +308,7 @@ fn branch_over(conn: &Connection, r: &Review) -> Result<bool> {
         .merge_base(tip, base_id)
         .ok()
         .flatten()
-        .map(|m| m.detach())
+        .map(gix::Id::detach)
         == Some(tip);
     if !merged || rounds(conn, &r.id)?.is_empty() {
         return Ok(false);
@@ -343,7 +344,10 @@ pub fn gc(conn: &Connection, older_than: jiff::SignedDuration) -> Result<(usize,
 /// Whether process `pid` is still running.
 pub fn alive(pid: i64) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
-    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    let r = unsafe { libc::kill(pid, 0) };
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
@@ -612,7 +616,7 @@ pub fn annotate(
     author: &str,
     body: &str,
 ) -> Result<String> {
-    let lines = file.split_inclusive('\n').count().max(1) as u32;
+    let lines = to_u32(file.split_inclusive('\n').count().max(1));
     if anchor.start == 0 || anchor.start > anchor.end || anchor.end > lines {
         bail!(
             "{} has {lines} lines; lines {}-{} aren't in it",
@@ -788,7 +792,7 @@ pub fn place(conn: &Connection, thread_id: &str, text: &str) -> Result<Option<(u
         above: &above,
         below: &below,
     };
-    Ok(crate::reanchor::place(&a, text).map(|(s, e)| (s as u32 + 1, e as u32 + 1)))
+    Ok(crate::reanchor::place(&a, text).map(|(s, e)| (line_number(s), line_number(e))))
 }
 
 /// What [`reanchor`] did to a file's threads.
@@ -902,15 +906,15 @@ pub fn reanchor_side(
                      WHERE id = ?1",
                     params![
                         id,
-                        s as u32 + 1,
-                        e as u32 + 1,
+                        line_number(s),
+                        line_number(e),
                         hash,
                         ctx(s.saturating_sub(3)..s),
                         ctx(e + 1..(e + 4).min(lines.len())),
                         ctx(s..e + 1)
                     ],
                 )?;
-                if (s as u32 + 1, e as u32 + 1) != (start, end) {
+                if (line_number(s), line_number(e)) != (start, end) {
                     done.moved += 1;
                 }
             },
@@ -973,12 +977,12 @@ pub fn delete(conn: &Connection, comment_id: &str) -> Result<()> {
 
 /// How many of your comments the agent hasn't received.
 pub fn unsent(conn: &Connection, review_id: &str) -> Result<usize> {
-    Ok(conn.query_row(
+    Ok(to_usize(conn.query_row(
         "SELECT count(*) FROM comments c JOIN threads t ON t.id = c.thread_id
          WHERE t.review_id = ?1 AND c.author = ?2 AND c.submitted_in IS NULL",
         params![review_id, YOU],
         |r| r.get::<_, i64>(0),
-    )? as usize)
+    )?))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1039,12 +1043,12 @@ pub fn rounds(conn: &Connection, review_id: &str) -> Result<Vec<Round>> {
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
         .map(|(n, verdict, submitted_at, delivered_to)| {
-            let comments = conn.query_row(
+            let comments = to_usize(conn.query_row(
                 "SELECT count(*) FROM comments c JOIN threads t ON t.id = c.thread_id
                  WHERE t.review_id = ?1 AND c.submitted_in = ?2",
                 params![review_id, n],
                 |r| r.get::<_, i64>(0),
-            )? as usize;
+            )?);
             Ok(Round {
                 n,
                 verdict: Verdict::parse(&verdict).context("a bad verdict in the store")?,

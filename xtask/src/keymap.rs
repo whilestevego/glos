@@ -73,17 +73,6 @@ const CONTEXTS: &[(&str, &str)] = &[
 
 /// The keys that `defs` (such as `normal_defs`) binds in glos's `keymap.rs`, as key paths.
 fn parse_glos(src: &str, defs: &str) -> Vec<(String, String)> {
-    let defs_of = |f: &str| -> String {
-        let start = src.find(&format!("fn {f}()")).expect(f);
-        let end = start + src[start..].find("\n}\n").expect(f);
-        // rustfmt splits a menu's arguments over lines; join them back.
-        re(r#"((?:sticky_)?menu)\(\s*("[^"]+"),\s*("[^"]+"),\s*"#)
-            .replace_all(&src[start..end], "$1($2, $3, ")
-            .into_owned()
-    };
-    let helper = re(r#"^(?:sticky_)?menu\("([^"]+)",\s*"[^"]+",\s*([a-z_]+)\(\)\)"#);
-    let menu = re(r#"^(?:sticky_)?menu\("([^"]+)",\s*"[^"]+",\s*vec!\["#);
-    let cmd = re(r#"^cmd\("([^"]+)",\s*"([a-z_]+)"\)"#);
     fn walk(
         body: &str,
         mut stack: Vec<String>,
@@ -114,6 +103,17 @@ fn parse_glos(src: &str, defs: &str) -> Vec<(String, String)> {
             }
         }
     }
+    let defs_of = |f: &str| -> String {
+        let start = src.find(&format!("fn {f}()")).expect(f);
+        let end = start + src[start..].find("\n}\n").expect(f);
+        // rustfmt splits a menu's arguments over lines; join them back.
+        re(r#"((?:sticky_)?menu)\(\s*("[^"]+"),\s*("[^"]+"),\s*"#)
+            .replace_all(&src[start..end], "$1($2, $3, ")
+            .into_owned()
+    };
+    let helper = re(r#"^(?:sticky_)?menu\("([^"]+)",\s*"[^"]+",\s*([a-z_]+)\(\)\)"#);
+    let menu = re(r#"^(?:sticky_)?menu\("([^"]+)",\s*"[^"]+",\s*vec!\["#);
+    let cmd = re(r#"^cmd\("([^"]+)",\s*"([a-z_]+)"\)"#);
     let mut out = vec![];
     walk(
         &defs_of(defs),

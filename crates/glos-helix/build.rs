@@ -1,6 +1,10 @@
 //! Compiles every vendored grammar into the binary and embeds Helix's queries and themes.
 use std::{env, fmt::Write, fs, path::Path};
 
+#[expect(
+    clippy::unnecessary_debug_formatting,
+    reason = "`{:?}` writes each path as a Rust string literal for the generated code"
+)]
 fn main() {
     let out = env::var("OUT_DIR").unwrap();
     let mut code = String::new();

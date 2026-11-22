@@ -332,6 +332,10 @@ pub fn hidden(keep: &[bool], context: usize, folds: &Folds) -> Vec<bool> {
 /// A view's rows before folding: the new side's rows (both sides' for side by side), and which
 /// rows are changes.
 pub struct Rows {
+    #[expect(
+        clippy::struct_field_names,
+        reason = "every view has these rows, and `left` beside them is the optional old side"
+    )]
     pub rows: Vec<Row>,
     /// The old side, for side by side: level with `rows`.
     pub left: Option<Vec<Row>>,
@@ -349,7 +353,7 @@ pub fn rows(kind: ViewKind, old: &File, new: &File, hunks: &[Hunk]) -> Rows {
                 rows.extend((0..len).map(|i| Row::Same {
                     old: o + i,
                     new: n + i,
-                }))
+                }));
             };
             for h in hunks {
                 same(&mut rows, o, n, h.after.start as usize - n);
@@ -433,7 +437,14 @@ pub struct Built {
 
 /// Builds a view of `new` (and `old`), folded by `context`, `folds`, and the threads (as
 /// new-side line ranges, inclusive) that keep their lines in view.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "builds the rows of each view kind in one pass over the hunks"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an independent input of the view"
+)]
 pub fn build(
     kind: ViewKind,
     old: &File,

@@ -6,6 +6,7 @@ mod diff_words;
 mod doctor;
 mod launch;
 mod mcp;
+mod num;
 mod reanchor;
 mod review;
 mod source;
@@ -227,6 +228,7 @@ fn init_log(verbose: u8) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[expect(clippy::too_many_lines, reason = "one match arm for each subcommand")]
 fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     let log = init_log(cli.verbose).ok();
@@ -304,7 +306,7 @@ fn run() -> Result<ExitCode> {
                     new: abs(new)?,
                 },
             };
-            cli::open_review(conn, &cwd, target, cli.json, out)?;
+            cli::open_review(conn, &cwd, &target, cli.json, out)?;
             return Ok(ExitCode::SUCCESS);
         },
         Some(

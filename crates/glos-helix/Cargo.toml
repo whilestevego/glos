@@ -6,6 +6,9 @@ description = "Everything glos takes from Helix: helix-core, its highlighter, la
 license = "MPL-2.0"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.104"
 globset = "0.4.21"

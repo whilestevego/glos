@@ -13,6 +13,7 @@ mod prompt;
 mod tree;
 mod view;
 
+use crate::num::{cells, line_number, to_isize, to_u32};
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
@@ -195,6 +196,10 @@ macro_rules! cx {
     };
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is independent UI state, so no enum replaces them"
+)]
 pub struct App {
     state: State,
     theme: Theme,
@@ -484,7 +489,7 @@ impl App {
             delete_kept: false,
             run_editor: false,
             data_version: 0,
-            placed: Default::default(),
+            placed: std::cell::RefCell::default(),
             generation: 0,
             watch: None,
             changed_at: None,
@@ -747,7 +752,7 @@ impl App {
             }
             (added, removed)
         };
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let chunk = source.changes.len().div_ceil(cores).max(1);
         let counts: Vec<(usize, usize)> = std::thread::scope(|s| {
             let parts: Vec<_> = source
@@ -827,6 +832,10 @@ impl App {
     /// Files changed on disk: the review's changes are found again, and every loaded file is
     /// read again with its cursor, selections and scroll mapped onto the same code, as Helix
     /// does when a file changes under it. Threads follow their lines.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "reloads each part of the state that depends on the files, in order"
+    )]
     fn files_changed(&mut self) {
         self.changed_at = Some(std::time::Instant::now());
         self.generation += 1;
@@ -837,7 +846,7 @@ impl App {
             .shown_alt()
             .map(|a| (a.doc.sel.clone(), a.doc.top, a.doc.text.clone()));
         if let Some(a) = self.alt.take() {
-            self.sync_base(a);
+            self.sync_base(&a);
         }
         let source = match self.rebuild_source() {
             Ok(s) => s,
@@ -996,7 +1005,7 @@ impl App {
                     let old = self.old_text(&p).unwrap_or_else(|| text.clone());
                     let hunks = crate::diff::hunks(&old, &text);
                     let removed = |s: usize, e: usize| {
-                        (s..=e).all(|l| hunks.iter().any(|h| h.before.contains(&(l as u32))))
+                        (s..=e).all(|l| hunks.iter().any(|h| h.before.contains(&to_u32(l))))
                     };
                     review::reanchor_side(
                         &self.conn,
@@ -1152,7 +1161,6 @@ impl App {
         match self.pickers.last().and_then(|p| p.selected().cloned()) {
             Some(Target::Change(i)) => self.load(i),
             Some(Target::Path(p)) => self.load_context(&p),
-            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) => {},
             Some(Target::Thread(id)) => {
                 if let Some((path, _)) = self.state.thread_place(&id) {
                     match self
@@ -1167,7 +1175,7 @@ impl App {
                     }
                 }
             },
-            None => {},
+            Some(Target::Command(_) | Target::Nothing | Target::Review(_)) | None => {},
         }
     }
 
@@ -1179,8 +1187,10 @@ impl App {
         }
     }
 
-    // `if let` can't return the borrow here (a borrow checker limit), so this checks first.
-    #[allow(clippy::unnecessary_unwrap)]
+    #[expect(
+        clippy::unnecessary_unwrap,
+        reason = "`if let` cannot return this borrow (a borrow checker limit), so the code checks first"
+    )]
     fn file_mut(&mut self) -> &mut File {
         if self.comment_box.is_some() {
             return &mut self.comment_box.as_mut().unwrap().file;
@@ -1281,13 +1291,13 @@ impl App {
             return;
         }
         if let Some(a) = self.alt.take() {
-            self.sync_base(a);
+            self.sync_base(&a);
         }
         self.build_alt();
     }
 
     /// Leaving a view: its cursor goes back to the file, so the next view opens there.
-    fn sync_base(&mut self, a: Alt) {
+    fn sync_base(&mut self, a: &Alt) {
         let t = a.doc.text.slice(..);
         let cursor = a.doc.sel.primary().cursor(t);
         let line = t.char_to_line(cursor);
@@ -1431,7 +1441,7 @@ impl App {
     fn threads_in(&self, path: &str, base: &File, f: &File, left: Option<&File>) -> Threads {
         let here = self.here_rev();
         // Thread rows wrap to the text area, as they're drawn from its left edge.
-        let width = self.view.width.saturating_sub(f.gutter_width() as u16) as usize;
+        let width = self.view.width.saturating_sub(cells(f.gutter_width())) as usize;
         let shown = self.shown_threads_in(path, base);
         let layout = |side| {
             comments::layout(
@@ -1449,8 +1459,7 @@ impl App {
             return t;
         }
         // In a view, threads go under the view's line for their last new-side line.
-        let mut rows: std::collections::BTreeMap<usize, Vec<comments::ThreadRow>> =
-            Default::default();
+        let mut rows = std::collections::BTreeMap::<usize, Vec<comments::ThreadRow>>::new();
         for (line, r) in t.rows {
             // A thread in a fold you made is counted on the fold line instead.
             let at = f.line_of(line);
@@ -1507,18 +1516,17 @@ impl App {
 
     /// The focused file's text area: (rows, columns).
     fn text_size(&self) -> (usize, u16) {
-        match &self.comment_box {
-            Some(_) => (
+        if self.comment_box.is_some() {
+            (
                 self.box_area.height.saturating_sub(2) as usize,
                 self.box_area.width.saturating_sub(2),
-            ),
-            None => {
-                let f = self.main_file();
-                (
-                    self.view.height.saturating_sub(f.notices.len() as u16) as usize,
-                    self.view.width.saturating_sub(f.gutter_width() as u16),
-                )
-            },
+            )
+        } else {
+            let f = self.main_file();
+            (
+                self.view.height.saturating_sub(cells(f.notices.len())) as usize,
+                self.view.width.saturating_sub(cells(f.gutter_width())),
+            )
         }
     }
 
@@ -1577,21 +1585,18 @@ impl App {
                         self.open(Target::Path(a.path.clone()));
                         self.expanded.insert(t.id.clone());
                         // On what's shown now: it may have been made on another version.
-                        match self.shown_anchor(&t) {
-                            Some(a) => {
-                                self.select_anchor(&a);
-                                self.scroll_to_cursor(true);
-                            },
-                            None => {
-                                let on = t.on.diff.as_deref().unwrap_or("another version");
-                                self.status = Some((
-                                    format!(
-                                        "Its code isn't in what's shown: it was made on {on} \
-                                         (' o changes the scope)"
-                                    ),
-                                    true,
-                                ));
-                            },
+                        if let Some(a) = self.shown_anchor(&t) {
+                            self.select_anchor(&a);
+                            self.scroll_to_cursor(true);
+                        } else {
+                            let on = t.on.diff.as_deref().unwrap_or("another version");
+                            self.status = Some((
+                                format!(
+                                    "Its code isn't in what's shown: it was made on {on} \
+                                     (' o changes the scope)"
+                                ),
+                                true,
+                            ));
                         }
                     },
                     // A review-level thread has no lines to show: its comment opens instead.
@@ -1661,7 +1666,7 @@ impl App {
             Some(l) => (Side::New, l),
             None => (Side::Old, self.old_line_at(row)?),
         };
-        let line = line as u32 + 1;
+        let line = line_number(line);
         let path = self.state.main_path();
         self.shown_threads()
             .iter()
@@ -1706,8 +1711,8 @@ impl App {
         };
         Ok(Anchor {
             path: self.state.main_path().to_string(),
-            start: s.min(e) as u32 + 1,
-            end: e as u32 + 1,
+            start: line_number(s.min(e)),
+            end: line_number(e),
             side,
         })
     }
@@ -1814,9 +1819,11 @@ impl App {
                 ));
                 return;
             },
-            Place::Edit(c) if body.is_empty() => review::delete(conn, c).map(|_| "Comment deleted"),
+            Place::Edit(c) if body.is_empty() => {
+                review::delete(conn, c).map(|()| "Comment deleted")
+            },
             _ if body.is_empty() => Ok("Nothing to save"),
-            Place::Edit(c) => review::edit(conn, c, &body).map(|_| "Comment saved"),
+            Place::Edit(c) => review::edit(conn, c, &body).map(|()| "Comment saved"),
             Place::Reply(t) => review::reply(conn, t, YOU, &body).map(|_| "Reply saved"),
             Place::Review => {
                 review::comment_in(conn, id, None, YOU, &body, &on).map(|_| "Comment saved")
@@ -1973,7 +1980,7 @@ impl App {
             .iter()
             .filter(|th| all || th.anchor.as_ref().is_some_and(|a| a.path == path))
             .map(|th| {
-                let unsent = th.comments.iter().any(|c| c.unsent());
+                let unsent = th.comments.iter().any(super::review::Comment::unsent);
                 let (status, style) = if unsent {
                     ("unsent", t.get("warning"))
                 } else {
@@ -1982,7 +1989,7 @@ impl App {
                 let place = th
                     .anchor
                     .as_ref()
-                    .map_or("review".into(), |a| a.to_string());
+                    .map_or("review".into(), std::string::ToString::to_string);
                 let first = th.comments.first();
                 Item {
                     tags: vec![(status.into(), style), (place, t.get("ui.text"))],
@@ -2088,7 +2095,7 @@ impl App {
                 let motion: Motion = match next {
                     NextKey::Char(f, _) => std::rc::Rc::new(move |cx| {
                         cx.count = count;
-                        f(cx, ch)
+                        f(cx, ch);
                     }),
                     NextKey::Textobject(around)
                         if glos_helix::syntax::textobject_name(ch).is_some() =>
@@ -2100,7 +2107,7 @@ impl App {
                     },
                     NextKey::Textobject(around) => std::rc::Rc::new(move |cx| {
                         cx.count = count;
-                        commands::select_textobject(cx, around, ch)
+                        commands::select_textobject(cx, around, ch);
                     }),
                 };
                 self.doc_command(|cx| motion(cx));
@@ -2391,7 +2398,7 @@ impl App {
                     self.last_motion_name = Some(command.name);
                     self.last_motion = Some(std::rc::Rc::new(move |cx: &mut Ctx| {
                         cx.count = count;
-                        f(cx)
+                        f(cx);
                     }));
                 }
                 if !(self.all_shown()
@@ -2595,6 +2602,7 @@ impl App {
         self.doc_command(|cx| commands::search(cx, &regex, forward, false));
     }
 
+    #[expect(clippy::too_many_lines, reason = "one match arm for each app action")]
     fn app_command(&mut self, action: AppAction) -> Option<AppAction> {
         use AppAction as A;
         if self.comment_box.is_some() && blocked_in_box(action) {
@@ -2690,7 +2698,7 @@ impl App {
                     Some(s) => self.rescope(s, self.filter.clone()),
                     None => {
                         self.status =
-                            Some(("Nothing submitted yet, so no last review".into(), true))
+                            Some(("Nothing submitted yet, so no last review".into(), true));
                     },
                 }
             },
@@ -2764,7 +2772,7 @@ impl App {
             },
             AppAction::SearchNext(forward) => match self.last_search.clone() {
                 Some(q) if self.all_shown() && self.comment_box.is_none() => {
-                    self.search_across(&q, forward, true)
+                    self.search_across(&q, forward, true);
                 },
                 Some(q) => self.doc_command(|cx| commands::search_next(cx, &q, forward)),
                 None => self.status = Some(("No previous search".into(), true)),
@@ -2818,8 +2826,11 @@ impl App {
             AppAction::Yank | AppAction::YankToClipboard { .. } => {
                 let file = self.file();
                 let text = file.text.slice(..);
-                let mut values: Vec<String> =
-                    file.sel.fragments(text).map(|f| f.into_owned()).collect();
+                let mut values: Vec<String> = file
+                    .sel
+                    .fragments(text)
+                    .map(std::borrow::Cow::into_owned)
+                    .collect();
                 if let AppAction::YankToClipboard { main_only: true } = action {
                     values = vec![file.sel.primary().fragment(text).into_owned()];
                 }
@@ -2896,16 +2907,15 @@ impl App {
                     }
                 }
             },
-            AppAction::RecordMacro => match self.recording.take() {
-                Some(mut keys) => {
+            AppAction::RecordMacro => {
+                if let Some(mut keys) = self.recording.take() {
                     keys.pop(); // the Q that stopped it
                     self.macro_keys = keys;
                     self.status = Some(("Recorded to register [@]".into(), false));
-                },
-                None => {
+                } else {
                     self.recording = Some(vec![]);
                     self.status = Some(("Recording to register [@]".into(), false));
-                },
+                }
             },
             AppAction::ReplayMacro => {
                 if self.replaying {
@@ -2976,6 +2986,7 @@ impl App {
     ///
     /// The picker and the command line are modal, so they get every event. While the comment
     /// box is open, clicks outside it are ignored so they can't disturb the draft.
+    #[expect(clippy::too_many_lines, reason = "one match arm for each mouse event")]
     fn mouse(&mut self, m: MouseEvent) {
         use MouseEventKind as K;
         let at = |r: Rect| r.contains((m.column, m.row).into());
@@ -3151,9 +3162,9 @@ impl App {
         let (area, header, top) = match self.all_region_at(y) {
             Some((r, line)) if self.comment_box.is_none() && self.all_shown() => (r, 0, line),
             _ if self.comment_box.is_none() && self.all_shown() => return None,
-            _ => (area, file.notices.len() as u16, file.top),
+            _ => (area, cells(file.notices.len()), file.top),
         };
-        let gutter = file.gutter_width() as u16;
+        let gutter = cells(file.gutter_width());
         if y < area.y + header
             || y >= area.bottom()
             || x < area.x + gutter
@@ -3166,7 +3177,7 @@ impl App {
         let text = file.text.slice(..);
         let fmt = view::text_format(file, area.width.saturating_sub(gutter), wrap);
         let left = if fmt.soft_wrap { 0 } else { file.left };
-        let row = (y - area.y - header) as isize;
+        let row = to_isize(usize::from(y - area.y - header));
         let col = left + (x - area.x - gutter) as usize;
         let anchor = text.line_to_char(top.min(text.len_lines() - 1));
         let (pos, _) = char_idx_at_visual_offset(text, anchor, row, col, &fmt, &annotations);
@@ -3270,7 +3281,7 @@ impl App {
                     self.status = Some((
                         "Submit how? :submit approve, :submit changes or :submit comment".into(),
                         true,
-                    ))
+                    ));
                 },
             },
             "all" => _ = self.app_command(AppAction::AllFiles(Some(true))),
@@ -3290,7 +3301,7 @@ impl App {
                 match key {
                     Some(k) => _ = self.app_command(AppAction::Scope(k)),
                     None => {
-                        self.status = Some(("Scope? :scope base, since or commits".into(), true))
+                        self.status = Some(("Scope? :scope base, since or commits".into(), true));
                     },
                 }
             },
@@ -3590,15 +3601,15 @@ impl App {
             Some(_) => None,
         };
         let line = fold_line.or(file.new_line_near(line)).unwrap_or(line);
-        let sels = file.sel.len();
+        let count = file.sel.len();
         let right = format!(
-            " {which}  {sels} sel{}  {}:{} ",
-            if sels == 1 { "" } else { "s" },
+            " {which}  {count} sel{}  {}:{} ",
+            if count == 1 { "" } else { "s" },
             line + 1,
             col + 1
         );
-        let w = right.width() as u16;
-        if w + left.width() as u16 + 1 < area.width {
+        let w = cells(right.width());
+        if w + cells(left.width()) + 1 < area.width {
             buf.set_string(area.x + area.width - w, area.y, &right, base);
         }
     }
@@ -3622,7 +3633,7 @@ impl App {
             pending += &k.to_string();
         }
         if !pending.is_empty() {
-            let w = pending.width() as u16;
+            let w = cells(pending.width());
             buf.set_string(
                 area.x + area.width.saturating_sub(w + 1),
                 area.y,
@@ -3674,15 +3685,17 @@ impl App {
             .iter()
             .map(|(k, d)| format!("{k:key_w$}  {d}"))
             .collect();
-        let width = (lines
-            .iter()
-            .map(|l| l.width())
-            .max()
-            .unwrap_or(0)
-            .max(title.width())
-            + 4) as u16;
+        let width = cells(
+            lines
+                .iter()
+                .map(|l| l.width())
+                .max()
+                .unwrap_or(0)
+                .max(title.width())
+                + 4,
+        );
         let width = width.min(area.width);
-        let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+        let height = (cells(lines.len()) + 2).min(area.height.saturating_sub(2));
         let rect = Rect::new(
             area.width - width,
             area.height.saturating_sub(2 + height),
@@ -3707,7 +3720,7 @@ impl App {
         for (i, l) in lines.iter().skip(self.help_top).enumerate().take(shown) {
             f.buffer_mut().set_stringn(
                 rect.x + 2,
-                rect.y + 1 + i as u16,
+                rect.y + 1 + cells(i),
                 l,
                 width.saturating_sub(3) as usize,
                 text_style,
@@ -3762,4 +3775,8 @@ fn side_threads(threads: &Threads, old: bool) -> Threads {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test screens are small, so their coordinates fit in a `u16`"
+)]
 mod tests;

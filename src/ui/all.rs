@@ -6,6 +6,7 @@
 //! line of a file moves the cursor into the next one. Only the files near the screen are read
 //! and highlighted.
 
+use crate::num::{cells, to_u32};
 use std::collections::HashMap;
 
 use glos_helix::{
@@ -100,6 +101,10 @@ impl App {
 
     /// The view of the file the cursor just went into, if it was built to draw that file and
     /// nothing it was built from has changed since.
+    #[expect(
+        clippy::option_option,
+        reason = "`None` means the built views are stale, and `Some(None)` means they are current and have no view for this file"
+    )]
     pub(super) fn take_built(&mut self) -> Option<Option<Built>> {
         let built = (self.generation, self.diff_context, Some(self.view_kind));
         if !self.all_shown() || built != self.all.built {
@@ -211,7 +216,7 @@ impl App {
         let f = self.section_file(i);
         if !(f.collapsed || f.binary) {
             let t = threads.entry(i).or_insert_with(|| self.section_threads(i));
-            let width = self.view.width.saturating_sub(f.gutter_width() as u16);
+            let width = self.view.width.saturating_sub(cells(f.gutter_width()));
             let fmt = view::text_format(f, width, self.all_wrap());
             rows += view::line_rows(f, line, &fmt, t);
         }
@@ -301,6 +306,10 @@ impl App {
 
     /// Draws the files from the top of the screen down, and returns the screen row of each
     /// thread row drawn, with its thread.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "draws every file in one pass, and the steps share the scroll position"
+    )]
     pub(super) fn draw_all(
         &mut self,
         buf: &mut Buffer,
@@ -378,7 +387,7 @@ impl App {
                         break;
                     }
                     let header = if l == 0 { self.header_rows(i) } else { 0 };
-                    height += (self.rows_at((i, l), &mut threads) - header) as u16;
+                    height += cells(self.rows_at((i, l), &mut threads) - header);
                 }
                 let height = height.min(area.bottom() - y);
                 let f = self.section_file(i);
@@ -458,8 +467,8 @@ impl App {
     fn header(&self, i: usize) -> (String, String, String, String) {
         let path = &self.state.source.changes[i].path;
         let base = self.state.files[i].as_ref().expect("prepared");
-        let added: u32 = base.hunks.iter().map(|h| h.after.len() as u32).sum();
-        let removed: u32 = base.hunks.iter().map(|h| h.before.len() as u32).sum();
+        let added: u32 = base.hunks.iter().map(|h| to_u32(h.after.len())).sum();
+        let removed: u32 = base.hunks.iter().map(|h| to_u32(h.before.len())).sum();
         let mut s = String::new();
         let open = self
             .state
@@ -528,16 +537,16 @@ impl App {
         let (i, line) = self.cursor_pos();
         self.prepare(i);
         let last = self.section_lines(i) - 1;
-        let count = self.count.map_or(1, |c| c.get());
+        let count = self.count.map_or(1, std::num::NonZero::get);
         let height = self.view.height as usize;
         let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
         match name {
             // A count that goes past the file carries on into the next one.
             "move_visual_line_down" | "move_line_down" if line + count > last && i + 1 < n => {
-                self.move_lines(count, true)
+                self.move_lines(count, true);
             },
             "move_visual_line_up" | "move_line_up" if count > line && i > 0 => {
-                self.move_lines(count, false)
+                self.move_lines(count, false);
             },
             "scroll_down" | "scroll_up" => self.all_wheel(count, name == "scroll_down"),
             "align_view_center" => {
@@ -847,7 +856,7 @@ impl App {
         let Some(regex) = commands::search_regex(query) else {
             return;
         };
-        for _ in 0..self.count.map_or(1, |c| c.get()) {
+        for _ in 0..self.count.map_or(1, std::num::NonZero::get) {
             let found = self.jump_across(
                 forward,
                 true,
@@ -871,12 +880,12 @@ impl App {
     /// because opening every file of a big review to search it takes seconds. A collapsed or
     /// binary file can't show a match.
     fn may_match(&self, j: usize, regex: &glos_helix::text::Regex) -> bool {
+        use crate::source::Content;
         use glos_helix::text::{Rope, RopeSliceExt};
         if let Some(f) = &self.state.files[j] {
             return !(f.collapsed || f.binary)
                 && regex.find(f.text.slice(..).regex_input()).is_some();
         }
-        use crate::source::Content;
         let (source, change) = (&self.state.source, &self.state.source.changes[j]);
         if source.collapsed(change) {
             return false;
@@ -936,13 +945,13 @@ impl App {
     pub(super) fn jump_across_files(&mut self, name: &str, f: fn(&mut commands::Ctx)) -> bool {
         match name {
             "goto_next_change" | "goto_prev_change" => {
-                self.change_across(name == "goto_next_change", f)
+                self.change_across(name == "goto_next_change", f);
             },
             "goto_next_paragraph" | "goto_prev_paragraph" => {
-                self.paragraph_across(name == "goto_next_paragraph", f)
+                self.paragraph_across(name == "goto_next_paragraph", f);
             },
             "goto_last_change" | "goto_first_change" => {
-                self.edge_change(name == "goto_last_change", f)
+                self.edge_change(name == "goto_last_change", f);
             },
             _ => return false,
         }

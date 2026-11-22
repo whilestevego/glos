@@ -1,6 +1,7 @@
 //! Which words changed within changed lines, as GitHub and `delta` highlight them. This is what
 //! makes a tint useful in a review: it shows the one number that changed in a long line.
 
+use crate::num::to_u32;
 use std::{collections::HashMap, ops::Range};
 
 use imara_diff::{Algorithm, Diff, InternedInput};
@@ -104,6 +105,10 @@ pub fn text_similarity(a: &str, b: &str) -> f32 {
 }
 
 /// How alike two lines are, from 0 to 1: the share of their words they have in common.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "word counts stay far below 2^24, where `f32` starts to lose precision"
+)]
 fn similarity(a: &HashMap<&str, usize>, b: &HashMap<&str, usize>) -> f32 {
     let total: usize = a.values().sum::<usize>() + b.values().sum::<usize>();
     if total == 0 {
@@ -165,7 +170,7 @@ fn diff_line(a: &str, b: &str) -> Option<(Ranges, Ranges)> {
     let ranges = |line: &str, toks: &[(&str, Range<usize>)], changed: &dyn Fn(u32) -> bool| {
         let mut out: Vec<Range<usize>> = vec![];
         for (i, (_, r)) in toks.iter().enumerate() {
-            if !changed(i as u32) {
+            if !changed(to_u32(i)) {
                 continue;
             }
             // Join ranges with only whitespace between them, so `foo bar` reads as one change.

@@ -1,6 +1,7 @@
 //! The command line while you type into it: `:` commands with Helix's tab completion, `/` and `?`
 //! searches, and the regex prompts (`s`, `S`, `K`, `A-K`).
 
+use crate::num::cells;
 use crossterm::event::{MouseEvent, MouseEventKind};
 use glos_helix::{commands, text::Selection};
 use ratatui::{buffer::Buffer, layout::Rect};
@@ -187,7 +188,7 @@ impl Prompt {
             area.width as usize,
             t.get("ui.text"),
         );
-        let x = area.x + shown.width() as u16;
+        let x = area.x + cells(shown.width());
         if x < area.right() {
             buf[(x, area.y)].set_style(t.get("ui.cursor.primary"));
         }
@@ -216,7 +217,7 @@ impl Prompt {
             .scrolled
             .unwrap_or(selected.map_or(0, |i| (i + 1).saturating_sub(rows)))
             .min(items.len() - rows);
-        let rect = Rect::new(area.x, area.bottom() - rows as u16, area.width, rows as u16);
+        let rect = Rect::new(area.x, area.bottom() - cells(rows), area.width, cells(rows));
         Some((items, rect, first))
     }
 
@@ -234,7 +235,7 @@ impl Prompt {
             } else {
                 t.get("ui.menu")
             };
-            let r = Rect::new(area.x, y0 + row as u16, area.width, 1);
+            let r = Rect::new(area.x, y0 + cells(row), area.width, 1);
             buf.set_style(r, style);
             buf.set_stringn(
                 r.x + 1,
